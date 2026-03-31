@@ -208,6 +208,7 @@ function PortfolioSimulator() {
             <label className="block text-sm text-gray-400 mb-1">持股数量</label>
             <input
               type="number"
+              min="0"
               value={newStock.quantity}
               onChange={(e) => setNewStock({ ...newStock, quantity: Number(e.target.value) })}
               className="w-full px-3 py-2 bg-deep-night border border-border-dark rounded-lg text-white focus:outline-none focus:border-accent-blue"

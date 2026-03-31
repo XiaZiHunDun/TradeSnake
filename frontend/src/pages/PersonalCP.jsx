@@ -527,6 +527,7 @@ function PersonalCP() {
               <label className="block text-sm text-gray-400 mb-1">持股数量</label>
               <input
                 type="number"
+                min="0"
                 value={formData.quantity}
                 onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
                 placeholder="100"
@@ -537,6 +538,8 @@ function PersonalCP() {
               <label className="block text-sm text-gray-400 mb-1">成本价</label>
               <input
                 type="number"
+                min="0"
+                step="0.01"
                 value={formData.costPrice}
                 onChange={(e) => setFormData({ ...formData, costPrice: e.target.value })}
                 placeholder="0.00"
@@ -616,6 +619,7 @@ function PersonalCP() {
                 <label className="block text-sm text-gray-400 mb-1">阈值</label>
                 <input
                   type="number"
+                  min="0"
                   value={alertConfig.threshold}
                   onChange={(e) => setAlertConfig({ ...alertConfig, threshold: e.target.value })}
                   placeholder="50"
