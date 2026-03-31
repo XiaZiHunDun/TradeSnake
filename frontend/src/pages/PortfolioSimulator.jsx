@@ -1,15 +1,14 @@
 import { useState, useEffect } from 'react'
 import { TrendingUp, TrendingDown, Plus, Trash2, Calculator, Zap } from 'lucide-react'
+import ReactECharts from 'echarts-for-react'
 
 function PortfolioSimulator() {
   const [stocks, setStocks] = useState([]) // 模拟持仓
-  const [totalCP, setTotalCP] = useState(0)
-  const [totalValue, setTotalValue] = useState(0)
-  const [potentialGain, setPotentialGain] = useState(0)
   const [newStock, setNewStock] = useState({ code: '', quantity: 100 })
   const [searchResult, setSearchResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [simResult, setSimResult] = useState(null)
+  const [simChange, setSimChange] = useState(10) // 模拟战力变化值
 
   // 搜索股票
   const searchStock = async (code) => {
@@ -71,28 +70,84 @@ function PortfolioSimulator() {
     // 计算当前状态
     const currentCP = stocks.reduce((sum, s) => sum + s.total_cp * s.quantity, 0)
     const currentValue = stocks.reduce((sum, s) => sum + s.price * s.quantity, 0)
+    const avgCP = currentCP / stocks.reduce((sum, s) => sum + s.quantity, 0)
 
-    // 模拟：如果每只股票战力+10
+    // 模拟：按百分比变化
+    const changeAmount = simChange
     const improvedCP = stocks.reduce((sum, s) => {
-      const improvedStock = { ...s, total_cp: Math.min(100, s.total_cp + 10) }
-      return sum + improvedStock.total_cp * improvedStock.quantity
+      const newCP = Math.min(100, s.total_cp + changeAmount)
+      return sum + newCP * s.quantity
     }, 0)
 
-    // 模拟：如果每只股票战力-10
     const reducedCP = stocks.reduce((sum, s) => {
-      const reducedStock = { ...s, total_cp: Math.max(0, s.total_cp - 10) }
-      return sum + reducedStock.total_cp * reducedStock.quantity
+      const newCP = Math.max(0, s.total_cp - changeAmount)
+      return sum + newCP * s.quantity
     }, 0)
 
-    setTotalCP(currentCP)
-    setTotalValue(currentValue)
-    setPotentialGain(improvedCP - currentCP)
+    const improvementRate = currentCP > 0 ? ((improvedCP - currentCP) / currentCP * 100).toFixed(1) : 0
+    const reductionRate = currentCP > 0 ? ((reducedCP - currentCP) / currentCP * 100).toFixed(1) : 0
+
     setSimResult({
       current: currentCP,
       improved: improvedCP,
       reduced: reducedCP,
-      improvementRate: ((improvedCP - currentCP) / currentCP * 100).toFixed(1)
+      currentValue: currentValue,
+      improvementRate: improvementRate,
+      reductionRate: reductionRate,
+      avgCP: avgCP
     })
+  }
+
+  // 获取模拟结果对比图表
+  const getCompareChartOption = () => {
+    if (!simResult) return null
+    return {
+      tooltip: { trigger: 'axis' },
+      legend: {
+        data: ['当前战力', '提升后', '下降后'],
+        textStyle: { color: '#9ca3af' }
+      },
+      grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: stocks.map(s => s.name),
+        axisLine: { lineStyle: { color: '#374151' } },
+        axisLabel: { color: '#9ca3af', rotate: 30 }
+      },
+      yAxis: {
+        type: 'value',
+        name: '战力贡献',
+        axisLine: { show: false },
+        splitLine: { lineStyle: { color: '#374151' } },
+        axisLabel: { color: '#9ca3af' }
+      },
+      series: [
+        {
+          name: '当前战力',
+          type: 'bar',
+          data: stocks.map(s => (s.total_cp * s.quantity).toFixed(0)),
+          itemStyle: { color: '#3b82f6' }
+        },
+        {
+          name: '提升后',
+          type: 'bar',
+          data: stocks.map(s => {
+            const newCP = Math.min(100, s.total_cp + simChange)
+            return (newCP * s.quantity).toFixed(0)
+          }),
+          itemStyle: { color: '#22c55e' }
+        },
+        {
+          name: '下降后',
+          type: 'bar',
+          data: stocks.map(s => {
+            const newCP = Math.max(0, s.total_cp - simChange)
+            return (newCP * s.quantity).toFixed(0)
+          }),
+          itemStyle: { color: '#ef4444' }
+        }
+      ]
+    }
   }
 
   // 清空模拟
@@ -208,14 +263,24 @@ function PortfolioSimulator() {
         )}
 
         {/* 操作按钮 */}
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-end">
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-400">战力变化</label>
+            <input
+              type="number"
+              value={simChange}
+              onChange={(e) => setSimChange(Number(e.target.value))}
+              className="w-20 px-3 py-2 bg-deep-night border border-border-dark rounded-lg text-white text-sm focus:outline-none focus:border-accent-blue"
+            />
+            <span className="text-gray-400 text-sm">点</span>
+          </div>
           <button
             onClick={calculateSim}
             disabled={stocks.length === 0}
             className="flex items-center gap-2 px-4 py-2 bg-cp-high/20 text-cp-high rounded-lg hover:bg-cp-high/30 disabled:opacity-50"
           >
             <Zap className="w-4 h-4" />
-            计算模拟结果
+            计算模拟
           </button>
           {stocks.length > 0 && (
             <button
@@ -232,30 +297,47 @@ function PortfolioSimulator() {
       {simResult && (
         <div className="bg-card-bg rounded-xl border border-border-dark p-6">
           <h3 className="font-bold text-white mb-4">模拟结果</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
             <div className="bg-deep-night rounded-lg p-4 text-center">
               <p className="text-gray-400 text-sm mb-1">当前总战力</p>
               <p className="text-2xl font-bold text-white">{simResult.current.toFixed(0)}</p>
             </div>
             <div className="bg-deep-night rounded-lg p-4 text-center">
-              <p className="text-gray-400 text-sm mb-1">战力+10后</p>
+              <p className="text-gray-400 text-sm mb-1">提升后</p>
               <p className="text-2xl font-bold text-green-500">{simResult.improved.toFixed(0)}</p>
+              <p className="text-xs text-green-500">+{simResult.improvementRate}%</p>
             </div>
             <div className="bg-deep-night rounded-lg p-4 text-center">
-              <p className="text-gray-400 text-sm mb-1">战力-10后</p>
+              <p className="text-gray-400 text-sm mb-1">下降后</p>
               <p className="text-2xl font-bold text-red-500">{simResult.reduced.toFixed(0)}</p>
+              <p className="text-xs text-red-500">{simResult.reductionRate}%</p>
             </div>
             <div className="bg-deep-night rounded-lg p-4 text-center">
-              <p className="text-gray-400 text-sm mb-1">提升潜力</p>
-              <p className="text-2xl font-bold text-accent-blue">+{simResult.improvementRate}%</p>
+              <p className="text-gray-400 text-sm mb-1">组合市值</p>
+              <p className="text-2xl font-bold text-white">¥{simResult.currentValue.toFixed(0)}</p>
+            </div>
+            <div className="bg-deep-night rounded-lg p-4 text-center">
+              <p className="text-gray-400 text-sm mb-1">平均战力</p>
+              <p className="text-2xl font-bold text-accent-blue">{simResult.avgCP.toFixed(1)}</p>
             </div>
           </div>
-          <div className="mt-4 p-4 bg-deep-night rounded-lg">
+
+          {/* 对比图表 */}
+          {stocks.length > 0 && (
+            <div className="mb-4 bg-deep-night rounded-lg p-4">
+              <p className="text-gray-400 text-sm mb-2">战力贡献对比</p>
+              <ReactECharts option={getCompareChartOption()} style={{ height: '250px' }} />
+            </div>
+          )}
+
+          <div className="p-4 bg-deep-night rounded-lg">
             <p className="text-gray-300 text-sm">
-              提示：如果将组合内所有股票的战力各提升10点，总战力将从 <span className="text-white font-bold">{simResult.current.toFixed(0)}</span> 提升到
-              <span className="text-green-500 font-bold"> {simResult.improved.toFixed(0)}</span>，
-              增长 <span className="text-green-500 font-bold">{simResult.improvementRate}%</span>。
-              这可以帮助你评估换股策略的潜在收益。
+              {'提示：如果将组合内所有股票的战力各'}{simChange > 0 ? '提升' : '下降'}{Math.abs(simChange)}点，总战力将从 }
+              <span className="text-white font-bold">{simResult.current.toFixed(0)}</span>
+              {simChange > 0 ? ' 提升到 ' : ' 下降到 '}
+              <span className={simChange > 0 ? 'text-green-500' : 'text-red-500'}>{simChange > 0 ? simResult.improved.toFixed(0) : simResult.reduced.toFixed(0)}</span>，
+              {'变化 '}<span className={simChange > 0 ? 'text-green-500' : 'text-red-500'}>{simChange > 0 ? '+' : ''}{simChange > 0 ? simResult.improvementRate : simResult.reductionRate}%</span>。
+              {'市值 ¥'}{simResult.currentValue.toFixed(0)} 不随战力变化。
             </p>
           </div>
         </div>
