@@ -89,6 +89,21 @@ class TestCPEndpoints:
         assert "data" in data
         assert "updated_at" in data
 
+    def test_cp_top_score_ranges(self):
+        """测试战力榜分数在有效范围内"""
+        response = client.get("/api/cp/top?limit=10")
+        assert response.status_code == 200
+        data = response.json()
+        for stock in data.get("data", []):
+            # 验证各因子分数在0-100范围内（归一化后）
+            assert 0 <= stock["growth_score"] <= 100, f"growth_score out of range: {stock['growth_score']}"
+            assert 0 <= stock["value_score"] <= 100, f"value_score out of range: {stock['value_score']}"
+            assert 0 <= stock["quality_score"] <= 100, f"quality_score out of range: {stock['quality_score']}"
+            assert 0 <= stock["momentum_score"] <= 100, f"momentum_score out of range: {stock['momentum_score']}"
+            assert 0 <= stock["total_cp"] <= 100, f"total_cp out of range: {stock['total_cp']}"
+            # 验证风险分数在0-100范围内
+            assert 0 <= stock["risk_score"] <= 100, f"risk_score out of range: {stock['risk_score']}"
+
     def test_cp_bottom(self):
         """测试获取BOTTOM榜"""
         response = client.get("/api/cp/bottom?limit=5")
