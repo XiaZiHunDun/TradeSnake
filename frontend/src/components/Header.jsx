@@ -1,10 +1,11 @@
-import { RefreshCw, Zap, List, Search, User, Sparkles, Menu, X, Sun, Moon, Calculator, Settings, Trophy, Bell, BarChart3 } from 'lucide-react'
+import { RefreshCw, Zap, List, Search, User, Sparkles, Menu, X, Sun, Moon, Calculator, Settings, Trophy, Bell, BarChart3, BookOpen } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useTheme } from '../hooks/useTheme'
 import NotificationCenter from './NotificationCenter'
 import { useNotification } from '../hooks/useNotification'
+import { DataSourceInfo } from './DataSourceInfo'
 
-function Header({ onRefresh, currentPage, onNavigate, onOpenSettings }) {
+function Header({ onRefresh, currentPage, onNavigate, onOpenSettings, onOpenEducation }) {
   const { isDark, toggleTheme } = useTheme()
   const [refreshing, setRefreshing] = useState(false)
   const [quickCode, setQuickCode] = useState('')
@@ -219,6 +220,17 @@ function Header({ onRefresh, currentPage, onNavigate, onOpenSettings }) {
               >
                 <Settings className="w-4 h-4" />
               </button>
+              {/* 战力学堂 */}
+              <button
+                onClick={onOpenEducation}
+                className="px-3 py-2 rounded-lg bg-cp-high/10 text-cp-high hover:bg-cp-high/20 transition-colors text-sm flex items-center gap-1.5"
+                title="了解战力公式"
+              >
+                <BookOpen className="w-4 h-4" />
+                <span className="hidden lg:inline">战力学堂</span>
+              </button>
+              {/* 数据来源信息 */}
+              <DataSourceInfo />
               {/* 通知铃铛 */}
               <div className="relative">
                 <button

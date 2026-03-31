@@ -97,6 +97,7 @@ function CPTopList() {
         indicator: [
           { name: '成长分', max: 100 },
           { name: '价值分', max: 100 },
+          { name: '质量分', max: 100 },
           { name: '趋势分', max: 100 },
           { name: '战力值', max: 100 },
         ],
@@ -110,7 +111,7 @@ function CPTopList() {
       series: [{
         type: 'radar',
         data: compareList.map((stock, idx) => ({
-          value: [stock.growth_score, stock.value_score, stock.momentum_score, stock.total_cp],
+          value: [stock.growth_score, stock.value_score, stock.quality_score || 0, stock.momentum_score, stock.total_cp],
           name: stock.name,
           areaStyle: { color: colors[idx % 3] + '40' },
           lineStyle: { color: colors[idx % 3], width: 2 },
@@ -722,23 +723,30 @@ function CPTopList() {
 
       {/* 战力说明 */}
       <div className="mt-4 bg-card-bg rounded-xl border border-border-dark p-4">
-        <h4 className="font-bold text-white mb-2">战力说明</h4>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-sm">
-          <div>
-            <p className="text-gray-400 mb-1">战力公式</p>
-            <p className="text-white">成长分40% + 价值分40% + 趋势分20%</p>
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="font-bold text-white">战力说明 (v14)</h4>
+          <p className="text-xs text-gray-500">战力 = (成长×30% + 价值×25% + 质量×20% + 动量×15%) × 风险调整</p>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+          <div className="bg-white/5 rounded-lg p-2">
+            <p className="text-gray-400 mb-1">成长分 30%</p>
+            <p className="text-accent-blue text-xs">净利润+营收增长</p>
           </div>
-          <div>
-            <p className="text-gray-400 mb-1">成长分</p>
-            <p className="text-white">净利润增长×0.6 + 营收增长×0.4</p>
+          <div className="bg-white/5 rounded-lg p-2">
+            <p className="text-gray-400 mb-1">价值分 25%</p>
+            <p className="text-cp-high text-xs">ROE+PE+PEG+PB</p>
           </div>
-          <div>
-            <p className="text-gray-400 mb-1">价值分</p>
-            <p className="text-white">ROE（净资产收益率）</p>
+          <div className="bg-white/5 rounded-lg p-2">
+            <p className="text-gray-400 mb-1">质量分 20%</p>
+            <p className="text-purple-400 text-xs">现金流+毛利率</p>
           </div>
-          <div>
-            <p className="text-gray-400 mb-1">趋势分</p>
-            <p className="text-white">当日涨跌幅</p>
+          <div className="bg-white/5 rounded-lg p-2">
+            <p className="text-gray-400 mb-1">动量分 15%</p>
+            <p className="text-yellow-400 text-xs">涨跌幅</p>
+          </div>
+          <div className="bg-white/5 rounded-lg p-2">
+            <p className="text-gray-400 mb-1">风险调整</p>
+            <p className="text-red-400 text-xs">高风险打折</p>
           </div>
         </div>
       </div>
@@ -813,6 +821,10 @@ function CPTopList() {
                   <div className="flex justify-between">
                     <span className="text-gray-400">价值分</span>
                     <span className="text-white">{stock.value_score.toFixed(1)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">质量分</span>
+                    <span className="text-purple-400">{(stock.quality_score || 0).toFixed(1)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-400">趋势分</span>

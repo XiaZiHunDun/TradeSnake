@@ -7,6 +7,8 @@ import { ThemeProvider } from './hooks/useTheme'
 import { SettingsModal } from './hooks/useSettings.jsx'
 import { SkeletonCard, SkeletonTable } from './components/Skeleton'
 import { NotificationProvider } from './hooks/useNotification'
+import { FormulaEducation } from './components/FormulaEducation'
+import { DataSourceModal } from './components/DataSourceInfo'
 import './index.css'
 
 // 懒加载页面组件
@@ -36,6 +38,8 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0)
   const [currentPage, setCurrentPage] = useState('toplist') // 'toplist' | 'search' | 'personal' | 'recommend' | 'simulator' | 'rankings' | 'sector'
   const [showSettings, setShowSettings] = useState(false)
+  const [showEducation, setShowEducation] = useState(false) // 战力学堂
+  const [showDataSource, setShowDataSource] = useState(false) // 数据说明
   const tour = useTourGuide()
 
   // 键盘快捷键
@@ -61,6 +65,14 @@ function App() {
           // 切换主题
           document.querySelector('button[title*="切换"]')?.click()
           break
+        case 'e':
+        case 'E':
+          setShowEducation(true)
+          break
+        case 'd':
+        case 'D':
+          setShowDataSource(true)
+          break
         case 'Escape':
           // 关闭弹窗
           document.dispatchEvent(new CustomEvent('close-modal'))
@@ -85,6 +97,7 @@ function App() {
             currentPage={currentPage}
             onNavigate={setCurrentPage}
             onOpenSettings={() => setShowSettings(true)}
+            onOpenEducation={() => setShowEducation(true)}
           />
         <main className="container mx-auto px-4 py-6">
           <ErrorBoundary>
@@ -115,6 +128,8 @@ function App() {
         </main>
         <ToastContainer />
         <TourGuide {...tour} />
+        <FormulaEducation isOpen={showEducation} onClose={() => setShowEducation(false)} />
+        <DataSourceModal isOpen={showDataSource} onClose={() => setShowDataSource(false)} />
         <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
       </ErrorBoundary>
       </div>
