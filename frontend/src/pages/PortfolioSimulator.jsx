@@ -332,7 +332,7 @@ function PortfolioSimulator() {
 
           <div className="p-4 bg-deep-night rounded-lg">
             <p className="text-gray-300 text-sm">
-              {'提示：如果将组合内所有股票的战力各'}{simChange > 0 ? '提升' : '下降'}{Math.abs(simChange)}点，总战力将从 }
+              {`提示：如果将组合内所有股票的战力各${simChange > 0 ? '提升' : '下降'}${Math.abs(simChange)}点，总战力将从 `}
               <span className="text-white font-bold">{simResult.current.toFixed(0)}</span>
               {simChange > 0 ? ' 提升到 ' : ' 下降到 '}
               <span className={simChange > 0 ? 'text-green-500' : 'text-red-500'}>{simChange > 0 ? simResult.improved.toFixed(0) : simResult.reduced.toFixed(0)}</span>，
