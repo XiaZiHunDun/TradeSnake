@@ -63,7 +63,12 @@ def refresh_cp_data(limit: int = 100, save_hist: bool = True):
                 cashflow=data.get('cashflow', 0),
                 debt_ratio=data.get('debt_ratio', 0),
                 volume=data.get('volume', 0),
-                amount=data.get('amount', 0)
+                amount=data.get('amount', 0),
+                dividend_yield=data.get('dividend_yield', 0),
+                market_cap=data.get('market_cap', 0),
+                high=data.get('high', 0),
+                low=data.get('low', 0),
+                data_quality=data.get('data_quality', 'low')
             )
             cp_engine.add_stock(stock)
             stock_dicts.append(stock.to_dict())
@@ -160,7 +165,12 @@ async def get_cp_top(
             gross_margin=s.gross_margin,
             revenue=s.revenue,
             cashflow=s.cashflow,
-            debt_ratio=s.debt_ratio
+            debt_ratio=s.debt_ratio,
+            dividend_yield=s.dividend_yield,
+            market_cap=s.market_cap,
+            high=s.high,
+            low=s.low,
+            data_quality=s.data_quality
         ))
 
     return CPListResponse(
@@ -203,7 +213,12 @@ async def get_cp_bottom(limit: int = Query(default=10, ge=1, le=50)):
             gross_margin=s.gross_margin,
             revenue=s.revenue,
             cashflow=s.cashflow,
-            debt_ratio=s.debt_ratio
+            debt_ratio=s.debt_ratio,
+            dividend_yield=s.dividend_yield,
+            market_cap=s.market_cap,
+            high=s.high,
+            low=s.low,
+            data_quality=s.data_quality
         ))
 
     return CPListResponse(
@@ -242,7 +257,12 @@ async def get_single_stock(code: str):
             gross_margin=cached.gross_margin,
             revenue=cached.revenue,
             cashflow=cached.cashflow,
-            debt_ratio=cached.debt_ratio
+            debt_ratio=cached.debt_ratio,
+            dividend_yield=cached.dividend_yield,
+            market_cap=cached.market_cap,
+            high=cached.high,
+            low=cached.low,
+            data_quality=cached.data_quality
         )
 
     # 实时获取
@@ -266,7 +286,12 @@ async def get_single_stock(code: str):
         cashflow=stock_data.get('cashflow', 0),
         debt_ratio=stock_data.get('debt_ratio', 0),
         volume=stock_data.get('volume', 0),
-        amount=stock_data.get('amount', 0)
+        amount=stock_data.get('amount', 0),
+        dividend_yield=stock_data.get('dividend_yield', 0),
+        market_cap=stock_data.get('market_cap', 0),
+        high=stock_data.get('high', 0),
+        low=stock_data.get('low', 0),
+        data_quality=stock_data.get('data_quality', 'low')
     )
 
     # 如果引擎中有数据，重新计算百分位
@@ -310,7 +335,12 @@ async def get_single_stock(code: str):
         gross_margin=stock.gross_margin,
         revenue=stock.revenue,
         cashflow=stock.cashflow,
-        debt_ratio=stock.debt_ratio
+        debt_ratio=stock.debt_ratio,
+        dividend_yield=stock.dividend_yield,
+        market_cap=stock.market_cap,
+        high=stock.high,
+        low=stock.low,
+        data_quality=stock.data_quality
     )
 
 
@@ -354,7 +384,12 @@ async def get_recommended_stocks(category: str = Query(default="value", descript
             gross_margin=s.gross_margin,
             revenue=s.revenue,
             cashflow=s.cashflow,
-            debt_ratio=s.debt_ratio
+            debt_ratio=s.debt_ratio,
+            dividend_yield=s.dividend_yield,
+            market_cap=s.market_cap,
+            high=s.high,
+            low=s.low,
+            data_quality=s.data_quality
         ))
 
     # 按类型筛选
@@ -558,7 +593,12 @@ async def get_batch_stocks(codes: list[str]):
                 gross_margin=cached.gross_margin,
                 revenue=cached.revenue,
                 cashflow=cached.cashflow,
-                debt_ratio=cached.debt_ratio
+                debt_ratio=cached.debt_ratio,
+                dividend_yield=cached.dividend_yield,
+                market_cap=cached.market_cap,
+                high=cached.high,
+                low=cached.low,
+                data_quality=cached.data_quality
             ))
             continue
 
@@ -580,7 +620,12 @@ async def get_batch_stocks(codes: list[str]):
                 cashflow=stock_data.get('cashflow', 0),
                 debt_ratio=stock_data.get('debt_ratio', 0),
                 volume=stock_data.get('volume', 0),
-                amount=stock_data.get('amount', 0)
+                amount=stock_data.get('amount', 0),
+                dividend_yield=stock_data.get('dividend_yield', 0),
+                market_cap=stock_data.get('market_cap', 0),
+                high=stock_data.get('high', 0),
+                low=stock_data.get('low', 0),
+                data_quality=stock_data.get('data_quality', 'low')
             )
 
             # 计算百分位
@@ -615,7 +660,12 @@ async def get_batch_stocks(codes: list[str]):
                 gross_margin=stock.gross_margin,
                 revenue=stock.revenue,
                 cashflow=stock.cashflow,
-                debt_ratio=stock.debt_ratio
+                debt_ratio=stock.debt_ratio,
+                dividend_yield=stock.dividend_yield,
+                market_cap=stock.market_cap,
+                high=stock.high,
+                low=stock.low,
+                data_quality=stock.data_quality
             ))
 
     return {"total": len(result), "data": result}

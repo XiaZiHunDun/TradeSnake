@@ -31,6 +31,11 @@ class StockCPData(BaseModel):
     revenue: float = 0  # 主营收入(亿)
     cashflow: float = 0  # 经营现金流(亿)
     debt_ratio: float = 0  # 资产负债率
+    dividend_yield: float = 0  # 股息率(%)
+    market_cap: float = 0  # 市值(亿)
+    high: float = 0  # 最高价
+    low: float = 0  # 最低价
+    data_quality: str = 'low'  # 数据质量: high/medium/low
 
 
 class CPListResponse(BaseModel):
@@ -64,6 +69,11 @@ class SingleStockResponse(BaseModel):
     revenue: float = 0  # 主营收入(亿)
     cashflow: float = 0  # 经营现金流(亿)
     debt_ratio: float = 0  # 资产负债率
+    dividend_yield: float = 0  # 股息率(%)
+    market_cap: float = 0  # 市值(亿)
+    high: float = 0  # 最高价
+    low: float = 0  # 最低价
+    data_quality: str = 'low'  # 数据质量: high/medium/low
 
 
 class Holding(BaseModel):

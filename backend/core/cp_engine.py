@@ -39,6 +39,10 @@ class StockCP:
     debt_ratio: float = 0  # 资产负债率
     volume: float = 0  # 成交量(手)
     amount: float = 0  # 成交额(万)
+    dividend_yield: float = 0  # 股息率(%)
+    market_cap: float = 0  # 市值(亿)
+    high: float = 0  # 最高价
+    low: float = 0  # 最低价
 
     # 计算得分
     growth_score: float = 0
@@ -50,6 +54,9 @@ class StockCP:
     # 风险评估
     risk_score: float = 0  # 风险分数（0-100，越高风险越大）
     peg: float = 0  # PEG估值
+
+    # 数据质量标记
+    data_quality: str = 'low'  # high/medium/low
 
     def __post_init__(self):
         self.calculate_scores()
@@ -236,7 +243,12 @@ class StockCP:
             'gross_margin': self.gross_margin,
             'revenue': self.revenue,
             'cashflow': self.cashflow,
-            'debt_ratio': self.debt_ratio
+            'debt_ratio': self.debt_ratio,
+            'dividend_yield': self.dividend_yield,
+            'market_cap': self.market_cap,
+            'high': self.high,
+            'low': self.low,
+            'data_quality': self.data_quality
         }
 
 
@@ -346,7 +358,12 @@ def create_stock_from_raw(
     cashflow: float = 0,
     debt_ratio: float = 0,
     volume: float = 0,
-    amount: float = 0
+    amount: float = 0,
+    dividend_yield: float = 0,
+    market_cap: float = 0,
+    high: float = 0,
+    low: float = 0,
+    data_quality: str = 'low'
 ) -> StockCP:
     """从原始数据创建StockCP对象"""
     return StockCP(
@@ -364,5 +381,10 @@ def create_stock_from_raw(
         cashflow=cashflow,
         debt_ratio=debt_ratio,
         volume=volume,
-        amount=amount
+        amount=amount,
+        dividend_yield=dividend_yield,
+        market_cap=market_cap,
+        high=high,
+        low=low,
+        data_quality=data_quality
     )
