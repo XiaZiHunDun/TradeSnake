@@ -481,5 +481,60 @@ class TestRiskLevels:
         assert low_risk.risk_score < 40
 
 
+class TestEdgeCases:
+    """测试边界情况"""
+
+    def test_zero_pe_stock(self):
+        """测试PE为0的股票（无盈利或金融股）"""
+        stock = StockCP(
+            code='600000',
+            name='银行股',
+            price=10.0,
+            pe=0.0,  # 银行股常见PE为0或很低
+            roe=10.0,
+            net_profit_growth=5.0,
+            revenue_growth=3.0,
+            change_pct=0.5
+        )
+
+        # PE=0不应该导致计算崩溃
+        assert stock.pe == 0
+        assert stock.total_cp >= 0
+        assert stock.risk_score >= 0
+
+    def test_zero_roe_stock(self):
+        """测试ROE为0的股票"""
+        stock = StockCP(
+            code='600000',
+            name='ROE为零',
+            price=10.0,
+            pe=20.0,
+            roe=0.0,  # ROE为0
+            net_profit_growth=0.0,
+            revenue_growth=0.0,
+            change_pct=0.0
+        )
+
+        assert stock.roe == 0
+        assert stock.total_cp >= 0
+
+    def test_extreme_values(self):
+        """测试极端值"""
+        stock = StockCP(
+            code='600519',
+            name='极端值',
+            price=0.01,  # 最低价
+            pe=0.01,    # 极低PE
+            roe=0.01,   # 极低ROE
+            net_profit_growth=-99.0,  # 接近-100%
+            revenue_growth=-99.0,
+            change_pct=20.0  # 涨停
+        )
+
+        # 不应崩溃
+        assert stock.total_cp >= 0
+        assert stock.risk_score <= 100
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
