@@ -1,0 +1,17 @@
+{
+  "name": "TradeSnake - 股市贪吃蛇",
+  "short_name": "TradeSnake",
+  "description": "用战力值衡量股票价值的投资工具",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f0f1a",
+  "theme_color": "#0f0f1a",
+  "icons": [
+    {
+      "src": "/snake.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "categories": ["finance", "utilities"]
+}

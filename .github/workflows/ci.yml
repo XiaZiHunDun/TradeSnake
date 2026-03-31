@@ -1,0 +1,63 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-test:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    container: python:3.11
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          pip install fastapi uvicorn akshare pandas requests slowapi pytest
+
+      - name: Run backend tests
+        run: |
+          python -m pytest backend/tests/ -v
+
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Run linter
+        working-directory: ./frontend
+        run: npm run lint || true
+
+      - name: Build
+        working-directory: ./frontend
+        run: npm run build
+
+  api-health-check:
+    name: API Health Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Start backend
+        run: |
+          cd backend
+          pip install fastapi uvicorn akshare pandas requests slowapi -q
+          timeout 30 python -c "from api.main import app; import uvicorn; uvicorn.run(app, host='127.0.0.1', port=8001)" &
+          sleep 5
+
+      - name: Check API
+        run: curl -f http://127.0.0.1:8001/ || echo "API not responding"

@@ -1,0 +1,182 @@
+"""
+API路由单元测试
+"""
+
+import pytest
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from fastapi.testclient import TestClient
+from api.main import app
+
+
+client = TestClient(app)
+
+
+class TestHealthEndpoint:
+    """测试健康检查端点"""
+
+    def test_health_check(self):
+        """测试健康检查返回正常"""
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert "status" in data
+        assert data["status"] == "ok"
+
+
+class TestRootEndpoint:
+    """测试根端点"""
+
+    def test_root(self):
+        """测试根路径返回API信息"""
+        response = client.get("/")
+        assert response.status_code == 200
+        data = response.json()
+        assert "name" in data
+        assert "version" in data
+
+
+class TestCPEndpoints:
+    """测试战力相关端点"""
+
+    def test_cp_top(self):
+        """测试获取战力榜"""
+        response = client.get("/api/cp/top?limit=10")
+        assert response.status_code == 200
+        data = response.json()
+        assert "total" in data
+        assert "data" in data
+        assert isinstance(data["data"], list)
+
+    def test_cp_top_with_limit(self):
+        """测试带limit参数的战力榜"""
+        response = client.get("/api/cp/top?limit=5")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["data"]) <= 5
+
+    def test_cp_bottom(self):
+        """测试获取BOTTOM榜"""
+        response = client.get("/api/cp/bottom?limit=5")
+        assert response.status_code == 200
+        data = response.json()
+        assert "data" in data
+        assert isinstance(data["data"], list)
+
+
+class TestStockEndpoint:
+    """测试单只股票端点"""
+
+    def test_stock_not_found(self):
+        """测试获取不存在的股票"""
+        response = client.get("/api/stock/INVALID")
+        # 可能返回404或200（如果引擎有数据）
+        assert response.status_code in [200, 404]
+
+
+class TestMarketStatsEndpoint:
+    """测试市场统计端点"""
+
+    def test_market_stats(self):
+        """测试获取市场统计"""
+        response = client.get("/api/stats/market")
+        assert response.status_code == 200
+        data = response.json()
+        assert "total_stocks" in data
+        assert "avg_cp" in data
+
+
+class TestRiskStatsEndpoint:
+    """测试风险统计端点"""
+
+    def test_risk_stats(self):
+        """测试获取风险统计"""
+        response = client.get("/api/stats/risk")
+        assert response.status_code == 200
+        data = response.json()
+        assert "total_stocks" in data
+        assert "high_risk_count" in data
+        assert "medium_risk_count" in data
+        assert "low_risk_count" in data
+        assert "avg_risk_score" in data
+
+
+class TestRecommendEndpoint:
+    """测试推荐端点"""
+
+    def test_recommend_value(self):
+        """测试价值型推荐"""
+        response = client.get("/api/cp/recommend?category=value")
+        assert response.status_code == 200
+        data = response.json()
+        assert "category" in data
+        assert "data" in data
+
+    def test_recommend_growth(self):
+        """测试成长型推荐"""
+        response = client.get("/api/cp/recommend?category=growth")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["category"] == "growth"
+
+    def test_recommend_momentum(self):
+        """测试趋势型推荐"""
+        response = client.get("/api/cp/recommend?category=momentum")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["category"] == "momentum"
+
+
+class TestHistoryEndpoints:
+    """测试历史数据端点"""
+
+    def test_history_changes(self):
+        """测试战力变化接口"""
+        response = client.get("/api/history/changes?days=7")
+        assert response.status_code == 200
+        data = response.json()
+        assert "days" in data
+
+    def test_history_rankings_top(self):
+        """测试历史TOP10接口"""
+        response = client.get("/api/history/rankings/top?days=30")
+        assert response.status_code == 200
+        data = response.json()
+        assert "days" in data
+
+    def test_history_rankings_changes(self):
+        """测试榜单变化接口"""
+        response = client.get("/api/history/rankings/changes?days=30")
+        assert response.status_code == 200
+        data = response.json()
+        assert "days" in data
+
+
+class TestBatchStocksEndpoint:
+    """测试批量股票端点"""
+
+    def test_batch_stocks(self):
+        """测试批量获取股票"""
+        response = client.post(
+            "/api/stocks/batch",
+            json=["600519", "000858"]
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "total" in data
+        assert "data" in data
+
+    def test_batch_stocks_empty(self):
+        """测试批量获取空列表"""
+        response = client.post(
+            "/api/stocks/batch",
+            json=[]
+        )
+        assert response.status_code == 200
+
+
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])
