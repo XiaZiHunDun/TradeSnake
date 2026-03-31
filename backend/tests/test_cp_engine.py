@@ -264,5 +264,177 @@ class TestCreateStockFromRaw:
         assert stock.debt_ratio == 30.0
 
 
+class TestCPEngineAdvanced:
+    """测试CPEngine高级功能"""
+
+    def test_get_by_code(self):
+        """测试根据代码获取股票"""
+        engine = CPEngine()
+        stocks = [
+            StockCP('600519', '贵州茅台', 1800.0, 45.0, 30.0, 20.0, 15.0, 2.5),
+            StockCP('000858', '五粮液', 200.0, 30.0, 25.0, 25.0, 20.0, 3.0),
+            StockCP('600036', '招商银行', 40.0, 10.0, 18.0, 15.0, 10.0, 1.0),
+        ]
+        for stock in stocks:
+            engine.add_stock(stock)
+
+        found = engine.get_by_code('000858')
+        assert found is not None
+        assert found.name == '五粮液'
+
+        not_found = engine.get_by_code('999999')
+        assert not_found is None
+
+    def test_empty_engine(self):
+        """测试空引擎"""
+        engine = CPEngine()
+        assert len(engine.stocks) == 0
+        result = engine.calculate_all()
+        assert result == []
+
+        top = engine.get_top(5)
+        assert top == []
+        bottom = engine.get_bottom(3)
+        assert bottom == []
+        assert engine.get_by_code('600519') is None
+
+    def test_single_stock(self):
+        """测试单只股票"""
+        engine = CPEngine()
+        stock = StockCP('600519', '贵州茅台', 1800.0, 45.0, 30.0, 20.0, 15.0, 2.5)
+        engine.add_stock(stock)
+        engine.calculate_all()
+
+        assert len(engine.get_top(5)) == 1
+        assert len(engine.get_bottom(3)) == 1
+
+    def test_to_dataframe(self):
+        """测试转换为DataFrame"""
+        engine = CPEngine()
+        stocks = [
+            StockCP('600519', '贵州茅台', 1800.0, 45.0, 30.0, 20.0, 15.0, 2.5),
+            StockCP('000858', '五粮液', 200.0, 30.0, 25.0, 25.0, 20.0, 3.0),
+        ]
+        for stock in stocks:
+            engine.add_stock(stock)
+
+        engine.calculate_all()
+        df = engine.to_dataframe()
+
+        assert len(df) == 2
+        assert 'total_cp' in df.columns
+        assert 'code' in df.columns
+        # 验证排序
+        assert df.iloc[0]['total_cp'] >= df.iloc[1]['total_cp']
+
+
+class TestStockCPQualityScore:
+    """测试质量分数计算"""
+
+    def test_high_quality_stock(self):
+        """测试高质量股票（高现金流+高毛利+低负债）"""
+        stock = StockCP(
+            code='600519',
+            name='贵州茅台',
+            price=1800.0,
+            pe=45.0,
+            roe=30.0,
+            net_profit_growth=20.0,
+            revenue_growth=15.0,
+            change_pct=2.5,
+            cashflow=100.0,
+            gross_margin=90.0,
+            debt_ratio=30.0
+        )
+
+        assert stock.quality_score > 0
+        assert stock.cashflow > 0
+        assert stock.gross_margin > 30
+
+    def test_low_quality_stock(self):
+        """测试低质量股票（低现金流+负毛利+高负债）"""
+        stock = StockCP(
+            code='600519',
+            name='问题股',
+            price=100.0,
+            pe=50.0,
+            roe=5.0,
+            net_profit_growth=-10.0,
+            revenue_growth=-5.0,
+            change_pct=5.0,
+            cashflow=-10.0,
+            gross_margin=-5.0,
+            debt_ratio=85.0
+        )
+
+        assert stock.quality_score < 20
+
+    def test_peg_calculation(self):
+        """测试PEG计算"""
+        # PEG = PE / Growth
+        stock = StockCP(
+            code='600519',
+            name='贵州茅台',
+            price=1800.0,
+            pe=30.0,
+            roe=30.0,
+            net_profit_growth=30.0,  # 30%增长
+            revenue_growth=15.0,
+            change_pct=2.5
+        )
+
+        assert stock.peg > 0
+        assert stock.peg == 1.0  # PEG = 30/30
+
+    def test_negative_pe_stock(self):
+        """测试负PE（亏损股）"""
+        stock = StockCP(
+            code='600519',
+            name='亏损股',
+            price=10.0,
+            pe=-5.0,
+            roe=-10.0,
+            net_profit_growth=-50.0,
+            revenue_growth=-20.0,
+            change_pct=5.0
+        )
+
+        assert stock.pe < 0
+        assert stock.risk_score > 30  # 应该有较高风险
+
+
+class TestRiskLevels:
+    """测试风险等级"""
+
+    def test_risk_levels(self):
+        """测试各风险等级"""
+        # 高风险
+        high_risk = StockCP(
+            code='1', name='高风险', price=100.0,
+            pe=150.0, roe=-5.0, net_profit_growth=-60.0,
+            revenue_growth=-40.0, change_pct=10.0
+        )
+        assert high_risk.get_risk_level() == '高风险'
+        assert high_risk.risk_score >= 60
+
+        # 中等风险 - 需要更高的波动或PE来触发
+        mid_risk = StockCP(
+            code='2', name='中等风险', price=100.0,
+            pe=60.0, roe=8.0, net_profit_growth=-20.0,
+            revenue_growth=-10.0, change_pct=6.0
+        )
+        assert mid_risk.get_risk_level() in ['中等', '较低']
+        assert 20 < mid_risk.risk_score < 60
+
+        # 较低风险
+        low_risk = StockCP(
+            code='3', name='较低风险', price=100.0,
+            pe=15.0, roe=15.0, net_profit_growth=15.0,
+            revenue_growth=10.0, change_pct=1.0
+        )
+        assert low_risk.get_risk_level() in ['较低', '中等']
+        assert low_risk.risk_score < 40
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
