@@ -304,6 +304,7 @@ function SectorAnalysis() {
                   <th className="px-4 py-3 text-right">战力值</th>
                   <th className="px-4 py-3 text-right">成长分</th>
                   <th className="px-4 py-3 text-right">价值分</th>
+                  <th className="px-4 py-3 text-right">质量分</th>
                   <th className="px-4 py-3 text-right">趋势分</th>
                   <th className="px-4 py-3 text-right">涨跌幅</th>
                 </tr>
@@ -340,6 +341,9 @@ function SectorAnalysis() {
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-gray-300">
                       {stock.value_score.toFixed(1)}
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono text-purple-400">
+                      {(stock.quality_score || 0).toFixed(1)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-gray-300">
                       {stock.momentum_score.toFixed(1)}
