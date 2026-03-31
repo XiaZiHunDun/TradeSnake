@@ -26,6 +26,13 @@ class TestHealthEndpoint:
         assert "status" in data
         assert data["status"] == "ok"
 
+    def test_health_check_fields(self):
+        """测试健康检查包含必要字段"""
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert "stocks_count" in data
+
 
 class TestRootEndpoint:
     """测试根端点"""
@@ -37,6 +44,13 @@ class TestRootEndpoint:
         data = response.json()
         assert "name" in data
         assert "version" in data
+
+    def test_root_fields(self):
+        """测试根路径包含描述信息"""
+        response = client.get("/")
+        assert response.status_code == 200
+        data = response.json()
+        assert "description" in data
 
 
 class TestCPEndpoints:
@@ -87,6 +101,18 @@ class TestMarketStatsEndpoint:
         data = response.json()
         assert "total_stocks" in data
         assert "avg_cp" in data
+
+    def test_market_stats_fields(self):
+        """测试市场统计包含完整字段"""
+        response = client.get("/api/stats/market")
+        assert response.status_code == 200
+        data = response.json()
+        assert "high_cp_count" in data
+        assert "mid_cp_count" in data
+        assert "low_cp_count" in data
+        assert "avg_change" in data
+        assert "rising_stocks" in data
+        assert "falling_stocks" in data
 
 
 class TestRiskStatsEndpoint:
