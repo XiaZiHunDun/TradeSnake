@@ -66,7 +66,8 @@ def read_cache(cache_type: str) -> Optional[Dict]:
             return None
 
         return cache.get('data')
-    except:
+    except Exception as e:
+        print(f"读取缓存失败 {cache_type}: {e}")
         return None
 
 
