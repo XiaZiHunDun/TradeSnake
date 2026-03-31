@@ -7,6 +7,7 @@ function Recommend() {
   const [recommendType, setRecommendType] = useState('value')
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
   const [selectedStock, setSelectedStock] = useState(null)
   const [stockDetail, setStockDetail] = useState(null)
   const { watchlist, toggle, isInWatchlist } = useWatchlist()
@@ -61,12 +62,14 @@ function Recommend() {
 
   const fetchRecommend = async () => {
     setLoading(true)
+    setError(null)
     try {
       const res = await fetch(`/api/cp/recommend?category=${recommendType}`)
       const json = await res.json()
       setData(json.data || [])
     } catch (e) {
       console.error('Failed to fetch:', e)
+      setError('数据加载失败，请检查网络连接')
     }
     setLoading(false)
   }
@@ -120,6 +123,16 @@ function Recommend() {
 
         {loading ? (
           <div className="py-20 text-center text-gray-400">加载中...</div>
+        ) : error ? (
+          <div className="p-8 text-center">
+            <p className="text-cp-low text-lg mb-4">{error}</p>
+            <button
+              onClick={() => fetchRecommend()}
+              className="px-4 py-2 bg-cp-low/20 hover:bg-cp-low/30 text-cp-low rounded-lg transition-colors"
+            >
+              重试
+            </button>
+          </div>
         ) : (
           <table className="w-full">
             <thead>
