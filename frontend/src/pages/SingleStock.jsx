@@ -264,6 +264,30 @@ function SingleStock() {
             </div>
           </div>
 
+          {/* 市场信息 */}
+          {(stock.market_cap > 0 || stock.high > 0 || stock.low > 0) && (
+            <div className="grid grid-cols-4 gap-3 mb-6">
+              <div className="bg-deep-night rounded-lg p-3 text-center">
+                <p className="text-gray-400 text-xs">市值(亿)</p>
+                <p className="text-white font-bold">{stock.market_cap > 0 ? stock.market_cap.toFixed(0) : '-'}</p>
+              </div>
+              <div className="bg-deep-night rounded-lg p-3 text-center">
+                <p className="text-gray-400 text-xs">最高价</p>
+                <p className="text-red-400 font-bold">{stock.high > 0 ? stock.high.toFixed(2) : '-'}</p>
+              </div>
+              <div className="bg-deep-night rounded-lg p-3 text-center">
+                <p className="text-gray-400 text-xs">最低价</p>
+                <p className="text-green-400 font-bold">{stock.low > 0 ? stock.low.toFixed(2) : '-'}</p>
+              </div>
+              <div className="bg-deep-night rounded-lg p-3 text-center">
+                <p className="text-gray-400 text-xs">数据质量</p>
+                <p className={`font-bold ${stock.data_quality === 'high' ? 'text-green-400' : stock.data_quality === 'medium' ? 'text-yellow-400' : 'text-gray-400'}`}>
+                  {stock.data_quality === 'high' ? '高' : stock.data_quality === 'medium' ? '中' : '低'}
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* 战力分析 */}
           <div className="mb-6">
             <h4 className="text-lg font-bold mb-4">战力分析</h4>
