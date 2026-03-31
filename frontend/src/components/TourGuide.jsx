@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Zap, List, Search, User, Sparkles, X, ChevronRight, BookOpen, Calculator, TrendingUp, Shield } from 'lucide-react'
+import { Zap, List, User, Sparkles, X, ChevronRight, BookOpen, TrendingUp, Shield } from 'lucide-react'
 
 const STORAGE_KEY = 'tradesnake_tour_done_v2'
 
