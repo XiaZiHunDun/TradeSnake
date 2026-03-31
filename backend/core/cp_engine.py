@@ -28,6 +28,15 @@ class StockCP:
     revenue_growth: float
     change_pct: float
 
+    # 扩展字段
+    pb: float = 0  # 市净率
+    gross_margin: float = 0  # 毛利率
+    revenue: float = 0  # 主营收入(亿)
+    cashflow: float = 0  # 经营现金流(亿)
+    debt_ratio: float = 0  # 资产负债率
+    volume: float = 0  # 成交量(手)
+    amount: float = 0  # 成交额(万)
+
     # 计算得分
     growth_score: float = 0
     value_score: float = 0
@@ -136,7 +145,12 @@ class StockCP:
             'momentum_score': self.momentum_score,
             'total_cp': self.total_cp,
             'risk_score': self.risk_score,
-            'risk_level': self.get_risk_level()
+            'risk_level': self.get_risk_level(),
+            'pb': self.pb,
+            'gross_margin': self.gross_margin,
+            'revenue': self.revenue,
+            'cashflow': self.cashflow,
+            'debt_ratio': self.debt_ratio
         }
 
 
@@ -224,7 +238,14 @@ def create_stock_from_raw(
     roe: float,
     net_profit_growth: float,
     revenue_growth: float,
-    change_pct: float
+    change_pct: float,
+    pb: float = 0,
+    gross_margin: float = 0,
+    revenue: float = 0,
+    cashflow: float = 0,
+    debt_ratio: float = 0,
+    volume: float = 0,
+    amount: float = 0
 ) -> StockCP:
     """从原始数据创建StockCP对象"""
     return StockCP(
@@ -235,5 +256,12 @@ def create_stock_from_raw(
         roe=roe,
         net_profit_growth=net_profit_growth,
         revenue_growth=revenue_growth,
-        change_pct=change_pct
+        change_pct=change_pct,
+        pb=pb,
+        gross_margin=gross_margin,
+        revenue=revenue,
+        cashflow=cashflow,
+        debt_ratio=debt_ratio,
+        volume=volume,
+        amount=amount
     )

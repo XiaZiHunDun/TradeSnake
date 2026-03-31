@@ -58,15 +58,24 @@ class StockDataFetcher:
             if match:
                 code = match.group(1)
                 fields = match.group(2).split('~')
-                if len(fields) > 40:
+                if len(fields) > 45:
                     try:
+                        # 计算涨跌幅
+                        price = float(fields[3]) if fields[3] else 0
+                        yesterday = float(fields[4]) if fields[4] else 0
+                        change_pct = ((price - yesterday) / yesterday * 100) if yesterday > 0 else 0
+
                         stocks.append({
                             'code': code,
                             'name': fields[1],
-                            'price': float(fields[3]) if fields[3] else 0,
-                            'yesterday': float(fields[4]) if fields[4] else 0,
+                            'price': price,
+                            'yesterday': yesterday,
+                            'open': float(fields[5]) if fields[5] else 0,
+                            'volume': int(fields[6]) if fields[6] else 0,  # 成交量(手)
+                            'amount': float(fields[37]) if fields[37] else 0,  # 成交额(万)
                             'pe': float(fields[39]) if fields[39] and fields[39] != '-' else 0,
-                            'volume': int(fields[6]) if fields[6] else 0,
+                            'pb': float(fields[46]) if len(fields) > 46 and fields[46] and fields[46] != '-' else 0,  # 市净率
+                            'change_pct': round(change_pct, 2),
                         })
                     except:
                         pass
@@ -83,10 +92,11 @@ class StockDataFetcher:
             else:
                 market = 'SZ'
 
+            # 主要财务指标
             url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
             params = {
                 "reportName": "RPT_LICO_FN_CPD",
-                "columns": "WEIGHTAVG_ROE,YSTZ,SJLTZ",
+                "columns": "WEIGHTAVG_ROE,YSTZ,SJLTZ,GPZYTZXJ,MAIN_BUSINESS_INCOME,OPERATE_CASHFLOW,ASSET_LIAB_RATIO",
                 "filter": f"(SECUCODE=\"{symbol}.{market}\")",
                 "pageNumber": 1,
                 "pageSize": 1,
@@ -109,12 +119,22 @@ class StockDataFetcher:
                     'roe': round(float(d.get('WEIGHTAVG_ROE', 0) or 0), 2),
                     'net_profit_growth': round(float(d.get('SJLTZ', 0) or 0), 2),
                     'revenue_growth': round(float(d.get('YSTZ', 0) or 0), 2),
+                    'gross_margin': round(float(d.get('GPZYTZXJ', 0) or 0), 2),  # 毛利率
+                    'revenue': round(float(d.get('MAIN_BUSINESS_INCOME', 0) or 0) / 100000000, 2),  # 主营收入(亿)
+                    'cashflow': round(float(d.get('OPERATE_CASHFLOW', 0) or 0) / 100000000, 2),  # 经营现金流(亿)
+                    'debt_ratio': round(float(d.get('ASSET_LIAB_RATIO', 0) or 0), 2),  # 资产负债率
                 }
 
-            return {'roe': 0, 'net_profit_growth': 0, 'revenue_growth': 0}
+            return {
+                'roe': 0, 'net_profit_growth': 0, 'revenue_growth': 0,
+                'gross_margin': 0, 'revenue': 0, 'cashflow': 0, 'debt_ratio': 0
+            }
         except Exception as e:
             print(f"财务数据获取失败 {symbol}: {e}")
-            return {'roe': 0, 'net_profit_growth': 0, 'revenue_growth': 0}
+            return {
+                'roe': 0, 'net_profit_growth': 0, 'revenue_growth': 0,
+                'gross_margin': 0, 'revenue': 0, 'cashflow': 0, 'debt_ratio': 0
+            }
 
     def get_batch_market_data(self, limit: int = 300) -> List[Dict]:
         """批量获取市场数据"""
@@ -161,12 +181,19 @@ class StockDataFetcher:
                 'name': mkt['name'],
                 'price': mkt['price'],
                 'yesterday': mkt['yesterday'],
+                'open': mkt.get('open', 0),
+                'volume': mkt.get('volume', 0),
+                'amount': mkt.get('amount', 0),
                 'pe': mkt['pe'],
-                'volume': mkt['volume'],
-                'change_pct': ((mkt['price'] - mkt['yesterday']) / mkt['yesterday'] * 100) if mkt['yesterday'] > 0 else 0,
-                'roe': fin['roe'] if fin else 0,
-                'net_profit_growth': fin['net_profit_growth'] if fin else 0,
-                'revenue_growth': fin['revenue_growth'] if fin else 0,
+                'pb': mkt.get('pb', 0),
+                'change_pct': mkt['change_pct'],
+                'roe': fin.get('roe', 0) if fin else 0,
+                'net_profit_growth': fin.get('net_profit_growth', 0) if fin else 0,
+                'revenue_growth': fin.get('revenue_growth', 0) if fin else 0,
+                'gross_margin': fin.get('gross_margin', 0) if fin else 0,
+                'revenue': fin.get('revenue', 0) if fin else 0,
+                'cashflow': fin.get('cashflow', 0) if fin else 0,
+                'debt_ratio': fin.get('debt_ratio', 0) if fin else 0,
             }
             full_data.append(data)
 
@@ -212,9 +239,18 @@ def get_single_stock_data(code: str) -> Optional[Dict]:
         'code': tencent_code,
         'name': mkt['name'],
         'price': mkt['price'],
+        'open': mkt.get('open', 0),
+        'yesterday': mkt.get('yesterday', 0),
+        'volume': mkt.get('volume', 0),
+        'amount': mkt.get('amount', 0),
         'pe': mkt['pe'],
-        'change_pct': ((mkt['price'] - mkt['yesterday']) / mkt['yesterday'] * 100) if mkt['yesterday'] > 0 else 0,
-        'roe': fin['roe'] if fin else 0,
-        'net_profit_growth': fin['net_profit_growth'] if fin else 0,
-        'revenue_growth': fin['revenue_growth'] if fin else 0,
+        'pb': mkt.get('pb', 0),
+        'change_pct': mkt['change_pct'],
+        'roe': fin.get('roe', 0) if fin else 0,
+        'net_profit_growth': fin.get('net_profit_growth', 0) if fin else 0,
+        'revenue_growth': fin.get('revenue_growth', 0) if fin else 0,
+        'gross_margin': fin.get('gross_margin', 0) if fin else 0,
+        'revenue': fin.get('revenue', 0) if fin else 0,
+        'cashflow': fin.get('cashflow', 0) if fin else 0,
+        'debt_ratio': fin.get('debt_ratio', 0) if fin else 0,
     }

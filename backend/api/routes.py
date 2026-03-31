@@ -56,7 +56,14 @@ def refresh_cp_data(limit: int = 100, save_hist: bool = True):
                 roe=data['roe'],
                 net_profit_growth=data['net_profit_growth'],
                 revenue_growth=data['revenue_growth'],
-                change_pct=data['change_pct']
+                change_pct=data['change_pct'],
+                pb=data.get('pb', 0),
+                gross_margin=data.get('gross_margin', 0),
+                revenue=data.get('revenue', 0),
+                cashflow=data.get('cashflow', 0),
+                debt_ratio=data.get('debt_ratio', 0),
+                volume=data.get('volume', 0),
+                amount=data.get('amount', 0)
             )
             cp_engine.add_stock(stock)
             stock_dicts.append(stock.to_dict())
@@ -146,7 +153,12 @@ async def get_cp_top(
             momentum_score=round(s.momentum_score, 2),
             total_cp=round(s.total_cp, 2),
             risk_score=round(s.risk_score, 2),
-            risk_level=s.get_risk_level()
+            risk_level=s.get_risk_level(),
+            pb=s.pb,
+            gross_margin=s.gross_margin,
+            revenue=s.revenue,
+            cashflow=s.cashflow,
+            debt_ratio=s.debt_ratio
         ))
 
     return CPListResponse(
@@ -182,7 +194,12 @@ async def get_cp_bottom(limit: int = Query(default=10, ge=1, le=50)):
             momentum_score=round(s.momentum_score, 2),
             total_cp=round(s.total_cp, 2),
             risk_score=round(s.risk_score, 2),
-            risk_level=s.get_risk_level()
+            risk_level=s.get_risk_level(),
+            pb=s.pb,
+            gross_margin=s.gross_margin,
+            revenue=s.revenue,
+            cashflow=s.cashflow,
+            debt_ratio=s.debt_ratio
         ))
 
     return CPListResponse(
@@ -214,7 +231,12 @@ async def get_single_stock(code: str):
             momentum_score=round(cached.momentum_score, 2),
             total_cp=round(cached.total_cp, 2),
             risk_score=round(cached.risk_score, 2),
-            risk_level=cached.get_risk_level()
+            risk_level=cached.get_risk_level(),
+            pb=cached.pb,
+            gross_margin=cached.gross_margin,
+            revenue=cached.revenue,
+            cashflow=cached.cashflow,
+            debt_ratio=cached.debt_ratio
         )
 
     # 实时获取
@@ -231,7 +253,14 @@ async def get_single_stock(code: str):
         roe=stock_data['roe'],
         net_profit_growth=stock_data['net_profit_growth'],
         revenue_growth=stock_data['revenue_growth'],
-        change_pct=stock_data['change_pct']
+        change_pct=stock_data['change_pct'],
+        pb=stock_data.get('pb', 0),
+        gross_margin=stock_data.get('gross_margin', 0),
+        revenue=stock_data.get('revenue', 0),
+        cashflow=stock_data.get('cashflow', 0),
+        debt_ratio=stock_data.get('debt_ratio', 0),
+        volume=stock_data.get('volume', 0),
+        amount=stock_data.get('amount', 0)
     )
 
     # 如果引擎中有数据，重新计算百分位
@@ -268,7 +297,12 @@ async def get_single_stock(code: str):
         momentum_score=round(stock.momentum_score, 2),
         total_cp=round(stock.total_cp, 2),
         risk_score=round(stock.risk_score, 2),
-        risk_level=stock.get_risk_level()
+        risk_level=stock.get_risk_level(),
+        pb=stock.pb,
+        gross_margin=stock.gross_margin,
+        revenue=stock.revenue,
+        cashflow=stock.cashflow,
+        debt_ratio=stock.debt_ratio
     )
 
 
@@ -305,7 +339,12 @@ async def get_recommended_stocks(category: str = Query(default="value", descript
             momentum_score=round(s.momentum_score, 2),
             total_cp=round(s.total_cp, 2),
             risk_score=round(s.risk_score, 2),
-            risk_level=s.get_risk_level()
+            risk_level=s.get_risk_level(),
+            pb=s.pb,
+            gross_margin=s.gross_margin,
+            revenue=s.revenue,
+            cashflow=s.cashflow,
+            debt_ratio=s.debt_ratio
         ))
 
     # 按类型筛选
@@ -502,7 +541,12 @@ async def get_batch_stocks(codes: list[str]):
                 momentum_score=round(cached.momentum_score, 2),
                 total_cp=round(cached.total_cp, 2),
                 risk_score=round(cached.risk_score, 2),
-                risk_level=cached.get_risk_level()
+                risk_level=cached.get_risk_level(),
+                pb=cached.pb,
+                gross_margin=cached.gross_margin,
+                revenue=cached.revenue,
+                cashflow=cached.cashflow,
+                debt_ratio=cached.debt_ratio
             ))
             continue
 
@@ -517,7 +561,14 @@ async def get_batch_stocks(codes: list[str]):
                 roe=stock_data['roe'],
                 net_profit_growth=stock_data['net_profit_growth'],
                 revenue_growth=stock_data['revenue_growth'],
-                change_pct=stock_data['change_pct']
+                change_pct=stock_data['change_pct'],
+                pb=stock_data.get('pb', 0),
+                gross_margin=stock_data.get('gross_margin', 0),
+                revenue=stock_data.get('revenue', 0),
+                cashflow=stock_data.get('cashflow', 0),
+                debt_ratio=stock_data.get('debt_ratio', 0),
+                volume=stock_data.get('volume', 0),
+                amount=stock_data.get('amount', 0)
             )
 
             # 计算百分位
@@ -545,7 +596,12 @@ async def get_batch_stocks(codes: list[str]):
                 momentum_score=round(stock.momentum_score, 2),
                 total_cp=round(stock.total_cp, 2),
                 risk_score=round(stock.risk_score, 2),
-                risk_level=stock.get_risk_level()
+                risk_level=stock.get_risk_level(),
+                pb=stock.pb,
+                gross_margin=stock.gross_margin,
+                revenue=stock.revenue,
+                cashflow=stock.cashflow,
+                debt_ratio=stock.debt_ratio
             ))
 
     return {"total": len(result), "data": result}

@@ -23,6 +23,12 @@ class StockCPData(BaseModel):
     total_cp: float
     risk_score: float = 0
     risk_level: str = '较低'
+    # 扩展字段
+    pb: float = 0  # 市净率
+    gross_margin: float = 0  # 毛利率
+    revenue: float = 0  # 主营收入(亿)
+    cashflow: float = 0  # 经营现金流(亿)
+    debt_ratio: float = 0  # 资产负债率
 
 
 class CPListResponse(BaseModel):
@@ -48,6 +54,12 @@ class SingleStockResponse(BaseModel):
     total_cp: float
     risk_score: float = 0
     risk_level: str = '较低'
+    # 扩展字段
+    pb: float = 0  # 市净率
+    gross_margin: float = 0  # 毛利率
+    revenue: float = 0  # 主营收入(亿)
+    cashflow: float = 0  # 经营现金流(亿)
+    debt_ratio: float = 0  # 资产负债率
 
 
 class Holding(BaseModel):
