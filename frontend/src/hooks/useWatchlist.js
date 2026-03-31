@@ -15,7 +15,11 @@ export function loadWatchlist() {
 
 // 保存自选股到localStorage
 export function saveWatchlist(watchlist) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(watchlist))
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(watchlist))
+  } catch (e) {
+    console.error('Failed to save watchlist:', e)
+  }
 }
 
 // 添加自选股

@@ -15,7 +15,11 @@ export function loadHoldings() {
 
 // 保存持仓到localStorage
 export function saveHoldings(holdings) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(holdings))
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(holdings))
+  } catch (e) {
+    console.error('Failed to save holdings:', e)
+  }
 }
 
 // 添加持仓
