@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, Edit2, Save, X, Zap, TrendingUp, TrendingDown, AlertTriangle, Sparkles, Bell, BellOff, ArrowRightLeft, Activity } from 'lucide-react'
+import { Plus, Trash2, Edit2, Save, X, Zap, TrendingUp, TrendingDown, AlertTriangle, Sparkles, Bell, BellOff, ArrowRightLeft, Activity, RefreshCw } from 'lucide-react'
 import { useHoldings, loadHoldings, saveHoldings } from '../hooks/useHoldings'
 import { useNotification } from '../hooks/useNotification'
 import DEFAULT_HOLDINGS from '../data/defaultHoldings'
@@ -281,6 +281,23 @@ function PersonalCP() {
   const totalCP = calculatePersonalCP()
   const estimatedChange = getEstimatedChange()
 
+  // 计算预估变化率
+  const getChangeRate = () => {
+    if (holdings.length === 0 || totalCP === 0) return 0
+    let totalYesterdayCP = 0
+    holdings.forEach(h => {
+      if (stockData[h.code]) {
+        const changePct = stockData[h.code].change_pct
+        const yesterdayCP = stockData[h.code].total_cp * h.quantity / (1 + changePct / 100)
+        totalYesterdayCP += yesterdayCP
+      }
+    })
+    if (totalYesterdayCP === 0) return 0
+    return (totalCP - totalYesterdayCP) / totalYesterdayCP * 100
+  }
+
+  const changeRate = getChangeRate()
+
   return (
     <div className="space-y-6">
       {/* 战力概览 */}
@@ -296,15 +313,19 @@ function PersonalCP() {
               <p className="text-3xl font-bold text-white">{totalCP.toFixed(0)}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             {estimatedChange >= 0 ? (
               <TrendingUp className="w-4 h-4 text-red-500" />
             ) : (
               <TrendingDown className="w-4 h-4 text-green-500" />
             )}
             <span className={`text-sm ${estimatedChange >= 0 ? 'text-red-500' : 'text-green-500'}`}>
-              {estimatedChange >= 0 ? '+' : ''}{estimatedChange.toFixed(0)} (估算)
+              {estimatedChange >= 0 ? '+' : ''}{estimatedChange.toFixed(0)} CP
+              ({changeRate >= 0 ? '+' : ''}{changeRate.toFixed(2)}%)
             </span>
+            {loading && (
+              <span className="text-xs text-gray-500">(更新中...)</span>
+            )}
           </div>
         </div>
 
@@ -314,10 +335,18 @@ function PersonalCP() {
             <div className="w-12 h-12 rounded-lg bg-accent-blue/20 flex items-center justify-center">
               <span className="text-xl font-bold text-accent-blue">{holdings.length}</span>
             </div>
-            <div>
+            <div className="flex-1">
               <p className="text-gray-400 text-sm">持仓股票</p>
               <p className="text-lg font-bold text-white">只</p>
             </div>
+            <button
+              onClick={() => { loadStockData(); loadTopStocks() }}
+              disabled={loading}
+              className="p-2 text-gray-400 hover:text-accent-blue disabled:opacity-50 transition-colors"
+              title="刷新数据"
+            >
+              <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+            </button>
           </div>
         </div>
 
@@ -650,6 +679,12 @@ function PersonalCP() {
         </div>
       ) : (
         <div className="bg-card-bg rounded-xl border border-border-dark overflow-hidden">
+          {loading && holdings.length > 0 && Object.keys(stockData).length === 0 && (
+            <div className="p-4 text-center text-gray-400 text-sm">
+              <div className="w-4 h-4 border-2 border-accent-blue/30 border-t-accent-blue rounded-full animate-spin inline-block mr-2"></div>
+              正在加载持仓数据...
+            </div>
+          )}
           <table className="w-full">
             <thead>
               <tr className="border-b border-border-dark text-left text-sm text-gray-400">
