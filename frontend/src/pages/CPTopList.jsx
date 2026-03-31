@@ -36,7 +36,7 @@ function CPTopList() {
         setMarketStats(stats)
       }
     } catch (e) {
-      console.error('Failed to fetch market stats')
+      console.error('Failed to fetch market stats:', e)
     }
   }
 
