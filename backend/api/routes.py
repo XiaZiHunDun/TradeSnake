@@ -3,7 +3,6 @@ API路由 - TradeSnake API Routes
 """
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from typing import Optional
 from datetime import datetime
 
 from models.schemas import CPListResponse, SingleStockResponse, StockCPData
