@@ -167,7 +167,7 @@ function Recommend() {
                     {stock.revenue_growth >= 0 ? '+' : ''}{stock.revenue_growth.toFixed(1)}%
                   </td>
                   <td className="px-4 py-3 text-right text-sm font-mono text-gray-300">
-                    {stock.pe.toFixed(1)}
+                    {stock.pe > 0 ? stock.pe.toFixed(1) : 'N/A'}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">

@@ -199,7 +199,7 @@ function Header({ onRefresh, currentPage, onNavigate, onOpenSettings, onOpenEduc
                 />
               </div>
               <button
-                onClick={handleRefresh}
+                onClick={onRefresh}
                 disabled={refreshing}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent-blue/10 text-accent-blue hover:bg-accent-blue/20 transition-colors disabled:opacity-50"
               >
@@ -260,9 +260,17 @@ function Header({ onRefresh, currentPage, onNavigate, onOpenSettings, onOpenEduc
                     onClick={() => handleQuickSearch(stock.code)}
                     className="w-full px-4 py-2 flex items-center justify-between hover:bg-white/5 transition-colors first:rounded-t-lg last:rounded-b-lg"
                   >
-                    <div className="text-left">
-                      <p className="text-white text-sm font-bold">{stock.name}</p>
-                      <p className="text-gray-500 text-xs">{stock.code}</p>
+                    <div className="flex items-center gap-2">
+                      <div className="text-left">
+                        <p className="text-white text-sm font-bold">{stock.name}</p>
+                        <p className="text-gray-500 text-xs">{stock.code}</p>
+                      </div>
+                      {stock.data_quality && (
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                          stock.data_quality === 'high' ? 'bg-green-400' :
+                          stock.data_quality === 'medium' ? 'bg-yellow-400' : 'bg-gray-500'
+                        }`} title={`数据质量: ${stock.data_quality === 'high' ? '高' : stock.data_quality === 'medium' ? '中' : '低'}`} />
+                      )}
                     </div>
                     <span className={`cp-tag ${
                       stock.total_cp >= 70 ? 'cp-high' : stock.total_cp >= 50 ? 'cp-mid' : 'cp-low'
@@ -300,9 +308,17 @@ function Header({ onRefresh, currentPage, onNavigate, onOpenSettings, onOpenEduc
                       onClick={() => { handleQuickSearch(stock.code); setMobileMenuOpen(false) }}
                       className="w-full px-4 py-2 flex items-center justify-between hover:bg-white/5 transition-colors"
                     >
-                      <div className="text-left">
-                        <p className="text-white text-sm font-bold">{stock.name}</p>
-                        <p className="text-gray-500 text-xs">{stock.code}</p>
+                      <div className="flex items-center gap-2">
+                        <div className="text-left">
+                          <p className="text-white text-sm font-bold">{stock.name}</p>
+                          <p className="text-gray-500 text-xs">{stock.code}</p>
+                        </div>
+                        {stock.data_quality && (
+                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                            stock.data_quality === 'high' ? 'bg-green-400' :
+                            stock.data_quality === 'medium' ? 'bg-yellow-400' : 'bg-gray-500'
+                          }`} title={`数据质量: ${stock.data_quality === 'high' ? '高' : stock.data_quality === 'medium' ? '中' : '低'}`} />
+                        )}
                       </div>
                       <span className={`cp-tag ${stock.total_cp >= 70 ? 'cp-high' : stock.total_cp >= 50 ? 'cp-mid' : 'cp-low'}`}>
                         {stock.total_cp.toFixed(1)}
