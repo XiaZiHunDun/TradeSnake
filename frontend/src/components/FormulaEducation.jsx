@@ -125,7 +125,7 @@ export function FormulaEducation({ isOpen, onClose }) {
               <p className="text-gray-400 text-sm mb-2">衡量盈利质量高低</p>
               <div className="bg-deep-night rounded-lg p-3 text-sm space-y-2">
                 <p className="text-gray-300">• 现金流：正现金流+高ROE = 真盈利</p>
-                <p className="text-gray-300">• 毛利率：>30%表示有护城河（品牌/技术/垄断）</p>
+                <p className="text-gray-300">• 毛利率：&gt;30%表示有护城河（品牌/技术/垄断）</p>
                 <p className="text-gray-300">• 资产负债率：&lt;50%表示财务稳健</p>
               </div>
               <div className="mt-3 flex items-center gap-2 text-xs text-gray-400">

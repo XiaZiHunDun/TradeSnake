@@ -270,11 +270,11 @@ class MarketDataFetcher:
                 yesterday = float(fields[4]) if fields[4] and fields[4] != '-' else 0
                 change_pct = ((price - yesterday) / yesterday * 100) if yesterday > 0 else 0
 
-                # 市值（从fields[38]可能获取）
+                # 市值（从fields[44]获取，已是亿单位）
                 market_cap = 0
-                if len(fields) > 38 and fields[38] and fields[38] != '-':
+                if len(fields) > 44 and fields[44] and fields[44] != '-':
                     try:
-                        market_cap = float(fields[38]) / 100000000  # 转为亿
+                        market_cap = float(fields[44])  # 已是亿单位
                     except:
                         pass
 
