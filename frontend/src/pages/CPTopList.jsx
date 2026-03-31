@@ -848,6 +848,18 @@ function CPTopList() {
                       {stock.change_pct >= 0 ? '+' : ''}{stock.change_pct.toFixed(2)}%
                     </span>
                   </div>
+                  {stock.market_cap > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-400">市值</span>
+                      <span className="text-white">{stock.market_cap.toFixed(0)}亿</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">数据</span>
+                    <span className={stock.data_quality === 'high' ? 'text-green-400' : stock.data_quality === 'medium' ? 'text-yellow-400' : 'text-gray-400'}>
+                      {stock.data_quality === 'high' ? '高' : stock.data_quality === 'medium' ? '中' : '低'}
+                    </span>
+                  </div>
                 </div>
               </div>
             ))}
