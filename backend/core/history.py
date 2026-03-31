@@ -37,10 +37,13 @@ def save_history(stocks: List[Dict], date: str = None):
         for old_date in dates[30:]:
             del history[old_date]
 
-    with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-        json.dump(history, f, ensure_ascii=False, indent=2)
-
-    return True
+    try:
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print(f"保存历史记录失败: {e}")
+        return False
 
 def load_history(days: int = 7) -> Dict:
     """加载最近N天的历史数据"""
@@ -64,7 +67,9 @@ def get_stock_history(code: str, days: int = 7) -> List[Dict]:
     result = []
 
     for date in sorted(history.keys()):
-        stock = history[date]["stocks"].get(code)
+        date_data = history.get(date, {})
+        stocks_data = date_data.get("stocks", {})
+        stock = stocks_data.get(code)
         if stock:
             result.append({
                 "date": date,
