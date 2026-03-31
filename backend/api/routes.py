@@ -132,12 +132,18 @@ async def get_cp_top(
 
     # 如果数据为空或强制刷新，则刷新数据
     if not cp_engine.stocks or force_refresh or last_update_time is None:
-        refresh_cp_data(limit=limit)
+        success = refresh_cp_data(limit=limit)
+        if not success and not cp_engine.stocks:
+            return {"error": "数据刷新失败，请稍后重试", "total": 0, "data": [], "updated_at": None}
     else:
         # 检查是否需要自动刷新（超过1小时）
         time_diff = (datetime.now() - last_update_time).total_seconds()
         if time_diff > 3600:
             refresh_cp_data(limit=limit)
+
+    # 如果仍然没有数据，返回错误
+    if not cp_engine.stocks:
+        return {"error": "暂无数据", "total": 0, "data": [], "updated_at": None}
 
     # 获取TOP N
     top_stocks = cp_engine.get_top(n=limit)
