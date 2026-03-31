@@ -42,7 +42,8 @@ class CPListResponse(BaseModel):
     """战力榜单响应"""
     total: int
     data: List[StockCPData]
-    updated_at: str
+    updated_at: Optional[str] = None
+    error: Optional[str] = None
 
 
 class SingleStockResponse(BaseModel):
@@ -95,3 +96,6 @@ class HealthResponse(BaseModel):
     """健康检查响应"""
     status: str
     timestamp: str
+    data_fresh: bool
+    last_update: Optional[str] = None
+    stocks_count: int = 0
