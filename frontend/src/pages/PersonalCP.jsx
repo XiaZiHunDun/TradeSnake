@@ -216,7 +216,9 @@ function PersonalCP() {
           const data = await res.json()
           name = data.name
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error('Failed to fetch stock name:', e)
+      }
     }
 
     add({
