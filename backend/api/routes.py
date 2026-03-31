@@ -496,11 +496,13 @@ async def get_market_stats():
     """获取市场整体统计"""
     try:
         if not cp_engine.stocks:
-            refresh_cp_data(limit=200)
+            success = refresh_cp_data(limit=200)
+            if not success and not cp_engine.stocks:
+                return {"error": "数据刷新失败，请稍后重试", "total_stocks": 0}
 
         stocks = cp_engine.stocks
         if not stocks:
-            return {"error": "No data", "total_stocks": 0}
+            return {"error": "暂无数据", "total_stocks": 0}
 
         # 基本统计
         cps = [s.total_cp for s in stocks]
@@ -545,11 +547,13 @@ async def get_risk_stats():
     """获取市场风险统计"""
     try:
         if not cp_engine.stocks:
-            refresh_cp_data(limit=200)
+            success = refresh_cp_data(limit=200)
+            if not success and not cp_engine.stocks:
+                return {"error": "数据刷新失败，请稍后重试", "total_stocks": 0}
 
         stocks = cp_engine.stocks
         if not stocks:
-            return {"error": "No data", "total_stocks": 0}
+            return {"error": "暂无数据", "total_stocks": 0}
 
         # 风险分布
         high_risk = [s for s in stocks if s.risk_score >= 60]
@@ -584,7 +588,9 @@ async def get_batch_stocks(codes: list[str]):
 
     # 确保引擎有数据
     if not cp_engine.stocks:
-        refresh_cp_data(limit=200)
+        success = refresh_cp_data(limit=200)
+        if not success and not cp_engine.stocks:
+            return {"error": "数据刷新失败，请稍后重试", "data": []}
 
     result = []
     for code in codes:
