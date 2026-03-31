@@ -4,6 +4,7 @@ import { Info, ExternalLink, Clock, Database, RefreshCw, CheckCircle, AlertCircl
 export function DataSourceInfo() {
   const [health, setHealth] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     fetchHealth()
@@ -14,17 +15,21 @@ export function DataSourceInfo() {
   const fetchHealth = async () => {
     try {
       const res = await fetch('/api/health')
-      if (res.ok) {
-        const data = await res.json()
-        setHealth(data)
+      if (!res.ok) {
+        throw new Error('请求失败')
       }
+      const data = await res.json()
+      setHealth(data)
+      setError(false)
     } catch (e) {
-      console.error('Failed to fetch health')
+      console.error('Failed to fetch health:', e)
+      setError(true)
     }
     setLoading(false)
   }
 
   const getFreshnessStatus = () => {
+    if (error) return { status: 'error', text: '获取失败', color: 'red' }
     if (!health?.last_update) return { status: 'unknown', text: '未知', color: 'gray' }
     const lastUpdate = new Date(health.last_update)
     const now = new Date()
