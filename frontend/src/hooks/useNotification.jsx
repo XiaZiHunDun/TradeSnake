@@ -116,7 +116,9 @@ export function NotificationProvider({ children }) {
     if (savedSettings) {
       try {
         setSettings(JSON.parse(savedSettings))
-      } catch (e) {}
+      } catch (e) {
+      console.error('Failed to load notification settings:', e)
+    }
     }
   }, [])
 
