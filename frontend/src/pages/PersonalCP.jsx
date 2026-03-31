@@ -10,6 +10,7 @@ function PersonalCP() {
   const [showAddForm, setShowAddForm] = useState(false)
   const [editingCode, setEditingCode] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
   const [showInitPrompt, setShowInitPrompt] = useState(false)
   const [alerts, setAlerts] = useState([]) // 战力预警
   const [showAlertForm, setShowAlertForm] = useState(false)
@@ -130,6 +131,7 @@ function PersonalCP() {
     if (holdings.length === 0) return
 
     setLoading(true)
+    setError(null)
     try {
       // 批量获取所有持仓股票
       const codes = holdings.map(h => h.code)
@@ -148,6 +150,7 @@ function PersonalCP() {
       }
     } catch (e) {
       console.error('Failed to load stock data:', e)
+      setError('数据加载失败，请检查网络连接')
     }
     setLoading(false)
   }
@@ -300,6 +303,19 @@ function PersonalCP() {
 
   return (
     <div className="space-y-6">
+      {/* 错误提示 */}
+      {error && (
+        <div className="bg-cp-low/10 border border-cp-low/30 rounded-xl p-4 flex items-center justify-between">
+          <p className="text-cp-low">{error}</p>
+          <button
+            onClick={() => { setError(null); loadStockData() }}
+            className="px-3 py-1 bg-cp-low/20 hover:bg-cp-low/30 text-cp-low rounded-lg transition-colors text-sm"
+          >
+            重试
+          </button>
+        </div>
+      )}
+
       {/* 战力概览 */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* 总战力 */}
