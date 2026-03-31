@@ -129,6 +129,13 @@ class TestRecommendEndpoint:
         data = response.json()
         assert data["category"] == "momentum"
 
+    def test_recommend_invalid_category(self):
+        """测试无效category返回错误"""
+        response = client.get("/api/cp/recommend?category=invalid")
+        assert response.status_code == 400
+        data = response.json()
+        assert "无效的category类型" in data["detail"]
+
 
 class TestHistoryEndpoints:
     """测试历史数据端点"""
