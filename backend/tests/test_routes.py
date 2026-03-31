@@ -78,6 +78,15 @@ class TestCPEndpoints:
         response = client.get("/api/cp/top?limit=201")
         assert response.status_code == 422  # FastAPI validation error
 
+    def test_cp_top_response_structure(self):
+        """测试战力榜响应包含必要字段"""
+        response = client.get("/api/cp/top?limit=10")
+        assert response.status_code == 200
+        data = response.json()
+        assert "total" in data
+        assert "data" in data
+        assert "updated_at" in data
+
     def test_cp_bottom(self):
         """测试获取BOTTOM榜"""
         response = client.get("/api/cp/bottom?limit=5")
@@ -198,6 +207,12 @@ class TestHistoryEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert "days" in data
+
+    def test_history_changes_days_boundary(self):
+        """测试战力变化days参数边界"""
+        # days > 30 should fail validation
+        response = client.get("/api/history/changes?days=31")
+        assert response.status_code == 422
 
     def test_history_rankings_top(self):
         """测试历史TOP10接口"""
