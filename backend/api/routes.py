@@ -5,7 +5,6 @@ API路由 - TradeSnake API Routes
 from fastapi import APIRouter, HTTPException, Query, Request
 from typing import Optional
 from datetime import datetime
-import pandas as pd
 
 from models.schemas import CPListResponse, SingleStockResponse, StockCPData
 from core.cp_engine import CPEngine, create_stock_from_raw
