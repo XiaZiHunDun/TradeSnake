@@ -54,7 +54,11 @@ export function ThemeProvider({ children }) {
       root.classList.remove('dark')
     }
 
-    localStorage.setItem('tradesnake_theme', isDark ? 'dark' : 'light')
+    try {
+      localStorage.setItem('tradesnake_theme', isDark ? 'dark' : 'light')
+    } catch (e) {
+      console.error('Failed to save theme:', e)
+    }
   }, [isDark])
 
   const toggleTheme = () => setIsDark(!isDark)

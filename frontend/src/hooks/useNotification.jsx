@@ -42,8 +42,12 @@ export function NotificationProvider({ children }) {
 
   // 保存通知到localStorage
   useEffect(() => {
-    if (notifications.length > 0) {
-      localStorage.setItem('notifications', JSON.stringify(notifications.slice(0, 100))) // 最多保存100条
+    try {
+      if (notifications.length > 0) {
+        localStorage.setItem('notifications', JSON.stringify(notifications.slice(0, 100))) // 最多保存100条
+      }
+    } catch (e) {
+      console.error('Failed to save notifications:', e)
     }
   }, [notifications])
 
@@ -107,7 +111,11 @@ export function NotificationProvider({ children }) {
   // 更新设置
   const updateSettings = useCallback((newSettings) => {
     setSettings(prev => ({ ...prev, ...newSettings }))
-    localStorage.setItem('notificationSettings', JSON.stringify({ ...settings, ...newSettings }))
+    try {
+      localStorage.setItem('notificationSettings', JSON.stringify({ ...settings, ...newSettings }))
+    } catch (e) {
+      console.error('Failed to save notification settings:', e)
+    }
   }, [settings])
 
   // 加载设置

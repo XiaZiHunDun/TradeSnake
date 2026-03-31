@@ -28,7 +28,11 @@ export function useSettings() {
   })
 
   useEffect(() => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
+    } catch (e) {
+      console.error('Failed to save settings:', e)
+    }
   }, [settings])
 
   const updateSetting = (key, value) => {
