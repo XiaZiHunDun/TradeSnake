@@ -76,13 +76,14 @@ export function SettingsModal({ isOpen, onClose }) {
 
           {/* 战力公式说明 */}
           <div className="p-3 bg-deep-night rounded-lg">
-            <p className="text-white font-medium mb-2">战力公式 (v13)</p>
+            <p className="text-white font-medium mb-2">战力公式 (v14)</p>
             <p className="text-gray-400 text-sm">
-              战力 = 成长分×40% + 价值分×40% + 趋势分×20%
+              战力 = 成长×30% + 价值×25% + 质量×20% + 动量×15% × 风险调整
             </p>
             <p className="text-gray-400 text-sm mt-1">
               成长分 = 净利润增长×0.6 + 营收增长×0.4<br/>
-              价值分 = ROE + PE健康度<br/>
+              价值分 = ROE + PE健康度 + PEG<br/>
+              质量分 = 现金流 + 毛利率 + 负债率<br/>
               趋势分 = 当日涨跌幅
             </p>
           </div>
