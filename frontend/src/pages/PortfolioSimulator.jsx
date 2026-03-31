@@ -78,7 +78,8 @@ function PortfolioSimulator() {
     // 计算当前状态
     const currentCP = stocks.reduce((sum, s) => sum + s.total_cp * s.quantity, 0)
     const currentValue = stocks.reduce((sum, s) => sum + s.price * s.quantity, 0)
-    const avgCP = currentCP / stocks.reduce((sum, s) => sum + s.quantity, 0)
+    const totalQuantity = stocks.reduce((sum, s) => sum + s.quantity, 0)
+    const avgCP = totalQuantity > 0 ? currentCP / totalQuantity : 0
 
     // 模拟：按百分比变化
     const changeAmount = simChange
