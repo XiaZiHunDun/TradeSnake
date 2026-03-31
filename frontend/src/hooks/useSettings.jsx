@@ -138,6 +138,19 @@ export function SettingsModal({ isOpen, onClose }) {
             <RotateCcw className="w-4 h-4" />
             重新观看引导教程
           </button>
+
+          {/* 键盘快捷键说明 */}
+          <div className="p-3 bg-deep-night rounded-lg border border-border-dark">
+            <p className="text-white font-medium mb-2">键盘快捷键</p>
+            <div className="grid grid-cols-2 gap-1 text-xs text-gray-400">
+              <div><kbd className="px-1.5 py-0.5 bg-card-bg rounded">1-7</kbd> 切换页面</div>
+              <div><kbd className="px-1.5 py-0.5 bg-card-bg rounded">R</kbd> 刷新数据</div>
+              <div><kbd className="px-1.5 py-0.5 bg-card-bg rounded">S</kbd> 打开设置</div>
+              <div><kbd className="px-1.5 py-0.5 bg-card-bg rounded">E</kbd> 战法学堂</div>
+              <div><kbd className="px-1.5 py-0.5 bg-card-bg rounded">D</kbd> 数据说明</div>
+              <div><kbd className="px-1.5 py-0.5 bg-card-bg rounded">T</kbd> 切换主题</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
