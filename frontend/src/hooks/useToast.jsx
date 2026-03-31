@@ -37,6 +37,9 @@ export function ToastContainer() {
         setToasts(prev => prev.filter(t => t.id !== id))
       }, 3000)
     }
+    return () => {
+      addToastFn = null
+    }
   }, [])
 
   if (toasts.length === 0) return null
