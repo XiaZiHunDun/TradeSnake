@@ -13,11 +13,15 @@ function SingleStock() {
 
   // 检查快捷搜索
   useEffect(() => {
-    const quickCode = localStorage.getItem('quickSearchCode')
-    if (quickCode) {
-      setCode(quickCode)
-      localStorage.removeItem('quickSearchCode')
-      handleSearch(quickCode)
+    try {
+      const quickCode = localStorage.getItem('quickSearchCode')
+      if (quickCode) {
+        setCode(quickCode)
+        localStorage.removeItem('quickSearchCode')
+        handleSearch(quickCode)
+      }
+    } catch (e) {
+      console.error('Failed to load quick search code:', e)
     }
   }, [])
 

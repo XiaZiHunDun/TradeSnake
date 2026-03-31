@@ -68,7 +68,11 @@ function Header({ onRefresh, currentPage, onNavigate, onOpenSettings, onOpenEduc
     setSearchSuggestions([])
     setShowSuggestions(false)
     // 通过localStorage传递搜索代码
-    localStorage.setItem('quickSearchCode', code)
+    try {
+      localStorage.setItem('quickSearchCode', code)
+    } catch (e) {
+      console.error('Failed to save quick search code:', e)
+    }
   }
 
   const handleKeyPress = (e) => {
@@ -76,7 +80,11 @@ function Header({ onRefresh, currentPage, onNavigate, onOpenSettings, onOpenEduc
       handleQuickSearch(searchSuggestions[0].code)
     } else if (e.key === 'Enter' && quickCode.trim()) {
       onNavigate('search')
-      localStorage.setItem('quickSearchCode', quickCode.trim())
+      try {
+        localStorage.setItem('quickSearchCode', quickCode.trim())
+      } catch (e) {
+        console.error('Failed to save quick search code:', e)
+      }
       setQuickCode('')
       setShowSuggestions(false)
     }

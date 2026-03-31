@@ -50,8 +50,13 @@ export function useTourGuide() {
   const [currentStep, setCurrentStep] = useState(0)
 
   useEffect(() => {
-    const hasDone = localStorage.getItem(STORAGE_KEY)
-    if (!hasDone) {
+    try {
+      const hasDone = localStorage.getItem(STORAGE_KEY)
+      if (!hasDone) {
+        setIsActive(true)
+      }
+    } catch (e) {
+      console.error('Failed to load tour state:', e)
       setIsActive(true)
     }
   }, [])
@@ -62,13 +67,21 @@ export function useTourGuide() {
   }
 
   const resetTour = () => {
-    localStorage.removeItem(STORAGE_KEY)
+    try {
+      localStorage.removeItem(STORAGE_KEY)
+    } catch (e) {
+      console.error('Failed to reset tour state:', e)
+    }
     setIsActive(true)
     setCurrentStep(0)
   }
 
   const skipTour = () => {
-    localStorage.setItem(STORAGE_KEY, 'true')
+    try {
+      localStorage.setItem(STORAGE_KEY, 'true')
+    } catch (e) {
+      console.error('Failed to save tour state:', e)
+    }
     setIsActive(false)
   }
 
