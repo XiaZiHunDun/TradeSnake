@@ -649,9 +649,17 @@ function PersonalCP() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       {data ? (
-                        <span className={`cp-tag ${getCPColor(data.total_cp)}`}>
-                          {data.total_cp.toFixed(1)}
-                        </span>
+                        <div className="flex items-center justify-end gap-2">
+                          <span className={`cp-tag ${getCPColor(data.total_cp)}`}>
+                            {data.total_cp.toFixed(1)}
+                          </span>
+                          {data.data_quality && (
+                            <span className={`w-2 h-2 rounded-full ${
+                              data.data_quality === 'high' ? 'bg-green-400' :
+                              data.data_quality === 'medium' ? 'bg-yellow-400' : 'bg-gray-500'
+                            }`} title={`数据质量: ${data.data_quality === 'high' ? '高' : data.data_quality === 'medium' ? '中' : '低'}`} />
+                          )}
+                        </div>
                       ) : (
                         <span className="text-gray-500">-</span>
                       )}
