@@ -20,7 +20,8 @@ export function useSettings() {
     try {
       const saved = localStorage.getItem(SETTINGS_KEY)
       return saved ? { ...defaultSettings, ...JSON.parse(saved) } : defaultSettings
-    } catch {
+    } catch (e) {
+      console.error('Failed to load settings:', e)
       return defaultSettings
     }
   })
