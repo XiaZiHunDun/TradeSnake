@@ -28,6 +28,7 @@ function SingleStock() {
         indicator: [
           { name: '成长分', max: 100 },
           { name: '价值分', max: 100 },
+          { name: '质量分', max: 100 },
           { name: '趋势分', max: 100 },
         ],
         radius: '60%',
@@ -48,7 +49,7 @@ function SingleStock() {
       series: [{
         type: 'radar',
         data: [{
-          value: [stock.growth_score, stock.value_score, stock.momentum_score],
+          value: [stock.growth_score, stock.value_score, stock.quality_score || 0, stock.momentum_score],
           name: '战力分布',
           areaStyle: {
             color: 'rgba(59, 130, 246, 0.3)'
@@ -148,12 +149,13 @@ function SingleStock() {
     const cpData = history.map(h => h.total_cp)
     const growthData = history.map(h => h.growth_score)
     const valueData = history.map(h => h.value_score)
+    const qualityData = history.map(h => h.quality_score || 0)
     const momentumData = history.map(h => h.momentum_score)
 
     return {
       tooltip: { trigger: 'axis' },
       legend: {
-        data: ['总战力', '成长分', '价值分', '趋势分'],
+        data: ['总战力', '成长分', '价值分', '质量分', '趋势分'],
         textStyle: { color: '#9ca3af' }
       },
       grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
@@ -173,6 +175,7 @@ function SingleStock() {
         { name: '总战力', type: 'line', data: cpData, smooth: true, lineStyle: { color: '#3b82f6', width: 3 }, itemStyle: { color: '#3b82f6' } },
         { name: '成长分', type: 'line', data: growthData, smooth: true, lineStyle: { color: '#22c55e', width: 2 }, itemStyle: { color: '#22c55e' } },
         { name: '价值分', type: 'line', data: valueData, smooth: true, lineStyle: { color: '#eab308', width: 2 }, itemStyle: { color: '#eab308' } },
+        { name: '质量分', type: 'line', data: qualityData, smooth: true, lineStyle: { color: '#a855f7', width: 2 }, itemStyle: { color: '#a855f7' } },
         { name: '趋势分', type: 'line', data: momentumData, smooth: true, lineStyle: { color: '#ef4444', width: 2 }, itemStyle: { color: '#ef4444' } }
       ]
     }
@@ -317,6 +320,16 @@ function SingleStock() {
                   </div>
                   <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
                     <div className="h-full bg-cp-mid rounded-full" style={{ width: `${stock.value_score}%` }} />
+                  </div>
+                </div>
+
+                <div className="bg-deep-night rounded-lg p-4">
+                  <div className="flex justify-between mb-1">
+                    <p className="text-gray-400 text-sm">质量分</p>
+                    <p className="text-purple-400 font-bold">{(stock.quality_score || 0).toFixed(1)}</p>
+                  </div>
+                  <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+                    <div className="h-full bg-purple-500 rounded-full" style={{ width: `${stock.quality_score || 0}%` }} />
                   </div>
                 </div>
 
