@@ -1,4 +1,5 @@
 // 本地数据缓存管理
+import { useState, useEffect } from 'react'
 
 const CACHE_PREFIX = 'tradesnake_cache_'
 const DEFAULT_TTL = 5 * 60 * 1000 // 5分钟
@@ -178,5 +179,3 @@ export function useLocalCache(key, fetcher, ttl = DEFAULT_TTL) {
 
   return { data, loading, error, refresh }
 }
-
-import { useState, useEffect } from 'react'
