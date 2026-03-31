@@ -225,6 +225,9 @@ async def get_single_stock(code: str):
     """获取单只股票战力数据"""
     global last_update_time
 
+    # 标准化股票代码格式
+    code = code.upper().strip()
+
     # 先检查缓存中是否有
     cached = cp_engine.get_by_code(code)
     if cached:
