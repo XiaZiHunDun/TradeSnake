@@ -91,7 +91,7 @@ npm run dev
 - `POST /api/refresh?limit=200` - 手动刷新数据（限流: 5次/分钟）
 
 ### 推荐API
-- `GET /api/cp/recommend?category=value|growth|momentum` - 获取推荐股票
+- `GET /api/cp/recommend?category=value|growth|momentum|quality|allround` - 获取推荐股票
 
 ### 统计API
 - `GET /api/stats/market` - 市场统计（含风险统计）
@@ -118,7 +118,10 @@ npm run dev
 | 6 | 榜单变化 |
 | 7 | 行业分析 |
 | R | 刷新数据 |
+| S | 打开设置 |
 | T | 切换主题 |
+| E | 打开战法学堂 |
+| D | 打开数据说明 |
 | ESC | 关闭弹窗 |
 
 ## 项目结构
