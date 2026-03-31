@@ -7,7 +7,7 @@ from datetime import datetime
 
 from models.schemas import CPListResponse, SingleStockResponse, StockCPData
 from core.cp_engine import CPEngine, create_stock_from_raw
-from core.history import save_history, load_history, get_cp_changes, get_stock_history, get_historical_rankings, get_ranking_changes
+from core.history import save_history, get_cp_changes, get_stock_history, get_historical_rankings, get_ranking_changes
 from data.fetcher import get_stock_data_api, get_single_stock_data
 from api.limits import limiter
 
