@@ -177,6 +177,18 @@ class TestBatchStocksEndpoint:
         )
         assert response.status_code == 200
 
+    def test_batch_stocks_exceed_limit(self):
+        """测试批量获取超过限制时应返回错误"""
+        # 创建超过50个股票代码的列表
+        large_batch = [f"60{i:04d}" for i in range(1, 101)]
+        response = client.post(
+            "/api/stocks/batch",
+            json=large_batch
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert "批量数量不能超过" in data["detail"]
+
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
