@@ -7,7 +7,8 @@ export function loadWatchlist() {
   try {
     const data = localStorage.getItem(STORAGE_KEY)
     return data ? JSON.parse(data) : []
-  } catch {
+  } catch (e) {
+    console.error('Failed to load watchlist:', e)
     return []
   }
 }
