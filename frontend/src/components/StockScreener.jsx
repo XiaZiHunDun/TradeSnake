@@ -29,6 +29,7 @@ function StockScreener({ data, onFilter }) {
     })
     return init
   })
+  const [dataQualityFilter, setDataQualityFilter] = useState(['high', 'medium', 'low'])
   const [priceRange, setPriceRange] = useState([0, 1000]) // 特殊处理
 
   // 当前激活的筛选条件
@@ -40,8 +41,10 @@ function StockScreener({ data, onFilter }) {
         count++
       }
     })
+    // 数据质量筛选
+    if (dataQualityFilter.length < 3) count++
     return count
-  }, [criteria])
+  }, [criteria, dataQualityFilter])
 
   const handleCriteriaChange = (key, index, value) => {
     const newCriteria = { ...criteria }
@@ -85,6 +88,9 @@ function StockScreener({ data, onFilter }) {
       if (stock.change_pct < criteria.changePct[0] || stock.change_pct > criteria.changePct[1]) return false
       // 价格
       if (stock.price < criteria.price[0] || stock.price > criteria.price[1]) return false
+      // 数据质量
+      const stockDQ = stock.data_quality || 'low'
+      if (!dataQualityFilter.includes(stockDQ)) return false
 
       return true
     })
@@ -106,6 +112,8 @@ function StockScreener({ data, onFilter }) {
       if (stock.revenue_growth < criteria.revenueGrowth[0] || stock.revenue_growth > criteria.revenueGrowth[1]) return false
       if (stock.change_pct < criteria.changePct[0] || stock.change_pct > criteria.changePct[1]) return false
       if (stock.price < criteria.price[0] || stock.price > criteria.price[1]) return false
+      const stockDQ = stock.data_quality || 'low'
+      if (!dataQualityFilter.includes(stockDQ)) return false
       return true
     })
   }
@@ -433,6 +441,39 @@ function StockScreener({ data, onFilter }) {
                       onChange={(e) => handleCriteriaChange('price', 1, e.target.value)}
                       className="flex-1 accent-teal-500"
                     />
+                  </div>
+                </div>
+
+                {/* 数据质量 */}
+                <div className="bg-deep-night rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-white font-medium">数据质量</span>
+                    <span className="text-xs text-gray-400">
+                      {dataQualityFilter.length === 3 ? '全部' : dataQualityFilter.join(', ')}
+                    </span>
+                  </div>
+                  <div className="flex gap-4">
+                    {[
+                      { key: 'high', label: '高', color: 'green' },
+                      { key: 'medium', label: '中', color: 'yellow' },
+                      { key: 'low', label: '低', color: 'gray' }
+                    ].map(item => (
+                      <label key={item.key} className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={dataQualityFilter.includes(item.key)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setDataQualityFilter([...dataQualityFilter, item.key])
+                            } else {
+                              setDataQualityFilter(dataQualityFilter.filter(k => k !== item.key))
+                            }
+                          }}
+                          className={`w-4 h-4 rounded border-gray-500 text-${item.color}-500 focus:ring-${item.color}-500`}
+                        />
+                        <span className={`text-sm text-${item.color}-400`}>{item.label}</span>
+                      </label>
+                    ))}
                   </div>
                 </div>
               </div>
