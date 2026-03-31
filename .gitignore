@@ -20,7 +20,7 @@ venv/
 .venv/
 
 # Data files (generated at runtime)
-data/cp_history.json
+data/
 *.csv
 
 # Demo/development files
