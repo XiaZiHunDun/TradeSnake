@@ -299,20 +299,28 @@ async def get_single_stock(code: str):
         # 获取当前引擎中的数据范围
         df = cp_engine.to_dataframe()
 
-        # 计算百分位
+        # 计算百分位（基于v14公式权重）
+        # 成长30% + 价值25% + 质量20% + 动量15% + 风险调整10%
         growth_pct = (df['growth_score'] < stock.growth_score).sum() / len(df) * 100
         value_pct = (df['value_score'] < stock.value_score).sum() / len(df) * 100
+        quality_pct = (df['quality_score'] < stock.quality_score).sum() / len(df) * 100
         momentum_pct = (df['momentum_score'] < stock.momentum_score).sum() / len(df) * 100
 
         stock.growth_score = growth_pct
         stock.value_score = value_pct
+        stock.quality_score = quality_pct
         stock.momentum_score = momentum_pct
 
-        stock.total_cp = (
-            growth_pct * 0.40 +
-            value_pct * 0.30 +
-            momentum_pct * 0.30
+        # 基础战力
+        base_cp = (
+            growth_pct * 0.30 +
+            value_pct * 0.25 +
+            quality_pct * 0.20 +
+            momentum_pct * 0.15
         )
+        # 风险调整
+        risk_factor = 1 - (stock.risk_score / 100) * 0.10
+        stock.total_cp = max(0, base_cp * risk_factor)
 
     return SingleStockResponse(
         code=stock.code,
@@ -628,16 +636,22 @@ async def get_batch_stocks(codes: list[str]):
                 data_quality=stock_data.get('data_quality', 'low')
             )
 
-            # 计算百分位
+            # 计算百分位（基于v14公式权重）
             if cp_engine.stocks:
                 df = cp_engine.to_dataframe()
                 growth_pct = (df['growth_score'] < stock.growth_score).sum() / len(df) * 100
                 value_pct = (df['value_score'] < stock.value_score).sum() / len(df) * 100
+                quality_pct = (df['quality_score'] < stock.quality_score).sum() / len(df) * 100
                 momentum_pct = (df['momentum_score'] < stock.momentum_score).sum() / len(df) * 100
                 stock.growth_score = growth_pct
                 stock.value_score = value_pct
+                stock.quality_score = quality_pct
                 stock.momentum_score = momentum_pct
-                stock.total_cp = growth_pct * 0.40 + value_pct * 0.40 + momentum_pct * 0.20
+                # 基础战力
+                base_cp = growth_pct * 0.30 + value_pct * 0.25 + quality_pct * 0.20 + momentum_pct * 0.15
+                # 风险调整
+                risk_factor = 1 - (stock.risk_score / 100) * 0.10
+                stock.total_cp = max(0, base_cp * risk_factor)
 
             result.append(SingleStockResponse(
                 code=stock.code,
