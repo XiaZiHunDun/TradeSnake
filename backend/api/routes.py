@@ -400,19 +400,36 @@ async def get_recommended_stocks(category: str = Query(default="value", descript
             data_quality=s.data_quality
         ))
 
-    # 按类型筛选
+    # 按类型筛选（使用v14公式权重计算综合战力）
+    def calc_v14_score(s):
+        """计算v14综合战力"""
+        return (
+            (s.growth_score or 0) * 0.30 +
+            (s.value_score or 0) * 0.25 +
+            (s.quality_score or 0) * 0.20 +
+            (s.momentum_score or 0) * 0.15
+        )
+
     if category == "value":
-        # 价值型：高ROE + 低PE + 正增长
+        # 价值型：高ROE + 低PE + 正增长（附加质量分过滤）
         filtered = [s for s in data if s.roe > 10 and s.pe > 0 and s.pe < 30 and s.net_profit_growth > 0]
-        filtered.sort(key=lambda x: x.value_score, reverse=True)
+        filtered.sort(key=lambda x: x.value_score * 0.6 + (x.quality_score or 0) * 0.4, reverse=True)
     elif category == "growth":
-        # 成长型：高增长 + 中等ROE
+        # 成长型：高增长 + 中等ROE（附加质量分过滤）
         filtered = [s for s in data if s.net_profit_growth > 20 and s.revenue_growth > 10 and s.roe > 0]
-        filtered.sort(key=lambda x: x.growth_score, reverse=True)
+        filtered.sort(key=lambda x: x.growth_score * 0.6 + (x.quality_score or 0) * 0.4, reverse=True)
     elif category == "momentum":
-        # 趋势型：高动量 + 正增长
+        # 趋势型：高动量 + 正增长（附加质量分过滤）
         filtered = [s for s in data if s.change_pct > 2 and s.net_profit_growth > 0]
-        filtered.sort(key=lambda x: x.momentum_score, reverse=True)
+        filtered.sort(key=lambda x: x.momentum_score * 0.6 + (x.quality_score or 0) * 0.4, reverse=True)
+    elif category == "quality":
+        # 质量型：高现金流 + 高毛利 + 低负债
+        filtered = [s for s in data if (s.cashflow or 0) > 0 and (s.gross_margin or 0) > 15]
+        filtered.sort(key=lambda x: (x.quality_score or 0), reverse=True)
+    elif category == "allround":
+        # 综合型：使用v14公式计算综合战力
+        filtered = [s for s in data if s.total_cp > 0]
+        filtered.sort(key=lambda x: calc_v14_score(x), reverse=True)
     else:
         filtered = data[:20]
 
