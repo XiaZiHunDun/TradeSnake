@@ -8,11 +8,14 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
-# 战力公式权重
+# 战力公式权重 v14（赚钱版）
+# 成长(30%) + 价值(25%) + 质量(20%) + 动量(15%) + 风险调整(10%)
 WEIGHTS = {
-    'growth': 0.40,
-    'value': 0.40,
-    'momentum': 0.20
+    'growth': 0.30,
+    'value': 0.25,
+    'quality': 0.20,
+    'momentum': 0.15,
+    'risk_penalty': 0.10  # 风险惩罚因子
 }
 
 
@@ -41,10 +44,12 @@ class StockCP:
     growth_score: float = 0
     value_score: float = 0
     momentum_score: float = 0
+    quality_score: float = 0  # 质量因子：现金流+毛利率
     total_cp: float = 0
 
     # 风险评估
     risk_score: float = 0  # 风险分数（0-100，越高风险越大）
+    peg: float = 0  # PEG估值
 
     def __post_init__(self):
         self.calculate_scores()
@@ -52,11 +57,13 @@ class StockCP:
     def calculate_scores(self):
         """计算各因子原始分
 
-        公式v13（微调版）：
-        - 成长分：净利润增长和营收增长分别限制在合理范围后加权
-        - 价值分：ROE + PE健康度综合评分
+        公式v14（赚钱版）：
+        - 成长分：净利润增长和营收增长
+        - 价值分：ROE + PE健康度 + PEG综合评分
         - 趋势分：当日涨跌幅
+        - 质量分：现金流质量 + 毛利率
         """
+        # ========== 成长分 ==========
         # 净利润增长：限制在0-300%
         net_g = max(0, min(300, self.net_profit_growth))
         # 营收增长：限制在-50%到100%
@@ -64,20 +71,97 @@ class StockCP:
         # 复合增长率
         self.growth_score = net_g * 0.6 + rev_g * 0.4
 
-        # 价值分：ROE（负ROE当0，ROE>25截断）+ PE健康度加成
-        base_value = min(max(0, self.roe), 25)
-        # PE健康度：PE在10-30之间得满分，其他情况递减
-        pe_penalty = 0
-        if self.pe > 0:
-            if self.pe < 10:
-                pe_penalty = 5  # 低PE加成
-            elif self.pe > 50:
-                pe_penalty = -5  # 高PE惩罚
-            elif self.pe > 100:
-                pe_penalty = -10  # 极高PE大惩罚
-        self.value_score = max(0, base_value + pe_penalty)
+        # ========== 价值分（增强版）============
+        # 基础ROE评分（负ROE当0，ROE>25截断）
+        base_roe = min(max(0, self.roe), 25)
 
-        # 趋势分：当日涨跌幅（限制在-10到10之间）
+        # PE健康度评分
+        pe_score = 0
+        if self.pe > 0:
+            if 5 <= self.pe <= 20:
+                pe_score = 10  # 合理PE区间
+            elif self.pe < 5:
+                pe_score = 5   # 低PE可能有问题
+            elif 20 < self.pe <= 30:
+                pe_score = 7
+            elif 30 < self.pe <= 50:
+                pe_score = 3
+            elif self.pe > 50:
+                pe_score = -5
+            elif self.pe > 100:
+                pe_score = -10
+
+        # PEG估值（PE/Growth，越低越好）
+        peg_bonus = 0
+        self.peg = 0
+        if self.pe > 0 and self.net_profit_growth > 0:
+            self.peg = self.pe / self.net_profit_growth
+            # PEG < 1 优质，> 2 高估
+            if self.peg <= 0.5:
+                peg_bonus = 8
+            elif self.peg <= 1:
+                peg_bonus = 5
+            elif self.peg <= 2:
+                peg_bonus = 0
+            else:
+                peg_bonus = -5
+        elif self.net_profit_growth < 0:
+            peg_bonus = -3  # 负增长惩罚
+
+        # PB市净率评分（银行/周期股参考）
+        pb_score = 0
+        if self.pb > 0:
+            if self.pb <= 1:
+                pb_score = 8  # 破净或低PB
+            elif self.pb <= 3:
+                pb_score = 5
+            elif self.pb <= 5:
+                pb_score = 2
+            elif self.pb > 10:
+                pb_score = -3
+
+        self.value_score = max(0, base_roe + pe_score + peg_bonus + pb_score * 0.3)
+
+        # ========== 质量分（新增：现金流+毛利率）============
+        cf_score = 0
+        if self.cashflow > 0 and self.roe > 0:
+            # 现金流/ROE比例合理表示盈利质量高
+            cf_ratio = self.cashflow / (self.roe * 10 + 1)
+            if 0.5 <= cf_ratio <= 3:
+                cf_score = 15
+            elif cf_ratio > 3:
+                cf_score = 10
+            else:
+                cf_score = 5
+        elif self.cashflow <= 0 and self.roe > 0:
+            cf_score = -5  # 有利润无现金流，问题
+
+        # 毛利率评分（反映护城河）
+        gm_score = 0
+        if self.gross_margin > 30:
+            gm_score = 10  # 高毛利=护城河
+        elif self.gross_margin > 15:
+            gm_score = 6
+        elif self.gross_margin > 0:
+            gm_score = 3
+        elif self.gross_margin < 0:
+            gm_score = -5  # 负毛利
+
+        # 资产负债率风险
+        debt_score = 0
+        if self.debt_ratio > 80:
+            debt_score = -8  # 高负债风险
+        elif self.debt_ratio > 60:
+            debt_score = -4
+        elif self.debt_ratio > 50:
+            debt_score = 0
+        else:
+            debt_score = 3  # 低负债=稳健
+
+        self.quality_score = max(0, cf_score + gm_score + debt_score)
+
+        # ========== 趋势分 ==========
+        # 当日涨跌幅（限制在-10到10之间）
         self.momentum_score = max(-10, min(10, self.change_pct))
 
         # 计算风险分数
@@ -143,9 +227,11 @@ class StockCP:
             'growth_score': self.growth_score,
             'value_score': self.value_score,
             'momentum_score': self.momentum_score,
+            'quality_score': self.quality_score,
             'total_cp': self.total_cp,
             'risk_score': self.risk_score,
             'risk_level': self.get_risk_level(),
+            'peg': self.peg,
             'pb': self.pb,
             'gross_margin': self.gross_margin,
             'revenue': self.revenue,
@@ -165,7 +251,7 @@ class CPEngine:
         self.stocks.append(stock)
 
     def calculate_all(self) -> List[StockCP]:
-        """计算所有股票的总战力"""
+        """计算所有股票的总战力（v14赚钱版）"""
         if not self.stocks:
             return []
 
@@ -185,24 +271,39 @@ class CPEngine:
         min_momentum = min(momentum_values)
         momentum_range = max_momentum - min_momentum or 1
 
+        quality_values = [s.quality_score for s in self.stocks]
+        max_quality = max(quality_values) if quality_values else 1
+        min_quality = min(quality_values) if quality_values else 0
+        quality_range = max_quality - min_quality or 1
+
         # 归一化各因子到0-100范围，然后计算总战力
         for stock in self.stocks:
             # 归一化到0-100
             norm_growth = ((stock.growth_score - min_growth) / growth_range) * 100
             norm_value = ((stock.value_score - min_value) / value_range) * 100
             norm_momentum = ((stock.momentum_score - min_momentum) / momentum_range) * 100
+            norm_quality = ((stock.quality_score - min_quality) / quality_range) * 100
 
             # 更新显示用分数（归一化后的0-100分数）
             stock.growth_score = norm_growth
             stock.value_score = norm_value
             stock.momentum_score = norm_momentum
+            stock.quality_score = norm_quality
 
-            # 计算总战力
-            stock.total_cp = (
+            # 计算总战力（风险调整后）
+            # 基础战力
+            base_cp = (
                 norm_growth * WEIGHTS['growth'] +
                 norm_value * WEIGHTS['value'] +
+                norm_quality * WEIGHTS['quality'] +
                 norm_momentum * WEIGHTS['momentum']
             )
+
+            # 风险调整因子：低风险股票加权更高
+            risk_factor = 1 - (stock.risk_score / 100) * WEIGHTS['risk_penalty']
+
+            # 最终战力 = 基础战力 × 风险调整因子
+            stock.total_cp = max(0, base_cp * risk_factor)
 
         return self.stocks
 

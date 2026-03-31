@@ -20,10 +20,12 @@ class StockCPData(BaseModel):
     growth_score: float
     value_score: float
     momentum_score: float
+    quality_score: float = 0
     total_cp: float
     risk_score: float = 0
     risk_level: str = '较低'
     # 扩展字段
+    peg: float = 0  # PEG估值
     pb: float = 0  # 市净率
     gross_margin: float = 0  # 毛利率
     revenue: float = 0  # 主营收入(亿)
@@ -51,10 +53,12 @@ class SingleStockResponse(BaseModel):
     growth_score: float
     value_score: float
     momentum_score: float
+    quality_score: float = 0
     total_cp: float
     risk_score: float = 0
     risk_level: str = '较低'
     # 扩展字段
+    peg: float = 0  # PEG估值
     pb: float = 0  # 市净率
     gross_margin: float = 0  # 毛利率
     revenue: float = 0  # 主营收入(亿)
