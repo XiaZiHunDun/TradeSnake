@@ -50,16 +50,26 @@ function PersonalCP() {
   const getRebalanceSuggestions = () => {
     if (holdings.length === 0 || topStocks.length === 0) return { swapOut: [], swapIn: [], assessment: null }
 
-    // 持仓中战力最低的股票
+    // 持仓中战力最低的股票（考虑数据质量）
     const holdingCPs = holdings.map(h => ({
       ...h,
       cp: stockData[h.code]?.total_cp || 0,
+      cpData: stockData[h.code],
       score: stockData[h.code] ? stockData[h.code].total_cp * h.quantity : 0
     })).sort((a, b) => a.cp - b.cp)
 
-    // 市场TOP股票（不在持仓中）
+    // 市场TOP股票（不在持仓中，数据质量高优先）
     const holdingCodes = new Set(holdings.map(h => h.code))
-    const availableTopStocks = topStocks.filter(s => !holdingCodes.has(s.code) && s.total_cp >= 50)
+    const availableTopStocks = topStocks
+      .filter(s => !holdingCodes.has(s.code) && s.total_cp >= 50)
+      .sort((a, b) => {
+        // 战力相同时，高数据质量的优先
+        if (b.total_cp === a.total_cp) {
+          const qualityOrder = { high: 0, medium: 1, low: 2 }
+          return (qualityOrder[a.data_quality] || 2) - (qualityOrder[b.data_quality] || 2)
+        }
+        return b.total_cp - a.total_cp
+      })
 
     // 找出可以替换的组合
     const suggestions = { swapOut: [], swapIn: [], assessment: null }
@@ -89,20 +99,25 @@ function PersonalCP() {
       }
     }
 
-    // 找出最弱的持仓股和最强的外来股
+    // 找出最弱的持仓股和最强的外来股（最多3个组合）
     if (holdingCPs.length > 0 && availableTopStocks.length > 0) {
-      const weakest = holdingCPs[0]
-      const strongest = availableTopStocks[0]
+      const maxSwaps = Math.min(3, holdingCPs.length, availableTopStocks.length)
+      for (let i = 0; i < maxSwaps; i++) {
+        const weakest = holdingCPs[i]
+        const strongest = availableTopStocks[i]
+        const cpDiff = strongest.total_cp - weakest.cp
 
-      if (weakest.cp < strongest.total_cp - 10) {
-        suggestions.swapOut.push({
-          ...weakest,
-          reason: `战力${weakest.cp.toFixed(1)}偏低，可替换为战力${strongest.total_cp.toFixed(1)}的${strongest.name}`
-        })
-        suggestions.swapIn.push({
-          ...strongest,
-          reason: `战力${strongest.total_cp.toFixed(1)}，高于被替换股票${(strongest.total_cp - weakest.cp).toFixed(1)}点`
-        })
+        // 只显示战力差大于5的建议
+        if (cpDiff > 5) {
+          suggestions.swapOut.push({
+            ...weakest,
+            reason: `战力${weakest.cp.toFixed(1)}${weakest.cpData?.data_quality === 'low' ? '(数据低)' : ''}，可替换为战力${strongest.total_cp.toFixed(1)}的${strongest.name}${strongest.data_quality === 'high' ? '(数据高)' : ''}`
+          })
+          suggestions.swapIn.push({
+            ...strongest,
+            reason: `战力${strongest.total_cp.toFixed(1)}，高于被替换${cpDiff.toFixed(1)}点${strongest.data_quality === 'high' ? '，数据质量高' : ''}`
+          })
+        }
       }
     }
 
@@ -354,31 +369,55 @@ function PersonalCP() {
           </p>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* 建议卖出 */}
+            {/* 建议替换组合 */}
             {rebalanceSuggestions.swapOut.length > 0 && (
               <div className="bg-deep-night rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-3">
                   <TrendingDown className="w-4 h-4 text-red-500" />
-                  <span className="text-sm font-medium text-white">建议替换</span>
+                  <span className="text-sm font-medium text-white">建议替换方案</span>
                 </div>
-                {rebalanceSuggestions.swapOut.map((stock, idx) => (
-                  <div key={idx} className="flex items-center justify-between">
-                    <div>
-                      <p className="text-white text-sm font-medium">{stock.name || stock.code}</p>
-                      <p className="text-xs text-gray-500">{stock.code} · 战力 {stock.cp.toFixed(1)}</p>
-                    </div>
-                    <ArrowRightLeft className="w-4 h-4 text-gray-500" />
-                  </div>
-                ))}
-                {rebalanceSuggestions.swapIn.map((stock, idx) => (
-                  <div key={idx} className="flex items-center justify-between mt-2">
-                    <div>
-                      <p className="text-green-500 text-sm font-medium">{stock.name}</p>
-                      <p className="text-xs text-gray-500">{stock.code} · 战力 {stock.total_cp.toFixed(1)}</p>
-                    </div>
-                    <span className="text-xs text-green-500">+{(stock.total_cp - rebalanceSuggestions.swapOut[0]?.cp).toFixed(1)}</span>
-                  </div>
-                ))}
+                <div className="space-y-3">
+                  {rebalanceSuggestions.swapOut.map((swapOut, idx) => {
+                    const swapIn = rebalanceSuggestions.swapIn[idx]
+                    const cpDiff = swapIn ? (swapIn.total_cp - swapOut.cp).toFixed(1) : 0
+                    return (
+                      <div key={idx} className="flex items-center justify-between p-2 bg-card-bg rounded-lg">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <div className="text-red-400 text-xs">卖出</div>
+                          <div className="min-w-0">
+                            <p className="text-white text-sm font-medium truncate">{swapOut.name || swapOut.code}</p>
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs text-gray-500">CP {swapOut.cp.toFixed(1)}</span>
+                              {swapOut.cpData?.data_quality && (
+                                <span className={`w-1.5 h-1.5 rounded-full ${
+                                  swapOut.cpData.data_quality === 'high' ? 'bg-green-400' :
+                                  swapOut.cpData.data_quality === 'medium' ? 'bg-yellow-400' : 'bg-gray-500'
+                                }`} />
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <ArrowRightLeft className="w-4 h-4 text-gray-500 mx-2 flex-shrink-0" />
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <div className="text-green-400 text-xs">买入</div>
+                          <div className="min-w-0">
+                            <p className="text-green-400 text-sm font-medium truncate">{swapIn?.name}</p>
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs text-gray-500">CP {swapIn?.total_cp.toFixed(1)}</span>
+                              {swapIn?.data_quality && (
+                                <span className={`w-1.5 h-1.5 rounded-full ${
+                                  swapIn.data_quality === 'high' ? 'bg-green-400' :
+                                  swapIn.data_quality === 'medium' ? 'bg-yellow-400' : 'bg-gray-500'
+                                }`} />
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-xs text-green-500 ml-2">+{cpDiff}</span>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )}
 
