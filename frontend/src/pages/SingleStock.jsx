@@ -100,7 +100,9 @@ function SingleStock() {
           const historyData = await historyRes.json()
           setHistory(historyData.data || [])
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error('Failed to fetch stock history:', e)
+      }
     } catch (e) {
       setError(e.message)
     }

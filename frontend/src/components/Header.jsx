@@ -33,7 +33,9 @@ function Header({ onRefresh, currentPage, onNavigate, onOpenSettings, onOpenEduc
             .slice(0, 5)
           setSearchSuggestions(filtered)
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error('Failed to fetch search suggestions:', e)
+      }
     }
 
     const debounce = setTimeout(fetchSuggestions, 150)
@@ -52,7 +54,9 @@ function Header({ onRefresh, currentPage, onNavigate, onOpenSettings, onOpenEduc
             handleRefresh()
           }
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error('Failed to check data freshness:', e)
+      }
     }
     checkFreshness()
   }, [])
