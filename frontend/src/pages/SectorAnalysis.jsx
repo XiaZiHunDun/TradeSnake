@@ -19,13 +19,19 @@ function SectorAnalysis() {
     try {
       // 获取所有股票数据
       const res = await fetch('/api/cp/top?limit=200')
-      if (res.ok) {
-        const json = await res.json()
+      if (!res.ok) {
+        throw new Error('请求失败')
+      }
+      const json = await res.json()
+      if (json.error) {
+        setError(json.error)
+        setSectorData([])
+      } else {
         processSectorData(json.data || [])
       }
     } catch (e) {
       console.error('Failed to fetch data:', e)
-      setError('数据加载失败，请检查网络连接')
+      setError(e.message || '数据加载失败，请检查网络连接')
     }
     setLoading(false)
   }

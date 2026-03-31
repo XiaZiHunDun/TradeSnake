@@ -248,6 +248,11 @@ function CPTopList() {
         fetch('/api/cp/top?limit=200'),
         fetch('/api/health')
       ])
+
+      if (!topRes.ok) {
+        throw new Error('请求失败')
+      }
+
       const json = await topRes.json()
 
       // 检查API返回的错误
@@ -269,7 +274,7 @@ function CPTopList() {
       }
     } catch (e) {
       console.error('Failed to fetch data:', e)
-      setError('数据加载失败，请检查网络连接')
+      setError(e.message || '数据加载失败，请检查网络连接')
     }
     setLoading(false)
   }
