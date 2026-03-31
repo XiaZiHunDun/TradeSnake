@@ -453,19 +453,35 @@ class FinancialDataFetcher:
         return None
 
     def _fetch_backup(self, symbol: str, market: str) -> Optional[Dict]:
-        """从备用源获取财务数据（简化版，主要返回关键指标）"""
+        """从备用源获取财务数据（使用akshare）"""
         try:
             # 使用akshare获取财务数据作为备用
-            # 注意：akshare的财务接口可能有限制
-            # 这里简化为返回估算值
+            try:
+                df = ak.stock_financial_analysis_indicator(symbol=symbol)
+                if df is not None and len(df) > 0:
+                    latest = df.iloc[-1]
+                    return {
+                        'roe': round(float(latest.get('加权平均净资产收益率', 0) or 0), 2),
+                        'net_profit_growth': round(float(latest.get('净利润增长率', 0) or 0), 2),
+                        'revenue_growth': round(float(latest.get('主营业务收入增长率', 0) or 0), 2),
+                        'gross_margin': round(float(latest.get('销售毛利率', 0) or 0), 2),
+                        'revenue': 0, 'cashflow': 0, 'debt_ratio': 0,
+                        'dividend_yield': 0,
+                        'data_quality': 'medium',
+                        'source': 'akshare'
+                    }
+            except Exception as e:
+                print(f"  akshare获取财务数据失败 {symbol}: {e}")
+
+            # 如果akshare也失败，返回估算值
             return {
                 'roe': 0, 'net_profit_growth': 0, 'revenue_growth': 0,
                 'gross_margin': 0, 'revenue': 0, 'cashflow': 0, 'debt_ratio': 0,
                 'dividend_yield': 0,
-                'data_quality': 'medium',  # 备用源质量标记
+                'data_quality': 'low',  # 备用源质量标记
                 'source': 'backup'
             }
-        except:
+        except Exception:
             return None
 
 
