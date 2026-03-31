@@ -217,7 +217,7 @@ class MarketDataFetcher:
             except Exception as e:
                 last_error = e
                 if attempt < MAX_RETRIES - 1:
-                    time.sleep(RETRY_DELAY * (attempt + 1))
+                    time.sleep(RETRY_DELAY * (2 ** attempt))
                     print(f"  腾讯API重试 {attempt + 2}/{MAX_RETRIES}: {e}")
 
         print(f"  腾讯API获取失败: {last_error}")
@@ -252,7 +252,7 @@ class MarketDataFetcher:
             except Exception as e:
                 last_error = e
                 if attempt < MAX_RETRIES - 1:
-                    time.sleep(RETRY_DELAY * (attempt + 1))
+                    time.sleep(RETRY_DELAY * (2 ** attempt))
                     print(f"  新浪API重试 {attempt + 2}/{MAX_RETRIES}: {e}")
 
         print(f"  新浪API获取失败: {last_error}")
@@ -447,7 +447,7 @@ class FinancialDataFetcher:
             except Exception as e:
                 last_error = e
                 if attempt < MAX_RETRIES - 1:
-                    time.sleep(RETRY_DELAY * (attempt + 1))
+                    time.sleep(RETRY_DELAY * (2 ** attempt))
                     print(f"  东方财富API重试 {attempt + 2}/{MAX_RETRIES} ({symbol}): {e}")
 
         print(f"  东方财富财务API失败 {symbol}: {last_error}")
