@@ -10,15 +10,22 @@ build/
 __pycache__/
 *.py[cod]
 *$py.class
-.Python
 *.so
-.Python
+*.egg-info/
+*.egg
+
+# Virtual environments
 env/
 venv/
 .venv/
-*.egg-info/
-dist/
-build/
+
+# Data files (generated at runtime)
+data/cp_history.json
+*.csv
+
+# Demo/development files
+demo_*.py
+cp_ranking_*.csv
 
 # IDE
 .idea/
