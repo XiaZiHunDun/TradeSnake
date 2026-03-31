@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, Edit2, Save, X, Zap, TrendingUp, TrendingDown, AlertTriangle, Sparkles, Bell, BellOff, ArrowRightLeft, Activity, RefreshCw } from 'lucide-react'
+import { Plus, Trash2, Save, X, Zap, TrendingUp, TrendingDown, AlertTriangle, Sparkles, Bell, ArrowRightLeft, Activity, RefreshCw } from 'lucide-react'
 import { useHoldings, loadHoldings, saveHoldings } from '../hooks/useHoldings'
 import { useNotification } from '../hooks/useNotification'
 import DEFAULT_HOLDINGS from '../data/defaultHoldings'
