@@ -65,11 +65,19 @@ function Recommend() {
     setError(null)
     try {
       const res = await fetch(`/api/cp/recommend?category=${recommendType}`)
+      if (!res.ok) {
+        throw new Error('请求失败')
+      }
       const json = await res.json()
-      setData(json.data || [])
+      if (json.error) {
+        setError(json.error)
+        setData([])
+      } else {
+        setData(json.data || [])
+      }
     } catch (e) {
       console.error('Failed to fetch:', e)
-      setError('数据加载失败，请检查网络连接')
+      setError(e.message || '数据加载失败，请检查网络连接')
     }
     setLoading(false)
   }

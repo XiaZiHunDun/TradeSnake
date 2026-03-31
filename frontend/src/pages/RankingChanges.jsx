@@ -23,18 +23,27 @@ function RankingChanges() {
         fetch(`/api/history/rankings/top?days=${days}`)
       ])
 
-      if (changesRes.ok) {
-        const data = await changesRes.json()
-        setChanges(data.data || [])
+      if (!changesRes.ok || !rankingsRes.ok) {
+        throw new Error('请求失败')
       }
 
-      if (rankingsRes.ok) {
-        const data = await rankingsRes.json()
-        setRankings(data.data || [])
+      const changesJson = await changesRes.json()
+      const rankingsJson = await rankingsRes.json()
+
+      if (changesJson.error) {
+        setError(changesJson.error)
+      } else {
+        setChanges(changesJson.data || [])
+      }
+
+      if (rankingsJson.error) {
+        setError(rankingsJson.error)
+      } else {
+        setRankings(rankingsJson.data || [])
       }
     } catch (e) {
       console.error('Failed to fetch:', e)
-      setError('数据加载失败，请检查网络连接')
+      setError(e.message || '数据加载失败，请检查网络连接')
     }
     setLoading(false)
   }
