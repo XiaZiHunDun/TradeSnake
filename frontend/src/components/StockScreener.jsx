@@ -6,6 +6,7 @@ const SCREENER_CRITERIA = {
   totalCP: { label: '战力值', min: 0, max: 100, step: 1, default: [0, 100] },
   growthScore: { label: '成长分', min: 0, max: 100, step: 1, default: [0, 100] },
   valueScore: { label: '价值分', min: 0, max: 100, step: 1, default: [0, 100] },
+  qualityScore: { label: '质量分', min: 0, max: 100, step: 1, default: [0, 100] },
   momentumScore: { label: '趋势分', min: 0, max: 100, step: 1, default: [0, 100] },
 
   // 财务指标
@@ -74,6 +75,8 @@ function StockScreener({ data, onFilter }) {
       if (stock.growth_score < criteria.growthScore[0] || stock.growth_score > criteria.growthScore[1]) return false
       // 价值分
       if (stock.value_score < criteria.valueScore[0] || stock.value_score > criteria.valueScore[1]) return false
+      // 质量分
+      if ((stock.quality_score || 0) < criteria.qualityScore[0] || (stock.quality_score || 0) > criteria.qualityScore[1]) return false
       // 趋势分
       if (stock.momentum_score < criteria.momentumScore[0] || stock.momentum_score > criteria.momentumScore[1]) return false
       // PE
@@ -105,6 +108,7 @@ function StockScreener({ data, onFilter }) {
       if (stock.total_cp < criteria.totalCP[0] || stock.total_cp > criteria.totalCP[1]) return false
       if (stock.growth_score < criteria.growthScore[0] || stock.growth_score > criteria.growthScore[1]) return false
       if (stock.value_score < criteria.valueScore[0] || stock.value_score > criteria.valueScore[1]) return false
+      if ((stock.quality_score || 0) < criteria.qualityScore[0] || (stock.quality_score || 0) > criteria.qualityScore[1]) return false
       if (stock.momentum_score < criteria.momentumScore[0] || stock.momentum_score > criteria.momentumScore[1]) return false
       if (stock.pe > 0 && (stock.pe < criteria.pe[0] || stock.pe > criteria.pe[1])) return false
       if (stock.roe < criteria.roe[0] || stock.roe > criteria.roe[1]) return false
@@ -244,6 +248,34 @@ function StockScreener({ data, onFilter }) {
                       value={criteria.valueScore[1]}
                       onChange={(e) => handleCriteriaChange('valueScore', 1, e.target.value)}
                       className="flex-1 accent-yellow-500"
+                    />
+                  </div>
+                </div>
+
+                {/* 质量分 */}
+                <div className="bg-deep-night rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-white font-medium">质量分</span>
+                    <span className="text-xs text-gray-400">{criteria.qualityScore[0]} - {criteria.qualityScore[1]}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="range"
+                      min={SCREENER_CRITERIA.qualityScore.min}
+                      max={SCREENER_CRITERIA.qualityScore.max}
+                      step={SCREENER_CRITERIA.qualityScore.step}
+                      value={criteria.qualityScore[0]}
+                      onChange={(e) => handleCriteriaChange('qualityScore', 0, e.target.value)}
+                      className="flex-1 accent-purple-500"
+                    />
+                    <input
+                      type="range"
+                      min={SCREENER_CRITERIA.qualityScore.min}
+                      max={SCREENER_CRITERIA.qualityScore.max}
+                      step={SCREENER_CRITERIA.qualityScore.step}
+                      value={criteria.qualityScore[1]}
+                      onChange={(e) => handleCriteriaChange('qualityScore', 1, e.target.value)}
+                      className="flex-1 accent-purple-500"
                     />
                   </div>
                 </div>
