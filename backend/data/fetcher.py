@@ -1,6 +1,6 @@
 """
 数据获取模块 - TradeSnake Data Fetcher
-优化版：多数据源 + 缓存 + 智能选择 + 错误处理
+优化版：多数据源 + 缓存 + 智能选择 + 重试机制 + 错误处理
 """
 
 import os
@@ -15,9 +15,30 @@ import re
 import time
 import json
 import hashlib
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Callable
 from datetime import datetime, timedelta
 from functools import lru_cache
+
+# 重试配置
+MAX_RETRIES = 3
+RETRY_DELAY = 1  # 秒
+
+
+def with_retry(func: Callable) -> Callable:
+    """带重试机制的装饰器"""
+    def wrapper(*args, **kwargs):
+        last_exception = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                last_exception = e
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_DELAY * (attempt + 1))  # 指数退避
+                    print(f"  重试 {attempt + 2}/{MAX_RETRIES}: {e}")
+        print(f"  {func.__name__} 失败，已重试 {MAX_RETRIES} 次")
+        return []  # 返回空列表而不是抛出异常
+    return wrapper
 
 
 # ==================== 常量配置 ====================
@@ -192,59 +213,69 @@ class MarketDataFetcher:
         return []
 
     def _fetch_from_tencent(self, codes: List[str]) -> List[Dict]:
-        """从腾讯API获取行情"""
-        try:
-            tencent_codes = []
-            for code in codes:
-                code = str(code).strip()
-                if code.startswith(('sh', 'sz')):
-                    tencent_codes.append(code)
-                elif code.startswith('6'):
-                    tencent_codes.append(f'sh{code}')
-                else:
-                    tencent_codes.append(f'sz{code}')
+        """从腾讯API获取行情（带重试）"""
+        tencent_codes = []
+        for code in codes:
+            code = str(code).strip()
+            if code.startswith(('sh', 'sz')):
+                tencent_codes.append(code)
+            elif code.startswith('6'):
+                tencent_codes.append(f'sh{code}')
+            else:
+                tencent_codes.append(f'sz{code}')
 
-            codes_str = ','.join(tencent_codes)
-            url = f"https://qt.gtimg.cn/q={codes_str}"
+        codes_str = ','.join(tencent_codes)
+        url = f"https://qt.gtimg.cn/q={codes_str}"
 
-            r = self._tencent_session.get(url, timeout=10)
-            r.encoding = 'gbk'
+        last_error = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                r = self._tencent_session.get(url, timeout=10)
+                r.encoding = 'gbk'
+                return self._parse_tencent_data(r.text)
+            except Exception as e:
+                last_error = e
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_DELAY * (attempt + 1))
+                    print(f"  腾讯API重试 {attempt + 2}/{MAX_RETRIES}: {e}")
 
-            return self._parse_tencent_data(r.text)
-
-        except Exception as e:
-            print(f"腾讯API获取失败: {e}")
-            return []
+        print(f"  腾讯API获取失败: {last_error}")
+        return []
 
     def _fetch_from_sina(self, codes: List[str]) -> List[Dict]:
-        """从新浪API获取行情（备用）"""
-        try:
-            sina_codes = []
-            for code in codes:
-                code = str(code).strip()
-                if code.startswith(('sh', 'sz')):
-                    sina_codes.append(code)
-                elif code.startswith('6'):
-                    sina_codes.append(f'sh{code}')
-                else:
-                    sina_codes.append(f'sz{code}')
+        """从新浪API获取行情（备用，带重试）"""
+        sina_codes = []
+        for code in codes:
+            code = str(code).strip()
+            if code.startswith(('sh', 'sz')):
+                sina_codes.append(code)
+            elif code.startswith('6'):
+                sina_codes.append(f'sh{code}')
+            else:
+                sina_codes.append(f'sz{code}')
 
-            codes_str = ','.join(sina_codes)
-            url = f"https://hq.sinajs.cn/list={codes_str}"
+        codes_str = ','.join(sina_codes)
+        url = f"https://hq.sinajs.cn/list={codes_str}"
 
-            headers = {
-                'User-Agent': 'Mozilla/5.0',
-                'Referer': 'https://finance.sina.com.cn'
-            }
+        headers = {
+            'User-Agent': 'Mozilla/5.0',
+            'Referer': 'https://finance.sina.com.cn'
+        }
 
-            r = requests.get(url, headers=headers, timeout=10)
-            r.encoding = 'gbk'
+        last_error = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                r = requests.get(url, headers=headers, timeout=10)
+                r.encoding = 'gbk'
+                return self._parse_sina_data(r.text)
+            except Exception as e:
+                last_error = e
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_DELAY * (attempt + 1))
+                    print(f"  新浪API重试 {attempt + 2}/{MAX_RETRIES}: {e}")
 
-            return self._parse_sina_data(r.text)
-
-        except Exception as e:
-            print(f"新浪API获取失败: {e}")
-            return []
+        print(f"  新浪API获取失败: {last_error}")
+        return []
 
     def _parse_tencent_data(self, data: str) -> List[Dict]:
         """解析腾讯行情数据"""
@@ -396,42 +427,49 @@ class FinancialDataFetcher:
         }
 
     def _fetch_from_eastmoney(self, symbol: str, market: str) -> Optional[Dict]:
-        """从东方财富获取财务数据"""
-        try:
-            url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
-            params = {
-                "reportName": "RPT_LICO_FN_CPD",
-                "columns": "WEIGHTAVG_ROE,YSTZ,SJLTZ,GPZYTZXJ,MAIN_BUSINESS_INCOME,OPERATE_CASHFLOW,ASSET_LIAB_RATIO,DIVIDEND_RATIO",
-                "filter": f"(SECUCODE=\"{symbol}.{market}\")",
-                "pageNumber": 1,
-                "pageSize": 1,
-                "sortTypes": -1,
-                "sortColumns": "REPORTDATE",
-                "source": "DataCenter",
-                "client": "PC"
-            }
+        """从东方财富获取财务数据（带重试）"""
+        url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+        params = {
+            "reportName": "RPT_LICO_FN_CPD",
+            "columns": "WEIGHTAVG_ROE,YSTZ,SJLTZ,GPZYTZXJ,MAIN_BUSINESS_INCOME,OPERATE_CASHFLOW,ASSET_LIAB_RATIO,DIVIDEND_RATIO",
+            "filter": f"(SECUCODE=\"{symbol}.{market}\")",
+            "pageNumber": 1,
+            "pageSize": 1,
+            "sortTypes": -1,
+            "sortColumns": "REPORTDATE",
+            "source": "DataCenter",
+            "client": "PC"
+        }
 
-            r = self.session.get(url, params=params, timeout=10)
-            result = r.json()
+        last_error = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                r = self.session.get(url, params=params, timeout=10)
+                result = r.json()
 
-            if result.get('result') and result['result'].get('data'):
-                d = result['result']['data'][0]
-                return {
-                    'roe': round(float(d.get('WEIGHTAVG_ROE', 0) or 0), 2),
-                    'net_profit_growth': round(float(d.get('SJLTZ', 0) or 0), 2),
-                    'revenue_growth': round(float(d.get('YSTZ', 0) or 0), 2),
-                    'gross_margin': round(float(d.get('GPZYTZXJ', 0) or 0), 2),
-                    'revenue': round(float(d.get('MAIN_BUSINESS_INCOME', 0) or 0) / 100000000, 2),
-                    'cashflow': round(float(d.get('OPERATE_CASHFLOW', 0) or 0) / 100000000, 2),
-                    'debt_ratio': round(float(d.get('ASSET_LIAB_RATIO', 0) or 0), 2),
-                    'dividend_yield': round(float(d.get('DIVIDEND_RATIO', 0) or 0), 2),  # 股息率
-                    'data_quality': 'high',
-                    'source': 'eastmoney'
-                }
+                if result.get('result') and result['result'].get('data'):
+                    d = result['result']['data'][0]
+                    return {
+                        'roe': round(float(d.get('WEIGHTAVG_ROE', 0) or 0), 2),
+                        'net_profit_growth': round(float(d.get('SJLTZ', 0) or 0), 2),
+                        'revenue_growth': round(float(d.get('YSTZ', 0) or 0), 2),
+                        'gross_margin': round(float(d.get('GPZYTZXJ', 0) or 0), 2),
+                        'revenue': round(float(d.get('MAIN_BUSINESS_INCOME', 0) or 0) / 100000000, 2),
+                        'cashflow': round(float(d.get('OPERATE_CASHFLOW', 0) or 0) / 100000000, 2),
+                        'debt_ratio': round(float(d.get('ASSET_LIAB_RATIO', 0) or 0), 2),
+                        'dividend_yield': round(float(d.get('DIVIDEND_RATIO', 0) or 0), 2),
+                        'data_quality': 'high',
+                        'source': 'eastmoney'
+                    }
+                return None  # 数据为空，不重试
 
-        except Exception as e:
-            print(f"东方财富财务API失败 {symbol}: {e}")
+            except Exception as e:
+                last_error = e
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_DELAY * (attempt + 1))
+                    print(f"  东方财富API重试 {attempt + 2}/{MAX_RETRIES} ({symbol}): {e}")
 
+        print(f"  东方财富财务API失败 {symbol}: {last_error}")
         return None
 
     def _fetch_backup(self, symbol: str, market: str) -> Optional[Dict]:
