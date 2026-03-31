@@ -19,14 +19,6 @@ router = APIRouter()
 cp_engine = CPEngine()
 last_update_time = None
 
-# 简单的内存缓存
-_cache = {
-    "top_stocks": None,
-    "bottom_stocks": None,
-    "cache_time": None
-}
-CACHE_TTL = 300  # 5分钟缓存
-
 
 def refresh_cp_data(limit: int = 100, save_hist: bool = True):
     """刷新战力数据"""
@@ -91,12 +83,6 @@ def refresh_cp_data(limit: int = 100, save_hist: bool = True):
             print(f"  历史记录已保存")
         except Exception as e:
             print(f"  历史记录保存失败: {e}")
-
-    # 清除缓存
-    global _cache
-    _cache["top_stocks"] = None
-    _cache["bottom_stocks"] = None
-    _cache["cache_time"] = None
 
     last_update_time = datetime.now()
     print(f"  战力计算完成，更新时间: {last_update_time}")
