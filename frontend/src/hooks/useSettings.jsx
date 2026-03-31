@@ -116,6 +116,8 @@ export function SettingsModal({ isOpen, onClose }) {
               <option value="value">价值型</option>
               <option value="growth">成长型</option>
               <option value="momentum">趋势型</option>
+              <option value="quality">质量型</option>
+              <option value="allround">综合型</option>
             </select>
           </div>
 
