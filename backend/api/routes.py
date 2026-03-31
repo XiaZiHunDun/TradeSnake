@@ -358,6 +358,11 @@ async def refresh_data(request: Request, limit: int = Query(default=100, ge=10, 
 @router.get("/api/cp/recommend")
 async def get_recommended_stocks(category: str = Query(default="value", description="类型: value=价值型, growth=成长型, momentum=趋势型, quality=质量型, allround=综合型")):
     """获取推荐股票"""
+    # 验证category参数
+    valid_categories = ["value", "growth", "momentum", "quality", "allround"]
+    if category not in valid_categories:
+        raise HTTPException(status_code=400, detail=f"无效的category类型，可选值: {', '.join(valid_categories)}")
+
     if not cp_engine.stocks:
         success = refresh_cp_data(limit=200)
         if not success and not cp_engine.stocks:
@@ -424,8 +429,6 @@ async def get_recommended_stocks(category: str = Query(default="value", descript
         # 综合型：使用v14公式计算综合战力
         filtered = [s for s in data if s.total_cp > 0]
         filtered.sort(key=lambda x: calc_v14_score(x), reverse=True)
-    else:
-        filtered = data[:20]
 
     return {
         "category": category,
