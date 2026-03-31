@@ -177,7 +177,9 @@ async def get_cp_bottom(limit: int = Query(default=10, ge=1, le=50)):
     global last_update_time
 
     if not cp_engine.stocks:
-        refresh_cp_data(limit=100)
+        success = refresh_cp_data(limit=100)
+        if not success and not cp_engine.stocks:
+            return {"error": "数据刷新失败，请稍后重试", "total": 0, "data": [], "updated_at": None}
 
     bottom_stocks = cp_engine.get_bottom(n=limit)
 
@@ -358,7 +360,9 @@ async def refresh_data(request: Request, limit: int = Query(default=100, ge=10, 
 async def get_recommended_stocks(category: str = Query(default="value", description="类型: value=价值型, growth=成长型, momentum=趋势型, quality=质量型, allround=综合型")):
     """获取推荐股票"""
     if not cp_engine.stocks:
-        refresh_cp_data(limit=200)
+        success = refresh_cp_data(limit=200)
+        if not success and not cp_engine.stocks:
+            return {"error": "数据刷新失败，请稍后重试", "category": category, "total": 0, "data": []}
 
     data = []
     for s in cp_engine.stocks:
