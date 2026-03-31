@@ -105,7 +105,7 @@ export function FormulaEducation({ isOpen, onClose }) {
               </div>
               <p className="text-gray-400 text-sm mb-2">衡量股票估值是否合理</p>
               <div className="bg-deep-night rounded-lg p-3 text-sm space-y-2">
-                <p className="text-gray-300">• ROE（净资产收益率）：越高越好，>15%为优质</p>
+                <p className="text-gray-300">• ROE（净资产收益率）：越高越好，&gt;15%为优质</p>
                 <p className="text-gray-300">• PE（市盈率）：5-20区间最优，过高有泡沫风险</p>
                 <p className="text-gray-300">• PEG = PE/净利润增长率：&lt;1表示被低估</p>
                 <p className="text-gray-300">• PB（市净率）：&lt;1为破净，价值凸显</p>
