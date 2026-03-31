@@ -19,29 +19,11 @@ from typing import List, Dict, Optional, Callable
 from datetime import datetime, timedelta
 from functools import lru_cache
 
+# ==================== 常量配置 ====================
 # 重试配置
 MAX_RETRIES = 3
 RETRY_DELAY = 1  # 秒
 
-
-def with_retry(func: Callable) -> Callable:
-    """带重试机制的装饰器"""
-    def wrapper(*args, **kwargs):
-        last_exception = None
-        for attempt in range(MAX_RETRIES):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                last_exception = e
-                if attempt < MAX_RETRIES - 1:
-                    time.sleep(RETRY_DELAY * (attempt + 1))  # 指数退避
-                    print(f"  重试 {attempt + 2}/{MAX_RETRIES}: {e}")
-        print(f"  {func.__name__} 失败，已重试 {MAX_RETRIES} 次")
-        return []  # 返回空列表而不是抛出异常
-    return wrapper
-
-
-# ==================== 常量配置 ====================
 CACHE_DIR = "/home/ailearn/projects/TradeSnake/data"
 CACHE_EXPIRE_MINUTES = 5  # 缓存过期时间
 
