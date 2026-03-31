@@ -49,6 +49,7 @@ class TestStockCP:
         assert stock.growth_score >= 0
         assert stock.value_score >= 0
         assert stock.momentum_score >= 0
+        assert stock.quality_score >= 0  # v14新增质量分
         assert stock.total_cp >= 0
 
     def test_risk_calculation(self):
@@ -109,6 +110,12 @@ class TestStockCP:
         assert d['high'] == 1850.0
         assert d['low'] == 1750.0
         assert d['data_quality'] == 'high'
+        # 验证v14新增字段
+        assert 'quality_score' in d
+        assert 'growth_score' in d
+        assert 'value_score' in d
+        assert 'momentum_score' in d
+        assert 'peg' in d
 
 
 class TestCPEngine:
@@ -401,6 +408,44 @@ class TestStockCPQualityScore:
 
         assert stock.pe < 0
         assert stock.risk_score > 30  # 应该有较高风险
+
+    def test_quality_score_components(self):
+        """测试质量分各组成部分"""
+        # 测试现金流得分
+        stock_positive_cf = StockCP(
+            code='1', name='正现金流', price=100.0,
+            pe=20.0, roe=20.0, net_profit_growth=20.0,
+            revenue_growth=10.0, change_pct=1.0,
+            cashflow=50.0, gross_margin=30.0, debt_ratio=40.0
+        )
+        assert stock_positive_cf.quality_score > 0
+
+        # 测试负现金流但正ROE的情况（应扣分）
+        stock_negative_cf = StockCP(
+            code='2', name='负现金流', price=100.0,
+            pe=20.0, roe=20.0, net_profit_growth=20.0,
+            revenue_growth=10.0, change_pct=1.0,
+            cashflow=-10.0, gross_margin=30.0, debt_ratio=40.0
+        )
+        # 负现金流应该导致质量分较低
+        assert stock_negative_cf.quality_score < stock_positive_cf.quality_score
+
+    def test_quality_score_margins(self):
+        """测试毛利率对质量分的影响"""
+        stock_high_margin = StockCP(
+            code='1', name='高毛利', price=100.0,
+            pe=20.0, roe=20.0, net_profit_growth=20.0,
+            revenue_growth=10.0, change_pct=1.0,
+            cashflow=50.0, gross_margin=50.0, debt_ratio=40.0
+        )
+        stock_low_margin = StockCP(
+            code='2', name='低毛利', price=100.0,
+            pe=20.0, roe=20.0, net_profit_growth=20.0,
+            revenue_growth=10.0, change_pct=1.0,
+            cashflow=50.0, gross_margin=10.0, debt_ratio=40.0
+        )
+        # 高毛利应该有更高的质量分
+        assert stock_high_margin.quality_score > stock_low_margin.quality_score
 
 
 class TestRiskLevels:
