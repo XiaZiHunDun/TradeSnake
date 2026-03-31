@@ -210,6 +210,10 @@ class TestCPEngine:
         bottom3 = engine.get_bottom(3)
 
         assert len(bottom3) == 3
+        # 验证返回的是最低的战力
+        all_cps = [s.total_cp for s in engine.stocks]
+        bottom_cps = [s.total_cp for s in bottom3]
+        assert min(bottom_cps) == min(all_cps)
 
 
 class TestCreateStockFromRaw:
