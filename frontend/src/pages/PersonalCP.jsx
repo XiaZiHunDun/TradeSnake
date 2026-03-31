@@ -140,17 +140,23 @@ function PersonalCP() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(codes)
       })
-      if (res.ok) {
-        const json = await res.json()
+      if (!res.ok) {
+        throw new Error('请求失败')
+      }
+      const json = await res.json()
+      if (json.error) {
+        setError(json.error)
+        setStockData({})
+      } else {
         const newData = {}
-        for (const stock of json.data) {
+        for (const stock of json.data || []) {
           newData[stock.code] = stock
         }
         setStockData(newData)
       }
     } catch (e) {
       console.error('Failed to load stock data:', e)
-      setError('数据加载失败，请检查网络连接')
+      setError(e.message || '数据加载失败，请检查网络连接')
     }
     setLoading(false)
   }
@@ -159,8 +165,13 @@ function PersonalCP() {
   const loadTopStocks = async () => {
     try {
       const res = await fetch('/api/cp/top?limit=50')
-      if (res.ok) {
-        const json = await res.json()
+      if (!res.ok) {
+        throw new Error('请求失败')
+      }
+      const json = await res.json()
+      if (json.error) {
+        setTopStocks([])
+      } else {
         setTopStocks(json.data || [])
       }
     } catch (e) {
