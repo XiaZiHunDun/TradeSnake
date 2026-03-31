@@ -166,13 +166,26 @@ function PortfolioSimulator() {
               {stocks.map(stock => (
                 <div key={stock.code} className="flex items-center justify-between p-3 bg-deep-night rounded-lg">
                   <div className="flex items-center gap-4">
-                    <div>
-                      <p className="text-white font-bold">{stock.name}</p>
-                      <p className="text-gray-400 text-xs">{stock.code}</p>
+                    <div className="flex items-center gap-2">
+                      <div>
+                        <p className="text-white font-bold">{stock.name}</p>
+                        <p className="text-gray-400 text-xs">{stock.code}</p>
+                      </div>
+                      {stock.data_quality && (
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                          stock.data_quality === 'high' ? 'bg-green-400' :
+                          stock.data_quality === 'medium' ? 'bg-yellow-400' : 'bg-gray-500'
+                        }`} title={`数据质量: ${stock.data_quality === 'high' ? '高' : stock.data_quality === 'medium' ? '中' : '低'}`} />
+                      )}
                     </div>
                     <div className="text-sm text-gray-300">
                       {stock.quantity}股 × ¥{stock.price.toFixed(2)} = ¥{(stock.quantity * stock.price).toFixed(0)}
                     </div>
+                    {stock.market_cap > 0 && (
+                      <div className="text-xs text-gray-500">
+                        市值{stock.market_cap.toFixed(0)}亿
+                      </div>
+                    )}
                     <div className="text-sm">
                       <span className={`cp-tag ${stock.total_cp >= 70 ? 'cp-high' : stock.total_cp >= 50 ? 'cp-mid' : 'cp-low'}`}>
                         CP {stock.total_cp.toFixed(1)}
