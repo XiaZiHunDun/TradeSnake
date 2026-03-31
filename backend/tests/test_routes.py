@@ -72,6 +72,12 @@ class TestCPEndpoints:
         data = response.json()
         assert len(data["data"]) <= 5
 
+    def test_cp_top_limit_boundary(self):
+        """测试战力榜limit边界验证"""
+        # limit > 200 should fail validation
+        response = client.get("/api/cp/top?limit=201")
+        assert response.status_code == 422  # FastAPI validation error
+
     def test_cp_bottom(self):
         """测试获取BOTTOM榜"""
         response = client.get("/api/cp/bottom?limit=5")
@@ -79,6 +85,12 @@ class TestCPEndpoints:
         data = response.json()
         assert "data" in data
         assert isinstance(data["data"], list)
+
+    def test_cp_bottom_limit_boundary(self):
+        """测试避雷榜limit边界验证"""
+        # limit > 50 should fail validation
+        response = client.get("/api/cp/bottom?limit=51")
+        assert response.status_code == 422  # FastAPI validation error
 
 
 class TestStockEndpoint:
