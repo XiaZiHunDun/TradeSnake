@@ -196,6 +196,18 @@ class TestBatchStocksEndpoint:
         data = response.json()
         assert "批量数量不能超过" in data["detail"]
 
+    def test_batch_stocks_deduplication(self):
+        """测试批量获取时自动去重"""
+        # 发送包含重复代码的列表
+        response = client.post(
+            "/api/stocks/batch",
+            json=["600519", "600519", "000858", "000858"]
+        )
+        assert response.status_code == 200
+        data = response.json()
+        # 应该只返回2个不同的股票，而不是4个
+        assert data["total"] == 2
+
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

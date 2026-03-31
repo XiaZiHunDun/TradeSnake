@@ -593,6 +593,9 @@ async def get_batch_stocks(codes: list[str]):
     if len(codes) > MAX_BATCH_SIZE:
         raise HTTPException(status_code=400, detail=f"批量数量不能超过{MAX_BATCH_SIZE}只")
 
+    # 去重处理，避免重复查询
+    unique_codes = list(dict.fromkeys(c.upper().strip() for c in codes))
+
     # 确保引擎有数据
     if not cp_engine.stocks:
         success = refresh_cp_data(limit=200)
@@ -600,8 +603,7 @@ async def get_batch_stocks(codes: list[str]):
             return {"error": "数据刷新失败，请稍后重试", "data": []}
 
     result = []
-    for code in codes:
-        code = code.upper().strip()
+    for code in unique_codes:
         # 先从引擎缓存中查找
         cached = cp_engine.get_by_code(code)
         if cached:
