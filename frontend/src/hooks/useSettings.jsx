@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { X } from 'lucide-react'
+import { X, RotateCcw } from 'lucide-react'
+import { useTourGuide } from '../components/TourGuide'
 
 const SETTINGS_KEY = 'tradesnake_settings'
 
@@ -43,6 +44,7 @@ export function useSettings() {
 
 export function SettingsModal({ isOpen, onClose }) {
   const { settings, updateSetting, resetSettings } = useSettings()
+  const { resetTour } = useTourGuide()
 
   if (!isOpen) return null
 
@@ -123,6 +125,18 @@ export function SettingsModal({ isOpen, onClose }) {
             className="w-full px-4 py-2 text-gray-400 hover:text-red-500 border border-border-dark rounded-lg transition-colors"
           >
             重置为默认设置
+          </button>
+
+          {/* 重新观看引导 */}
+          <button
+            onClick={() => {
+              resetTour()
+              onClose()
+            }}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 text-accent-blue hover:text-accent-blue/80 border border-accent-blue/30 hover:border-accent-blue/50 rounded-lg transition-colors"
+          >
+            <RotateCcw className="w-4 h-4" />
+            重新观看引导教程
           </button>
         </div>
       </div>
