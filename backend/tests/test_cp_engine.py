@@ -91,7 +91,11 @@ class TestStockCP:
             roe=30.0,
             net_profit_growth=20.0,
             revenue_growth=15.0,
-            change_pct=2.5
+            change_pct=2.5,
+            market_cap=500.0,
+            high=1850.0,
+            low=1750.0,
+            data_quality='high'
         )
 
         d = stock.to_dict()
@@ -100,6 +104,11 @@ class TestStockCP:
         assert 'total_cp' in d
         assert 'risk_score' in d
         assert 'risk_level' in d
+        assert 'market_cap' in d
+        assert d['market_cap'] == 500.0
+        assert d['high'] == 1850.0
+        assert d['low'] == 1750.0
+        assert d['data_quality'] == 'high'
 
 
 class TestCPEngine:
@@ -220,6 +229,39 @@ class TestCreateStockFromRaw:
         # 创建时component scores已计算
         assert stock.growth_score > 0
         assert stock.value_score > 0
+
+    def test_create_stock_with_new_fields(self):
+        """测试从原始数据创建股票（含新字段）"""
+        data = {
+            'code': '600519',
+            'name': '贵州茅台',
+            'price': 1800.0,
+            'pe': 45.0,
+            'roe': 30.0,
+            'net_profit_growth': 20.0,
+            'revenue_growth': 15.0,
+            'change_pct': 2.5,
+            'market_cap': 500.0,
+            'high': 1850.0,
+            'low': 1750.0,
+            'data_quality': 'high',
+            'dividend_yield': 1.5,
+            'gross_margin': 90.0,
+            'cashflow': 100.0,
+            'debt_ratio': 30.0
+        }
+
+        stock = create_stock_from_raw(**data)
+
+        assert stock.code == '600519'
+        assert stock.market_cap == 500.0
+        assert stock.high == 1850.0
+        assert stock.low == 1750.0
+        assert stock.data_quality == 'high'
+        assert stock.dividend_yield == 1.5
+        assert stock.gross_margin == 90.0
+        assert stock.cashflow == 100.0
+        assert stock.debt_ratio == 30.0
 
 
 if __name__ == '__main__':
