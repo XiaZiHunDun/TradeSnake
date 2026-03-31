@@ -32,6 +32,8 @@ class TestHealthEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert "stocks_count" in data
+        assert "data_fresh" in data
+        assert "last_update" in data
 
 
 class TestRootEndpoint:
