@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { TrendingUp, TrendingDown, Plus, Trash2, Calculator, Zap } from 'lucide-react'
+import { Plus, Trash2, Calculator, Zap } from 'lucide-react'
 import ReactECharts from 'echarts-for-react'
 
 function PortfolioSimulator() {
