@@ -70,6 +70,7 @@ def get_stock_history(code: str, days: int = 7) -> List[Dict]:
                 "total_cp": stock.get("total_cp", 0),
                 "growth_score": stock.get("growth_score", 0),
                 "value_score": stock.get("value_score", 0),
+                "quality_score": stock.get("quality_score", 0),
                 "momentum_score": stock.get("momentum_score", 0),
             })
 
