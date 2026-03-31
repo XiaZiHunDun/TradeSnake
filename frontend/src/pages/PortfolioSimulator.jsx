@@ -7,6 +7,7 @@ function PortfolioSimulator() {
   const [newStock, setNewStock] = useState({ code: '', quantity: 100 })
   const [searchResult, setSearchResult] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
   const [simResult, setSimResult] = useState(null)
   const [simChange, setSimChange] = useState(10) // 模拟战力变化值
 
@@ -15,6 +16,8 @@ function PortfolioSimulator() {
     if (!code.trim()) return
 
     setLoading(true)
+    setError(null)
+    setSearchResult(null)
     try {
       let searchCode = code.trim().toUpperCase()
       if (!searchCode.startsWith('SH') && !searchCode.startsWith('SZ')) {
@@ -26,9 +29,14 @@ function PortfolioSimulator() {
       if (res.ok) {
         const data = await res.json()
         setSearchResult(data)
+      } else if (res.status === 404) {
+        setError('股票代码不存在')
+      } else {
+        setError('搜索失败，请稍后重试')
       }
     } catch (e) {
       console.error('Search failed:', e)
+      setError('网络错误，请检查连接')
     }
     setLoading(false)
   }
@@ -190,6 +198,9 @@ function PortfolioSimulator() {
                   ¥{searchResult.price.toFixed(2)} | CP {searchResult.total_cp.toFixed(1)}
                 </p>
               </div>
+            )}
+            {error && (
+              <p className="mt-2 text-sm text-cp-low">{error}</p>
             )}
           </div>
           <div>
