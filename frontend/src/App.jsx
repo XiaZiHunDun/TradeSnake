@@ -72,6 +72,10 @@ function App() {
         case 'D':
           setShowDataSource(true)
           break
+        case 's':
+        case 'S':
+          setShowSettings(true)
+          break
         case 'Escape':
           // 关闭弹窗
           document.dispatchEvent(new CustomEvent('close-modal'))
