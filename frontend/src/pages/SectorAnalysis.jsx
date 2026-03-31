@@ -315,9 +315,17 @@ function SectorAnalysis() {
                     className="border-b border-border-dark/50 hover:bg-white/5 transition-colors"
                   >
                     <td className="px-4 py-3">
-                      <div>
-                        <p className="font-bold text-white">{stock.name}</p>
-                        <p className="text-xs text-gray-500">{stock.code}</p>
+                      <div className="flex items-center gap-2">
+                        <div>
+                          <p className="font-bold text-white">{stock.name}</p>
+                          <p className="text-xs text-gray-500">{stock.code}</p>
+                        </div>
+                        {stock.data_quality && (
+                          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                            stock.data_quality === 'high' ? 'bg-green-400' :
+                            stock.data_quality === 'medium' ? 'bg-yellow-400' : 'bg-gray-500'
+                          }`} title={`数据质量: ${stock.data_quality === 'high' ? '高' : stock.data_quality === 'medium' ? '中' : '低'}`} />
+                        )}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right">
