@@ -18,6 +18,7 @@ function Recommend() {
         indicator: [
           { name: '成长分', max: 100 },
           { name: '价值分', max: 100 },
+          { name: '质量分', max: 100 },
           { name: '趋势分', max: 100 },
         ],
         radius: '55%',
@@ -30,7 +31,7 @@ function Recommend() {
       series: [{
         type: 'radar',
         data: [{
-          value: [stock.growth_score, stock.value_score, stock.momentum_score],
+          value: [stock.growth_score, stock.value_score, stock.quality_score || 0, stock.momentum_score],
           name: '战力分布',
           areaStyle: { color: 'rgba(59, 130, 246, 0.3)' },
           lineStyle: { color: '#3b82f6', width: 2 },
@@ -80,12 +81,14 @@ function Recommend() {
     { id: 'value', name: '价值型', desc: '高ROE + 低PE + 正增长', icon: '💰' },
     { id: 'growth', name: '成长型', desc: '高增长 + 中等ROE', icon: '📈' },
     { id: 'momentum', name: '趋势型', desc: '高动量 + 正增长', icon: '⚡' },
+    { id: 'quality', name: '质量型', desc: '高质量 + 稳健ROE', icon: '🏆' },
+    { id: 'allround', name: '综合型', desc: '均衡发展 + 全面战力', icon: '🎯' },
   ]
 
   return (
     <div className="space-y-6">
       {/* 类型选择 */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {types.map(type => (
           <button
             key={type.id}
@@ -265,6 +268,7 @@ function Recommend() {
             <div className="flex justify-between mt-4 text-sm text-gray-400">
               <div>成长分: <span className="text-white font-bold">{stockDetail.growth_score.toFixed(1)}</span></div>
               <div>价值分: <span className="text-white font-bold">{stockDetail.value_score.toFixed(1)}</span></div>
+              <div>质量分: <span className="text-purple-400 font-bold">{(stockDetail.quality_score || 0).toFixed(1)}</span></div>
               <div>趋势分: <span className="text-white font-bold">{stockDetail.momentum_score.toFixed(1)}</span></div>
             </div>
           </div>
