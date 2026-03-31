@@ -136,7 +136,7 @@ class StockListFetcher:
                 return cached[:limit]
 
             # 使用akshare获取成交额排名
-            df = ak.stock_spot_em()  # 获取所有股票实时数据
+            df = ak.stock_zh_a_spot_em()  # 获取所有股票实时数据
             if df is not None and len(df) > 0:
                 # 按成交额排序，取前N
                 if '成交额' in df.columns:
