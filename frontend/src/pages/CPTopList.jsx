@@ -21,6 +21,7 @@ function CPTopList() {
   const [marketStats, setMarketStats] = useState(null)
   const [dataFreshness, setDataFreshness] = useState({}) // 数据新鲜度
   const [showExportMenu, setShowExportMenu] = useState(false) // 导出菜单
+  const [error, setError] = useState(null) // 错误状态
 
   // 获取市场统计
   useEffect(() => {
@@ -241,13 +242,21 @@ function CPTopList() {
 
   const fetchData = async () => {
     setLoading(true)
+    setError(null)
     try {
       const [topRes, healthRes] = await Promise.all([
         fetch('/api/cp/top?limit=200'),
         fetch('/api/health')
       ])
       const json = await topRes.json()
-      setData(json.data || [])
+
+      // 检查API返回的错误
+      if (json.error) {
+        setError(json.error)
+        setData([])
+      } else {
+        setData(json.data || [])
+      }
       setUpdatedAt(json.updated_at)
 
       if (healthRes.ok) {
@@ -260,6 +269,7 @@ function CPTopList() {
       }
     } catch (e) {
       console.error('Failed to fetch data:', e)
+      setError('数据加载失败，请检查网络连接')
     }
     setLoading(false)
   }
@@ -343,6 +353,21 @@ function CPTopList() {
         <div className="bg-card-bg rounded-xl border border-border-dark overflow-hidden">
           <SkeletonTable rows={10} cols={8} />
         </div>
+      </div>
+    )
+  }
+
+  // 错误状态
+  if (error) {
+    return (
+      <div className="bg-cp-low/10 border border-cp-low/30 rounded-xl p-8 text-center">
+        <p className="text-cp-low text-lg mb-4">{error}</p>
+        <button
+          onClick={() => fetchData()}
+          className="px-4 py-2 bg-cp-low/20 hover:bg-cp-low/30 text-cp-low rounded-lg transition-colors"
+        >
+          重试
+        </button>
       </div>
     )
   }
