@@ -6,6 +6,7 @@ function RankingChanges() {
   const [changes, setChanges] = useState([])
   const [rankings, setRankings] = useState([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
   const [days, setDays] = useState(30)
   const { toggle, isInWatchlist } = useWatchlist()
 
@@ -15,6 +16,7 @@ function RankingChanges() {
 
   const fetchData = async () => {
     setLoading(true)
+    setError(null)
     try {
       const [changesRes, rankingsRes] = await Promise.all([
         fetch(`/api/history/rankings/changes?days=${days}`),
@@ -32,6 +34,7 @@ function RankingChanges() {
       }
     } catch (e) {
       console.error('Failed to fetch:', e)
+      setError('数据加载失败，请检查网络连接')
     }
     setLoading(false)
   }
@@ -49,6 +52,21 @@ function RankingChanges() {
           <div className="w-12 h-12 border-4 border-accent-blue/30 border-t-accent-blue rounded-full animate-spin mx-auto mb-4"></div>
           <p className="text-gray-400">加载榜单数据...</p>
         </div>
+      </div>
+    )
+  }
+
+  // 错误状态
+  if (error) {
+    return (
+      <div className="bg-cp-low/10 border border-cp-low/30 rounded-xl p-8 text-center">
+        <p className="text-cp-low text-lg mb-4">{error}</p>
+        <button
+          onClick={() => fetchData()}
+          className="px-4 py-2 bg-cp-low/20 hover:bg-cp-low/30 text-cp-low rounded-lg transition-colors"
+        >
+          重试
+        </button>
       </div>
     )
   }
