@@ -585,6 +585,11 @@ async def get_batch_stocks(codes: list[str]):
     """批量获取多只股票的战力数据"""
     global last_update_time
 
+    # 限制批量大小，防止性能问题
+    MAX_BATCH_SIZE = 50
+    if len(codes) > MAX_BATCH_SIZE:
+        raise HTTPException(status_code=400, detail=f"批量数量不能超过{MAX_BATCH_SIZE}只")
+
     # 确保引擎有数据
     if not cp_engine.stocks:
         success = refresh_cp_data(limit=200)
