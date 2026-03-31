@@ -54,7 +54,8 @@ def load_history(days: int = 7) -> Dict:
         # 只返回最近N天
         dates = sorted(history.keys(), reverse=True)[:days]
         return {d: history[d] for d in dates}
-    except:
+    except Exception as e:
+        print(f"加载历史记录失败: {e}")
         return {}
 
 def get_stock_history(code: str, days: int = 7) -> List[Dict]:
