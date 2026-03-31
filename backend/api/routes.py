@@ -370,7 +370,7 @@ async def refresh_data(request: Request, limit: int = Query(default=100, ge=10, 
 
 
 @router.get("/api/cp/recommend")
-async def get_recommended_stocks(category: str = Query(default="value", description="类型: value=价值型, growth=成长型, momentum=趋势型")):
+async def get_recommended_stocks(category: str = Query(default="value", description="类型: value=价值型, growth=成长型, momentum=趋势型, quality=质量型, allround=综合型")):
     """获取推荐股票"""
     if not cp_engine.stocks:
         refresh_cp_data(limit=200)
