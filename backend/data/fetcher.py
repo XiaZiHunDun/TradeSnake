@@ -10,14 +10,12 @@ os.environ.pop('https_proxy', None)
 import akshare as ak
 import requests
 import pandas as pd
-import numpy as np
 import re
 import time
 import json
 import hashlib
-from typing import List, Dict, Optional, Callable
+from typing import List, Dict, Optional
 from datetime import datetime, timedelta
-from functools import lru_cache
 
 # ==================== 常量配置 ====================
 # 重试配置
