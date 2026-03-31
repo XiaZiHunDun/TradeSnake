@@ -136,6 +136,20 @@ class TestRecommendEndpoint:
         data = response.json()
         assert "无效的category类型" in data["detail"]
 
+    def test_recommend_quality(self):
+        """测试质量型推荐"""
+        response = client.get("/api/cp/recommend?category=quality")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["category"] == "quality"
+
+    def test_recommend_allround(self):
+        """测试综合型推荐"""
+        response = client.get("/api/cp/recommend?category=allround")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["category"] == "allround"
+
 
 class TestHistoryEndpoints:
     """测试历史数据端点"""
@@ -160,6 +174,15 @@ class TestHistoryEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert "days" in data
+
+    def test_history_single_stock(self):
+        """测试单只股票历史接口"""
+        response = client.get("/api/history/600519?days=7")
+        assert response.status_code == 200
+        data = response.json()
+        assert "code" in data
+        assert "total" in data
+        assert "data" in data
 
 
 class TestBatchStocksEndpoint:
