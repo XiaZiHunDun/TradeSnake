@@ -97,9 +97,17 @@ function RankingChanges() {
                 <div key={stock.code} className="flex items-center justify-between p-2 bg-deep-night rounded-lg">
                   <div className="flex items-center gap-3">
                     <Star className="w-4 h-4 text-green-500" />
-                    <div>
-                      <p className="text-white text-sm font-medium">{stock.name}</p>
-                      <p className="text-gray-500 text-xs">{stock.code}</p>
+                    <div className="flex items-center gap-2">
+                      <div>
+                        <p className="text-white text-sm font-medium">{stock.name}</p>
+                        <p className="text-gray-500 text-xs">{stock.code}</p>
+                      </div>
+                      {stock.data_quality && (
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                          stock.data_quality === 'high' ? 'bg-green-400' :
+                          stock.data_quality === 'medium' ? 'bg-yellow-400' : 'bg-gray-500'
+                        }`} title={`数据质量: ${stock.data_quality === 'high' ? '高' : stock.data_quality === 'medium' ? '中' : '低'}`} />
+                      )}
                     </div>
                   </div>
                   <span className={`cp-tag ${getCPColor(stock.total_cp)}`}>
@@ -126,9 +134,17 @@ function RankingChanges() {
                 <div key={stock.code} className="flex items-center justify-between p-2 bg-deep-night rounded-lg">
                   <div className="flex items-center gap-3">
                     <AlertTriangle className="w-4 h-4 text-red-500" />
-                    <div>
-                      <p className="text-white text-sm font-medium">{stock.name}</p>
-                      <p className="text-gray-500 text-xs">{stock.code}</p>
+                    <div className="flex items-center gap-2">
+                      <div>
+                        <p className="text-white text-sm font-medium">{stock.name}</p>
+                        <p className="text-gray-500 text-xs">{stock.code}</p>
+                      </div>
+                      {stock.data_quality && (
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                          stock.data_quality === 'high' ? 'bg-green-400' :
+                          stock.data_quality === 'medium' ? 'bg-yellow-400' : 'bg-gray-500'
+                        }`} title={`数据质量: ${stock.data_quality === 'high' ? '高' : stock.data_quality === 'medium' ? '中' : '低'}`} />
+                      )}
                     </div>
                   </div>
                   <span className={`cp-tag ${getCPColor(stock.total_cp)}`}>
