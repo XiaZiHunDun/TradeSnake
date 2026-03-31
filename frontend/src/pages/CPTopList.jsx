@@ -580,6 +580,14 @@ function CPTopList() {
               </th>
               <th
                 className="px-4 py-3 text-right cursor-pointer hover:text-white transition-colors"
+                onClick={() => toggleSort('quality_score')}
+              >
+                <div className="flex items-center justify-end gap-1">
+                  质量分 {getSortIcon('quality_score')}
+                </div>
+              </th>
+              <th
+                className="px-4 py-3 text-right cursor-pointer hover:text-white transition-colors"
                 onClick={() => toggleSort('momentum_score')}
               >
                 <div className="flex items-center justify-end gap-1">
@@ -678,6 +686,9 @@ function CPTopList() {
                 <td className="px-4 py-3 text-right text-sm text-gray-300">
                   {stock.value_score.toFixed(1)}
                 </td>
+                <td className="px-4 py-3 text-right text-sm text-purple-400">
+                  {(stock.quality_score || 0).toFixed(1)}
+                </td>
                 <td className="px-4 py-3 text-right text-sm text-gray-300">
                   {stock.momentum_score.toFixed(1)}
                 </td>
@@ -692,7 +703,7 @@ function CPTopList() {
                   </div>
                 </td>
                 <td className="px-4 py-3 text-right text-sm font-mono text-gray-300">
-                  {stock.pe.toFixed(1)}
+                  {stock.pe > 0 ? stock.pe.toFixed(1) : 'N/A'}
                 </td>
                 <td className="px-4 py-3 text-right text-sm font-mono text-gray-300">
                   {stock.roe.toFixed(1)}%
