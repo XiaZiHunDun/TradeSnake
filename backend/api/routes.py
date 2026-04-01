@@ -2,7 +2,7 @@
 API路由 - TradeSnake API Routes
 """
 
-import threading
+import asyncio
 from fastapi import APIRouter, HTTPException, Query, Request
 from datetime import datetime
 
@@ -18,8 +18,8 @@ router = APIRouter()
 cp_engine = CPEngine()
 last_update_time = None
 
-# 线程锁，保护cp_engine的并发访问
-_cp_lock = threading.Lock()
+# 异步锁，保护cp_engine的并发访问
+_cp_lock = asyncio.Lock()
 
 
 def _build_stock_response(stock):
@@ -86,14 +86,14 @@ def _build_stock_cp_data(stock):
     )
 
 
-def refresh_cp_data(limit: int = 100, save_hist: bool = True):
+async def refresh_cp_data(limit: int = 100, save_hist: bool = True):
     """刷新战力数据"""
     global last_update_time
 
     print(f"[{datetime.now()}] 刷新战力数据 (limit={limit})...")
 
-    # 获取数据
-    stock_data = get_stock_data_api(limit=limit)
+    # 获取数据（在线程池中执行，避免阻塞事件循环）
+    stock_data = await asyncio.to_thread(get_stock_data_api, limit=limit)
 
     if not stock_data:
         print("  数据获取失败")
@@ -101,8 +101,8 @@ def refresh_cp_data(limit: int = 100, save_hist: bool = True):
 
     print(f"  获取到 {len(stock_data)} 只股票数据")
 
-    # 使用锁保护临界区
-    with _cp_lock:
+    # 使用异步锁保护临界区
+    async with _cp_lock:
         # 创建战力对象
         cp_engine.stocks.clear()
         stock_dicts = []
@@ -192,14 +192,14 @@ async def get_cp_top(
 
     # 如果数据为空或强制刷新，则刷新数据
     if not cp_engine.stocks or force_refresh or last_update_time is None:
-        success = refresh_cp_data(limit=limit)
+        success = await refresh_cp_data(limit=limit)
         if not success and not cp_engine.stocks:
             return {"error": "数据刷新失败，请稍后重试", "total": 0, "data": [], "updated_at": None}
     else:
         # 检查是否需要自动刷新（超过1小时）
         time_diff = (datetime.now() - last_update_time).total_seconds()
         if time_diff > 3600:
-            refresh_cp_data(limit=limit)
+            await refresh_cp_data(limit=limit)
 
     # 如果仍然没有数据，返回错误
     if not cp_engine.stocks:
@@ -225,7 +225,7 @@ async def get_cp_bottom(limit: int = Query(default=10, ge=1, le=50)):
     global last_update_time
 
     if not cp_engine.stocks:
-        success = refresh_cp_data(limit=100)
+        success = await refresh_cp_data(limit=100)
         if not success and not cp_engine.stocks:
             return {"error": "数据刷新失败，请稍后重试", "total": 0, "data": [], "updated_at": None}
 
@@ -319,7 +319,7 @@ async def get_single_stock(code: str):
 @limiter.limit("5/minute")
 async def refresh_data(request: Request, limit: int = Query(default=100, ge=10, le=500)):
     """手动刷新数据"""
-    success = refresh_cp_data(limit=limit)
+    success = await refresh_cp_data(limit=limit)
     if success:
         return {"status": "success", "message": f"成功刷新 {len(cp_engine.stocks)} 只股票数据"}
     else:
@@ -335,7 +335,7 @@ async def get_recommended_stocks(category: str = Query(default="value", descript
         raise HTTPException(status_code=400, detail=f"无效的category类型，可选值: {', '.join(valid_categories)}")
 
     if not cp_engine.stocks:
-        success = refresh_cp_data(limit=200)
+        success = await refresh_cp_data(limit=200)
         if not success and not cp_engine.stocks:
             return {"error": "数据刷新失败，请稍后重试", "category": category, "total": 0, "data": []}
 
@@ -442,7 +442,7 @@ async def get_market_stats():
     """获取市场整体统计"""
     try:
         if not cp_engine.stocks:
-            success = refresh_cp_data(limit=200)
+            success = await refresh_cp_data(limit=200)
             if not success and not cp_engine.stocks:
                 return {"error": "数据刷新失败，请稍后重试", "total_stocks": 0}
 
@@ -494,7 +494,7 @@ async def get_risk_stats():
     """获取市场风险统计"""
     try:
         if not cp_engine.stocks:
-            success = refresh_cp_data(limit=200)
+            success = await refresh_cp_data(limit=200)
             if not success and not cp_engine.stocks:
                 return {"error": "数据刷新失败，请稍后重试", "total_stocks": 0}
 
@@ -543,7 +543,7 @@ async def get_batch_stocks(codes: list[str]):
 
     # 确保引擎有数据
     if not cp_engine.stocks:
-        success = refresh_cp_data(limit=200)
+        success = await refresh_cp_data(limit=200)
         if not success and not cp_engine.stocks:
             return {"error": "数据刷新失败，请稍后重试", "data": []}
 
