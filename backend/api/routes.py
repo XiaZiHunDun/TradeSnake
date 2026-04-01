@@ -23,8 +23,40 @@ _cp_lock = threading.Lock()
 
 
 def _build_stock_response(stock):
-    """构建股票响应数据（避免重复代码）"""
+    """构建单股票响应数据（避免重复代码）"""
     return SingleStockResponse(
+        code=stock.code,
+        name=stock.name,
+        price=stock.price,
+        pe=stock.pe,
+        roe=stock.roe,
+        net_profit_growth=stock.net_profit_growth,
+        revenue_growth=stock.revenue_growth,
+        change_pct=stock.change_pct,
+        growth_score=round(stock.growth_score, 2),
+        value_score=round(stock.value_score, 2),
+        momentum_score=round(stock.momentum_score, 2),
+        quality_score=round(stock.quality_score, 2),
+        total_cp=round(stock.total_cp, 2),
+        risk_score=round(stock.risk_score, 2),
+        risk_level=stock.get_risk_level(),
+        peg=round(stock.peg, 2),
+        pb=stock.pb,
+        gross_margin=stock.gross_margin,
+        revenue=stock.revenue,
+        cashflow=stock.cashflow,
+        debt_ratio=stock.debt_ratio,
+        dividend_yield=stock.dividend_yield,
+        market_cap=stock.market_cap,
+        high=stock.high,
+        low=stock.low,
+        data_quality=stock.data_quality
+    )
+
+
+def _build_stock_cp_data(stock):
+    """构建榜单股票数据（避免重复代码）"""
+    return StockCPData(
         code=stock.code,
         name=stock.name,
         price=stock.price,
@@ -178,34 +210,7 @@ async def get_cp_top(
 
     data = []
     for s in top_stocks:
-        data.append(StockCPData(
-            code=s.code,
-            name=s.name,
-            price=s.price,
-            pe=s.pe,
-            roe=s.roe,
-            net_profit_growth=s.net_profit_growth,
-            revenue_growth=s.revenue_growth,
-            change_pct=s.change_pct,
-            growth_score=round(s.growth_score, 2),
-            value_score=round(s.value_score, 2),
-            momentum_score=round(s.momentum_score, 2),
-            quality_score=round(s.quality_score, 2),
-            total_cp=round(s.total_cp, 2),
-            risk_score=round(s.risk_score, 2),
-            risk_level=s.get_risk_level(),
-            peg=round(s.peg, 2),
-            pb=s.pb,
-            gross_margin=s.gross_margin,
-            revenue=s.revenue,
-            cashflow=s.cashflow,
-            debt_ratio=s.debt_ratio,
-            dividend_yield=s.dividend_yield,
-            market_cap=s.market_cap,
-            high=s.high,
-            low=s.low,
-            data_quality=s.data_quality
-        ))
+        data.append(_build_stock_cp_data(s))
 
     return CPListResponse(
         total=len(data),
@@ -228,34 +233,7 @@ async def get_cp_bottom(limit: int = Query(default=10, ge=1, le=50)):
 
     data = []
     for s in bottom_stocks:
-        data.append(StockCPData(
-            code=s.code,
-            name=s.name,
-            price=s.price,
-            pe=s.pe,
-            roe=s.roe,
-            net_profit_growth=s.net_profit_growth,
-            revenue_growth=s.revenue_growth,
-            change_pct=s.change_pct,
-            growth_score=round(s.growth_score, 2),
-            value_score=round(s.value_score, 2),
-            momentum_score=round(s.momentum_score, 2),
-            quality_score=round(s.quality_score, 2),
-            total_cp=round(s.total_cp, 2),
-            risk_score=round(s.risk_score, 2),
-            risk_level=s.get_risk_level(),
-            peg=round(s.peg, 2),
-            pb=s.pb,
-            gross_margin=s.gross_margin,
-            revenue=s.revenue,
-            cashflow=s.cashflow,
-            debt_ratio=s.debt_ratio,
-            dividend_yield=s.dividend_yield,
-            market_cap=s.market_cap,
-            high=s.high,
-            low=s.low,
-            data_quality=s.data_quality
-        ))
+        data.append(_build_stock_cp_data(s))
 
     return CPListResponse(
         total=len(data),
@@ -275,34 +253,7 @@ async def get_single_stock(code: str):
     # 先检查缓存中是否有
     cached = cp_engine.get_by_code(code)
     if cached:
-        return SingleStockResponse(
-            code=cached.code,
-            name=cached.name,
-            price=cached.price,
-            pe=cached.pe,
-            roe=cached.roe,
-            net_profit_growth=cached.net_profit_growth,
-            revenue_growth=cached.revenue_growth,
-            change_pct=cached.change_pct,
-            growth_score=round(cached.growth_score, 2),
-            value_score=round(cached.value_score, 2),
-            momentum_score=round(cached.momentum_score, 2),
-            quality_score=round(cached.quality_score, 2),
-            total_cp=round(cached.total_cp, 2),
-            risk_score=round(cached.risk_score, 2),
-            risk_level=cached.get_risk_level(),
-            peg=round(cached.peg, 2),
-            pb=cached.pb,
-            gross_margin=cached.gross_margin,
-            revenue=cached.revenue,
-            cashflow=cached.cashflow,
-            debt_ratio=cached.debt_ratio,
-            dividend_yield=cached.dividend_yield,
-            market_cap=cached.market_cap,
-            high=cached.high,
-            low=cached.low,
-            data_quality=cached.data_quality
-        )
+        return _build_stock_response(cached)
 
     # 实时获取
     stock_data = get_single_stock_data(code)
@@ -361,34 +312,7 @@ async def get_single_stock(code: str):
         risk_factor = 1 - (stock.risk_score / 100) * 0.10
         stock.total_cp = max(0, base_cp * risk_factor)
 
-    return SingleStockResponse(
-        code=stock.code,
-        name=stock.name,
-        price=stock.price,
-        pe=stock.pe,
-        roe=stock.roe,
-        net_profit_growth=stock.net_profit_growth,
-        revenue_growth=stock.revenue_growth,
-        change_pct=stock.change_pct,
-        growth_score=round(stock.growth_score, 2),
-        value_score=round(stock.value_score, 2),
-        momentum_score=round(stock.momentum_score, 2),
-        quality_score=round(stock.quality_score, 2),
-        total_cp=round(stock.total_cp, 2),
-        risk_score=round(stock.risk_score, 2),
-        risk_level=stock.get_risk_level(),
-        peg=round(stock.peg, 2),
-        pb=stock.pb,
-        gross_margin=stock.gross_margin,
-        revenue=stock.revenue,
-        cashflow=stock.cashflow,
-        debt_ratio=stock.debt_ratio,
-        dividend_yield=stock.dividend_yield,
-        market_cap=stock.market_cap,
-        high=stock.high,
-        low=stock.low,
-        data_quality=stock.data_quality
-    )
+    return _build_stock_response(stock)
 
 
 @router.post("/api/refresh")
@@ -417,34 +341,7 @@ async def get_recommended_stocks(category: str = Query(default="value", descript
 
     data = []
     for s in cp_engine.stocks:
-        data.append(StockCPData(
-            code=s.code,
-            name=s.name,
-            price=s.price,
-            pe=s.pe,
-            roe=s.roe,
-            net_profit_growth=s.net_profit_growth,
-            revenue_growth=s.revenue_growth,
-            change_pct=s.change_pct,
-            growth_score=round(s.growth_score, 2),
-            value_score=round(s.value_score, 2),
-            momentum_score=round(s.momentum_score, 2),
-            quality_score=round(s.quality_score, 2),
-            total_cp=round(s.total_cp, 2),
-            risk_score=round(s.risk_score, 2),
-            risk_level=s.get_risk_level(),
-            peg=round(s.peg, 2),
-            pb=s.pb,
-            gross_margin=s.gross_margin,
-            revenue=s.revenue,
-            cashflow=s.cashflow,
-            debt_ratio=s.debt_ratio,
-            dividend_yield=s.dividend_yield,
-            market_cap=s.market_cap,
-            high=s.high,
-            low=s.low,
-            data_quality=s.data_quality
-        ))
+        data.append(_build_stock_cp_data(s))
 
     # 按类型筛选（使用v14公式权重计算综合战力）
     def calc_v14_score(s):
@@ -656,34 +553,7 @@ async def get_batch_stocks(codes: list[str]):
             # 先从引擎缓存中查找
             cached = cp_engine.get_by_code(code)
             if cached:
-                result.append(SingleStockResponse(
-                    code=cached.code,
-                    name=cached.name,
-                    price=cached.price,
-                    pe=cached.pe,
-                    roe=cached.roe,
-                    net_profit_growth=cached.net_profit_growth,
-                    revenue_growth=cached.revenue_growth,
-                    change_pct=cached.change_pct,
-                    growth_score=round(cached.growth_score, 2),
-                    value_score=round(cached.value_score, 2),
-                    momentum_score=round(cached.momentum_score, 2),
-                    quality_score=round(cached.quality_score, 2),
-                    total_cp=round(cached.total_cp, 2),
-                    risk_score=round(cached.risk_score, 2),
-                    risk_level=cached.get_risk_level(),
-                    peg=round(cached.peg, 2),
-                    pb=cached.pb,
-                    gross_margin=cached.gross_margin,
-                    revenue=cached.revenue,
-                    cashflow=cached.cashflow,
-                    debt_ratio=cached.debt_ratio,
-                    dividend_yield=cached.dividend_yield,
-                    market_cap=cached.market_cap,
-                    high=cached.high,
-                    low=cached.low,
-                    data_quality=cached.data_quality
-                ))
+                result.append(_build_stock_response(cached))
             else:
                 # 实时获取（仅当缓存中没有时）
                 stock_data = get_single_stock_data(code)
@@ -728,34 +598,7 @@ async def get_batch_stocks(codes: list[str]):
                         risk_factor = 1 - (stock.risk_score / 100) * 0.10
                         stock.total_cp = max(0, base_cp * risk_factor)
 
-                    result.append(SingleStockResponse(
-                        code=stock.code,
-                        name=stock.name,
-                        price=stock.price,
-                        pe=stock.pe,
-                        roe=stock.roe,
-                        net_profit_growth=stock.net_profit_growth,
-                        revenue_growth=stock.revenue_growth,
-                        change_pct=stock.change_pct,
-                        growth_score=round(stock.growth_score, 2),
-                        value_score=round(stock.value_score, 2),
-                        momentum_score=round(stock.momentum_score, 2),
-                        quality_score=round(stock.quality_score, 2),
-                        total_cp=round(stock.total_cp, 2),
-                        risk_score=round(stock.risk_score, 2),
-                        risk_level=stock.get_risk_level(),
-                        peg=round(stock.peg, 2),
-                        pb=stock.pb,
-                        gross_margin=stock.gross_margin,
-                        revenue=stock.revenue,
-                        cashflow=stock.cashflow,
-                        debt_ratio=stock.debt_ratio,
-                        dividend_yield=stock.dividend_yield,
-                        market_cap=stock.market_cap,
-                        high=stock.high,
-                        low=stock.low,
-                        data_quality=stock.data_quality
-                    ))
+                    result.append(_build_stock_response(stock))
         except Exception as e:
             # 单只股票处理失败不影响其他股票
             print(f"批量处理股票失败 {code}: {e}")
