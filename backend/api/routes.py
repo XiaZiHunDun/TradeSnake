@@ -536,6 +536,7 @@ async def get_market_stats():
             "avg_change": round(sum(changes) / len(changes), 2),
             "rising_stocks": len([c for c in changes if c > 0]),
             "falling_stocks": len([c for c in changes if c < 0]),
+            "unchanged_stocks": len([c for c in changes if c == 0]),
             # 风险统计
             "avg_risk": round(sum(s.risk_score for s in stocks) / len(stocks), 1),
             "high_risk_count": len([s for s in stocks if s.risk_score >= 60]),

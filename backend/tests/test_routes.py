@@ -151,6 +151,7 @@ class TestMarketStatsEndpoint:
         assert "avg_change" in data
         assert "rising_stocks" in data
         assert "falling_stocks" in data
+        assert "unchanged_stocks" in data
 
 
 class TestRiskStatsEndpoint:
