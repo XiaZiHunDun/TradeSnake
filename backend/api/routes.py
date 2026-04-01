@@ -607,109 +607,113 @@ async def get_batch_stocks(codes: list[str]):
 
     result = []
     for code in unique_codes:
-        # 先从引擎缓存中查找
-        cached = cp_engine.get_by_code(code)
-        if cached:
-            result.append(SingleStockResponse(
-                code=cached.code,
-                name=cached.name,
-                price=cached.price,
-                pe=cached.pe,
-                roe=cached.roe,
-                net_profit_growth=cached.net_profit_growth,
-                revenue_growth=cached.revenue_growth,
-                change_pct=cached.change_pct,
-                growth_score=round(cached.growth_score, 2),
-                value_score=round(cached.value_score, 2),
-                momentum_score=round(cached.momentum_score, 2),
-                quality_score=round(cached.quality_score, 2),
-                total_cp=round(cached.total_cp, 2),
-                risk_score=round(cached.risk_score, 2),
-                risk_level=cached.get_risk_level(),
-                peg=round(cached.peg, 2),
-                pb=cached.pb,
-                gross_margin=cached.gross_margin,
-                revenue=cached.revenue,
-                cashflow=cached.cashflow,
-                debt_ratio=cached.debt_ratio,
-                dividend_yield=cached.dividend_yield,
-                market_cap=cached.market_cap,
-                high=cached.high,
-                low=cached.low,
-                data_quality=cached.data_quality
-            ))
+        try:
+            # 先从引擎缓存中查找
+            cached = cp_engine.get_by_code(code)
+            if cached:
+                result.append(SingleStockResponse(
+                    code=cached.code,
+                    name=cached.name,
+                    price=cached.price,
+                    pe=cached.pe,
+                    roe=cached.roe,
+                    net_profit_growth=cached.net_profit_growth,
+                    revenue_growth=cached.revenue_growth,
+                    change_pct=cached.change_pct,
+                    growth_score=round(cached.growth_score, 2),
+                    value_score=round(cached.value_score, 2),
+                    momentum_score=round(cached.momentum_score, 2),
+                    quality_score=round(cached.quality_score, 2),
+                    total_cp=round(cached.total_cp, 2),
+                    risk_score=round(cached.risk_score, 2),
+                    risk_level=cached.get_risk_level(),
+                    peg=round(cached.peg, 2),
+                    pb=cached.pb,
+                    gross_margin=cached.gross_margin,
+                    revenue=cached.revenue,
+                    cashflow=cached.cashflow,
+                    debt_ratio=cached.debt_ratio,
+                    dividend_yield=cached.dividend_yield,
+                    market_cap=cached.market_cap,
+                    high=cached.high,
+                    low=cached.low,
+                    data_quality=cached.data_quality
+                ))
+            else:
+                # 实时获取（仅当缓存中没有时）
+                stock_data = get_single_stock_data(code)
+                if stock_data:
+                    stock = create_stock_from_raw(
+                        code=stock_data['code'],
+                        name=stock_data['name'],
+                        price=stock_data['price'],
+                        pe=stock_data['pe'],
+                        roe=stock_data['roe'],
+                        net_profit_growth=stock_data['net_profit_growth'],
+                        revenue_growth=stock_data['revenue_growth'],
+                        change_pct=stock_data['change_pct'],
+                        pb=stock_data.get('pb', 0),
+                        gross_margin=stock_data.get('gross_margin', 0),
+                        revenue=stock_data.get('revenue', 0),
+                        cashflow=stock_data.get('cashflow', 0),
+                        debt_ratio=stock_data.get('debt_ratio', 0),
+                        volume=stock_data.get('volume', 0),
+                        amount=stock_data.get('amount', 0),
+                        dividend_yield=stock_data.get('dividend_yield', 0),
+                        market_cap=stock_data.get('market_cap', 0),
+                        high=stock_data.get('high', 0),
+                        low=stock_data.get('low', 0),
+                        data_quality=stock_data.get('data_quality', 'low')
+                    )
+
+                    # 计算百分位（基于v14公式权重）
+                    if cp_engine.stocks:
+                        df = cp_engine.to_dataframe()
+                        growth_pct = (df['growth_score'] < stock.growth_score).sum() / len(df) * 100
+                        value_pct = (df['value_score'] < stock.value_score).sum() / len(df) * 100
+                        quality_pct = (df['quality_score'] < stock.quality_score).sum() / len(df) * 100
+                        momentum_pct = (df['momentum_score'] < stock.momentum_score).sum() / len(df) * 100
+                        stock.growth_score = growth_pct
+                        stock.value_score = value_pct
+                        stock.quality_score = quality_pct
+                        stock.momentum_score = momentum_pct
+                        # 基础战力
+                        base_cp = growth_pct * 0.30 + value_pct * 0.25 + quality_pct * 0.20 + momentum_pct * 0.15
+                        # 风险调整
+                        risk_factor = 1 - (stock.risk_score / 100) * 0.10
+                        stock.total_cp = max(0, base_cp * risk_factor)
+
+                    result.append(SingleStockResponse(
+                        code=stock.code,
+                        name=stock.name,
+                        price=stock.price,
+                        pe=stock.pe,
+                        roe=stock.roe,
+                        net_profit_growth=stock.net_profit_growth,
+                        revenue_growth=stock.revenue_growth,
+                        change_pct=stock.change_pct,
+                        growth_score=round(stock.growth_score, 2),
+                        value_score=round(stock.value_score, 2),
+                        momentum_score=round(stock.momentum_score, 2),
+                        quality_score=round(stock.quality_score, 2),
+                        total_cp=round(stock.total_cp, 2),
+                        risk_score=round(stock.risk_score, 2),
+                        risk_level=stock.get_risk_level(),
+                        peg=round(stock.peg, 2),
+                        pb=stock.pb,
+                        gross_margin=stock.gross_margin,
+                        revenue=stock.revenue,
+                        cashflow=stock.cashflow,
+                        debt_ratio=stock.debt_ratio,
+                        dividend_yield=stock.dividend_yield,
+                        market_cap=stock.market_cap,
+                        high=stock.high,
+                        low=stock.low,
+                        data_quality=stock.data_quality
+                    ))
+        except Exception as e:
+            # 单只股票处理失败不影响其他股票
+            print(f"批量处理股票失败 {code}: {e}")
             continue
-
-        # 实时获取（仅当缓存中没有时）
-        stock_data = get_single_stock_data(code)
-        if stock_data:
-            stock = create_stock_from_raw(
-                code=stock_data['code'],
-                name=stock_data['name'],
-                price=stock_data['price'],
-                pe=stock_data['pe'],
-                roe=stock_data['roe'],
-                net_profit_growth=stock_data['net_profit_growth'],
-                revenue_growth=stock_data['revenue_growth'],
-                change_pct=stock_data['change_pct'],
-                pb=stock_data.get('pb', 0),
-                gross_margin=stock_data.get('gross_margin', 0),
-                revenue=stock_data.get('revenue', 0),
-                cashflow=stock_data.get('cashflow', 0),
-                debt_ratio=stock_data.get('debt_ratio', 0),
-                volume=stock_data.get('volume', 0),
-                amount=stock_data.get('amount', 0),
-                dividend_yield=stock_data.get('dividend_yield', 0),
-                market_cap=stock_data.get('market_cap', 0),
-                high=stock_data.get('high', 0),
-                low=stock_data.get('low', 0),
-                data_quality=stock_data.get('data_quality', 'low')
-            )
-
-            # 计算百分位（基于v14公式权重）
-            if cp_engine.stocks:
-                df = cp_engine.to_dataframe()
-                growth_pct = (df['growth_score'] < stock.growth_score).sum() / len(df) * 100
-                value_pct = (df['value_score'] < stock.value_score).sum() / len(df) * 100
-                quality_pct = (df['quality_score'] < stock.quality_score).sum() / len(df) * 100
-                momentum_pct = (df['momentum_score'] < stock.momentum_score).sum() / len(df) * 100
-                stock.growth_score = growth_pct
-                stock.value_score = value_pct
-                stock.quality_score = quality_pct
-                stock.momentum_score = momentum_pct
-                # 基础战力
-                base_cp = growth_pct * 0.30 + value_pct * 0.25 + quality_pct * 0.20 + momentum_pct * 0.15
-                # 风险调整
-                risk_factor = 1 - (stock.risk_score / 100) * 0.10
-                stock.total_cp = max(0, base_cp * risk_factor)
-
-            result.append(SingleStockResponse(
-                code=stock.code,
-                name=stock.name,
-                price=stock.price,
-                pe=stock.pe,
-                roe=stock.roe,
-                net_profit_growth=stock.net_profit_growth,
-                revenue_growth=stock.revenue_growth,
-                change_pct=stock.change_pct,
-                growth_score=round(stock.growth_score, 2),
-                value_score=round(stock.value_score, 2),
-                momentum_score=round(stock.momentum_score, 2),
-                quality_score=round(stock.quality_score, 2),
-                total_cp=round(stock.total_cp, 2),
-                risk_score=round(stock.risk_score, 2),
-                risk_level=stock.get_risk_level(),
-                peg=round(stock.peg, 2),
-                pb=stock.pb,
-                gross_margin=stock.gross_margin,
-                revenue=stock.revenue,
-                cashflow=stock.cashflow,
-                debt_ratio=stock.debt_ratio,
-                dividend_yield=stock.dividend_yield,
-                market_cap=stock.market_cap,
-                high=stock.high,
-                low=stock.low,
-                data_quality=stock.data_quality
-            ))
 
     return {"total": len(result), "data": result}
