@@ -302,5 +302,47 @@ class TestBatchStocksEndpoint:
         assert data["total"] == 2
 
 
+class TestRefreshEndpoint:
+    """测试数据刷新端点"""
+
+    def test_refresh_success(self):
+        """测试成功刷新数据"""
+        response = client.post("/api/refresh?limit=50")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert "message" in data
+        assert "只股票数据" in data["message"]
+
+    def test_refresh_with_default_limit(self):
+        """测试使用默认limit刷新"""
+        response = client.post("/api/refresh")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+
+    def test_refresh_limit_boundary_low(self):
+        """测试limit边界值（下限）"""
+        # limit < 10 should fail validation
+        response = client.post("/api/refresh?limit=5")
+        assert response.status_code == 422  # FastAPI validation error
+
+    def test_refresh_limit_boundary_high(self):
+        """测试limit边界值（上限）"""
+        # limit > 500 should fail validation
+        response = client.post("/api/refresh?limit=501")
+        assert response.status_code == 422  # FastAPI validation error
+
+    def test_refresh_limit_at_minimum(self):
+        """测试limit在最小有效值"""
+        response = client.post("/api/refresh?limit=10")
+        assert response.status_code == 200
+
+    def test_refresh_limit_at_maximum(self):
+        """测试limit在最大有效值"""
+        response = client.post("/api/refresh?limit=500")
+        assert response.status_code == 200
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
