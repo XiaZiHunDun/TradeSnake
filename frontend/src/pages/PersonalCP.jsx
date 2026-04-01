@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Plus, Trash2, Save, X, Zap, TrendingUp, TrendingDown, AlertTriangle, Sparkles, Bell, ArrowRightLeft, Activity, RefreshCw } from 'lucide-react'
 import { useHoldings, loadHoldings, saveHoldings } from '../hooks/useHoldings'
 import { useNotification } from '../hooks/useNotification'
@@ -18,6 +18,73 @@ function PersonalCP() {
   const [topStocks, setTopStocks] = useState([]) // 全市场TOP股票用于推荐
   const { addNotification } = useNotification()
 
+  // 新增/编辑表单
+  const [formData, setFormData] = useState({
+    code: '',
+    name: '',
+    quantity: 0,
+    costPrice: 0
+  })
+
+  // 加载持仓股票的战力数据（批量获取）
+  const loadStockData = useCallback(async () => {
+    if (holdings.length === 0) return
+
+    setLoading(true)
+    setError(null)
+    try {
+      // 批量获取所有持仓股票
+      const codes = holdings.map(h => h.code)
+      const res = await fetch('/api/stocks/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(codes)
+      })
+      if (!res.ok) {
+        throw new Error('请求失败')
+      }
+      const json = await res.json()
+      if (json.error) {
+        setError(json.error)
+        setStockData({})
+      } else {
+        const newData = {}
+        for (const stock of json.data || []) {
+          newData[stock.code] = stock
+        }
+        setStockData(newData)
+      }
+    } catch (e) {
+      console.error('Failed to load stock data:', e)
+      setError(e.message || '数据加载失败，请检查网络连接')
+    }
+    setLoading(false)
+  }, [holdings])
+
+  // 加载市场TOP股票用于推荐
+  const loadTopStocks = useCallback(async () => {
+    try {
+      const res = await fetch('/api/cp/top?limit=50')
+      if (!res.ok) {
+        throw new Error('请求失败')
+      }
+      const json = await res.json()
+      if (json.error) {
+        setTopStocks([])
+      } else {
+        setTopStocks(json.data || [])
+      }
+    } catch (e) {
+      console.error('Failed to load top stocks:', e)
+    }
+  }, [])
+
+  // 加载持仓股票的战力数据（批量获取）
+  useEffect(() => {
+    loadStockData()
+    loadTopStocks()
+  }, [loadStockData, loadTopStocks])
+
   // 检查是否需要加载初始数据
   useEffect(() => {
     const currentHoldings = loadHoldings()
@@ -32,20 +99,6 @@ function PersonalCP() {
     setShowInitPrompt(false)
     refresh()
   }
-
-  // 新增/编辑表单
-  const [formData, setFormData] = useState({
-    code: '',
-    name: '',
-    quantity: 0,
-    costPrice: 0
-  })
-
-  // 加载持仓股票的战力数据（批量获取）
-  useEffect(() => {
-    loadStockData()
-    loadTopStocks()
-  }, [holdings])
 
   // 计算调仓建议
   const getRebalanceSuggestions = () => {
@@ -126,58 +179,6 @@ function PersonalCP() {
   }
 
   const rebalanceSuggestions = getRebalanceSuggestions()
-
-  const loadStockData = async () => {
-    if (holdings.length === 0) return
-
-    setLoading(true)
-    setError(null)
-    try {
-      // 批量获取所有持仓股票
-      const codes = holdings.map(h => h.code)
-      const res = await fetch('/api/stocks/batch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(codes)
-      })
-      if (!res.ok) {
-        throw new Error('请求失败')
-      }
-      const json = await res.json()
-      if (json.error) {
-        setError(json.error)
-        setStockData({})
-      } else {
-        const newData = {}
-        for (const stock of json.data || []) {
-          newData[stock.code] = stock
-        }
-        setStockData(newData)
-      }
-    } catch (e) {
-      console.error('Failed to load stock data:', e)
-      setError(e.message || '数据加载失败，请检查网络连接')
-    }
-    setLoading(false)
-  }
-
-  // 加载市场TOP股票用于推荐
-  const loadTopStocks = async () => {
-    try {
-      const res = await fetch('/api/cp/top?limit=50')
-      if (!res.ok) {
-        throw new Error('请求失败')
-      }
-      const json = await res.json()
-      if (json.error) {
-        setTopStocks([])
-      } else {
-        setTopStocks(json.data || [])
-      }
-    } catch (e) {
-      console.error('Failed to load top stocks:', e)
-    }
-  }
 
   // 计算个人总战力
   const calculatePersonalCP = () => {
