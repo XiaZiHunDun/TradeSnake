@@ -62,13 +62,10 @@ function StockScreener({ data, onFilter }) {
     setCriteria(reset)
   }
 
-  const applyFilters = () => {
-    if (!onFilter || !data) {
-      onFilter?.(data)
-      return
-    }
-
-    const filtered = data.filter(stock => {
+  // 统一的过滤逻辑
+  const filterStocks = (stockList) => {
+    if (!stockList) return []
+    return stockList.filter(stock => {
       // 战力值
       if (stock.total_cp < criteria.totalCP[0] || stock.total_cp > criteria.totalCP[1]) return false
       // 成长分
@@ -97,29 +94,22 @@ function StockScreener({ data, onFilter }) {
 
       return true
     })
+  }
 
+  const applyFilters = () => {
+    if (!onFilter || !data) {
+      onFilter?.(data)
+      return
+    }
+
+    const filtered = filterStocks(data)
     onFilter?.(filtered)
     setIsOpen(false)
   }
 
   const getCurrentData = () => {
     if (!data) return []
-    return data.filter(stock => {
-      if (stock.total_cp < criteria.totalCP[0] || stock.total_cp > criteria.totalCP[1]) return false
-      if (stock.growth_score < criteria.growthScore[0] || stock.growth_score > criteria.growthScore[1]) return false
-      if (stock.value_score < criteria.valueScore[0] || stock.value_score > criteria.valueScore[1]) return false
-      if ((stock.quality_score || 0) < criteria.qualityScore[0] || (stock.quality_score || 0) > criteria.qualityScore[1]) return false
-      if (stock.momentum_score < criteria.momentumScore[0] || stock.momentum_score > criteria.momentumScore[1]) return false
-      if (stock.pe > 0 && (stock.pe < criteria.pe[0] || stock.pe > criteria.pe[1])) return false
-      if (stock.roe < criteria.roe[0] || stock.roe > criteria.roe[1]) return false
-      if (stock.net_profit_growth < criteria.netProfitGrowth[0] || stock.net_profit_growth > criteria.netProfitGrowth[1]) return false
-      if (stock.revenue_growth < criteria.revenueGrowth[0] || stock.revenue_growth > criteria.revenueGrowth[1]) return false
-      if (stock.change_pct < criteria.changePct[0] || stock.change_pct > criteria.changePct[1]) return false
-      if (stock.price < criteria.price[0] || stock.price > criteria.price[1]) return false
-      const stockDQ = stock.data_quality || 'low'
-      if (!dataQualityFilter.includes(stockDQ)) return false
-      return true
-    })
+    return filterStocks(data)
   }
 
   const previewCount = getCurrentData().length
