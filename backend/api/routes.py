@@ -2,6 +2,7 @@
 API路由 - TradeSnake API Routes
 """
 
+import threading
 from fastapi import APIRouter, HTTPException, Query, Request
 from datetime import datetime
 
@@ -16,6 +17,41 @@ router = APIRouter()
 # 全局战力引擎实例
 cp_engine = CPEngine()
 last_update_time = None
+
+# 线程锁，保护cp_engine的并发访问
+_cp_lock = threading.Lock()
+
+
+def _build_stock_response(stock):
+    """构建股票响应数据（避免重复代码）"""
+    return SingleStockResponse(
+        code=stock.code,
+        name=stock.name,
+        price=stock.price,
+        pe=stock.pe,
+        roe=stock.roe,
+        net_profit_growth=stock.net_profit_growth,
+        revenue_growth=stock.revenue_growth,
+        change_pct=stock.change_pct,
+        growth_score=round(stock.growth_score, 2),
+        value_score=round(stock.value_score, 2),
+        momentum_score=round(stock.momentum_score, 2),
+        quality_score=round(stock.quality_score, 2),
+        total_cp=round(stock.total_cp, 2),
+        risk_score=round(stock.risk_score, 2),
+        risk_level=stock.get_risk_level(),
+        peg=round(stock.peg, 2),
+        pb=stock.pb,
+        gross_margin=stock.gross_margin,
+        revenue=stock.revenue,
+        cashflow=stock.cashflow,
+        debt_ratio=stock.debt_ratio,
+        dividend_yield=stock.dividend_yield,
+        market_cap=stock.market_cap,
+        high=stock.high,
+        low=stock.low,
+        data_quality=stock.data_quality
+    )
 
 
 def refresh_cp_data(limit: int = 100, save_hist: bool = True):
@@ -33,50 +69,58 @@ def refresh_cp_data(limit: int = 100, save_hist: bool = True):
 
     print(f"  获取到 {len(stock_data)} 只股票数据")
 
-    # 创建战力对象
-    cp_engine.stocks.clear()
-    stock_dicts = []
-    for data in stock_data:
-        try:
-            stock = create_stock_from_raw(
-                code=data['code'],
-                name=data['name'],
-                price=data['price'],
-                pe=data['pe'],
-                roe=data['roe'],
-                net_profit_growth=data['net_profit_growth'],
-                revenue_growth=data['revenue_growth'],
-                change_pct=data['change_pct'],
-                pb=data.get('pb', 0),
-                gross_margin=data.get('gross_margin', 0),
-                revenue=data.get('revenue', 0),
-                cashflow=data.get('cashflow', 0),
-                debt_ratio=data.get('debt_ratio', 0),
-                volume=data.get('volume', 0),
-                amount=data.get('amount', 0),
-                dividend_yield=data.get('dividend_yield', 0),
-                market_cap=data.get('market_cap', 0),
-                high=data.get('high', 0),
-                low=data.get('low', 0),
-                data_quality=data.get('data_quality', 'low')
-            )
-            cp_engine.add_stock(stock)
-            stock_dicts.append(stock.to_dict())
-        except Exception as e:
-            print(f"  创建战力对象失败: {e}")
+    # 使用锁保护临界区
+    with _cp_lock:
+        # 创建战力对象
+        cp_engine.stocks.clear()
+        stock_dicts = []
+        stock_map = {}  # 用于后续映射
+        for data in stock_data:
+            try:
+                stock = create_stock_from_raw(
+                    code=data['code'],
+                    name=data['name'],
+                    price=data['price'],
+                    pe=data['pe'],
+                    roe=data['roe'],
+                    net_profit_growth=data['net_profit_growth'],
+                    revenue_growth=data['revenue_growth'],
+                    change_pct=data['change_pct'],
+                    pb=data.get('pb', 0),
+                    gross_margin=data.get('gross_margin', 0),
+                    revenue=data.get('revenue', 0),
+                    cashflow=data.get('cashflow', 0),
+                    debt_ratio=data.get('debt_ratio', 0),
+                    volume=data.get('volume', 0),
+                    amount=data.get('amount', 0),
+                    dividend_yield=data.get('dividend_yield', 0),
+                    market_cap=data.get('market_cap', 0),
+                    high=data.get('high', 0),
+                    low=data.get('low', 0),
+                    data_quality=data.get('data_quality', 'low')
+                )
+                cp_engine.add_stock(stock)
+                stock_dicts.append(stock.to_dict())
+                stock_map[stock.code] = stock  # 通过code映射
+            except Exception as e:
+                print(f"  创建战力对象失败: {e}")
 
-    # 计算战力
-    cp_engine.calculate_all()
+        # 计算战力
+        cp_engine.calculate_all()
 
-    # 保存历史记录
+        # 更新stock_dicts中的战力分数（使用code映射避免索引问题）
+        for stock_dict in stock_dicts:
+            code = stock_dict.get('code')
+            if code in stock_map:
+                s = stock_map[code]
+                stock_dict["total_cp"] = s.total_cp
+                stock_dict["growth_score"] = s.growth_score
+                stock_dict["value_score"] = s.value_score
+                stock_dict["momentum_score"] = s.momentum_score
+
+    # 保存历史记录（锁外执行，避免长时间占用锁）
     if save_hist:
         try:
-            # 更新stock_dicts中的战力分数
-            for i, s in enumerate(cp_engine.stocks):
-                stock_dicts[i]["total_cp"] = s.total_cp
-                stock_dicts[i]["growth_score"] = s.growth_score
-                stock_dicts[i]["value_score"] = s.value_score
-                stock_dicts[i]["momentum_score"] = s.momentum_score
             save_history(stock_dicts)
             print(f"  历史记录已保存")
         except Exception as e:
