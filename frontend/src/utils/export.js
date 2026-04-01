@@ -5,7 +5,7 @@
  */
 export function exportToCSV(data, filename = 'stocks_export') {
   if (!data || data.length === 0) {
-    alert('没有数据可导出')
+    console.warn('exportToCSV: No data to export')
     return
   }
 
@@ -66,7 +66,7 @@ export function exportToCSV(data, filename = 'stocks_export') {
  */
 export function exportToJSON(data, filename = 'stocks_export') {
   if (!data || data.length === 0) {
-    alert('没有数据可导出')
+    console.warn('exportToJSON: No data to export')
     return
   }
 
@@ -108,7 +108,7 @@ export function exportToJSON(data, filename = 'stocks_export') {
  */
 export function exportToExcel(data, filename = 'stocks_export') {
   if (!data || data.length === 0) {
-    alert('没有数据可导出')
+    console.warn('exportToExcel: No data to export')
     return
   }
 
@@ -172,7 +172,7 @@ export function exportToExcel(data, filename = 'stocks_export') {
  */
 export function exportHoldingsToCSV(holdings, stockDataMap, filename = 'holdings_export') {
   if (!holdings || holdings.length === 0) {
-    alert('没有持仓数据可导出')
+    console.warn('exportHoldingsToCSV: No holdings data to export')
     return
   }
 
@@ -226,7 +226,7 @@ export function exportHoldingsToCSV(holdings, stockDataMap, filename = 'holdings
  */
 export function exportWatchlistToFile(codes, filename = 'watchlist_export') {
   if (!codes || codes.length === 0) {
-    alert('没有自选股可导出')
+    console.warn('exportWatchlistToFile: No watchlist to export')
     return
   }
 
