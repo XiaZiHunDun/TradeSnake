@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Search, TrendingUp, TrendingDown } from 'lucide-react'
 import ReactECharts from 'echarts-for-react'
 import StockNews from '../components/StockNews'
@@ -10,6 +10,51 @@ function SingleStock() {
   const [error, setError] = useState(null)
   const [history, setHistory] = useState([])
   const [chartType, setChartType] = useState('cp') // 'cp' | 'price'
+
+  // 搜索股票
+  const handleSearch = useCallback(async (overrideCode) => {
+    const targetCode = overrideCode || code
+    if (!targetCode.trim()) return
+
+    setLoading(true)
+    setError(null)
+    setStock(null)
+    setHistory([])
+
+    try {
+      // 自动补全代码格式
+      let searchCode = targetCode.trim().toUpperCase()
+      if (!searchCode.startsWith('SH') && !searchCode.startsWith('SZ')) {
+        if (searchCode.startsWith('6')) {
+          searchCode = 'SH' + searchCode
+        } else {
+          searchCode = 'SZ' + searchCode
+        }
+      }
+
+      const res = await fetch(`/api/stock/${searchCode}`)
+      if (!res.ok) {
+        throw new Error('股票未找到')
+      }
+      const data = await res.json()
+      setStock(data)
+
+      // 获取历史数据
+      try {
+        const historyRes = await fetch(`/api/history/${searchCode}?days=7`)
+        if (historyRes.ok) {
+          const historyData = await historyRes.json()
+          setHistory(historyData.data || [])
+        }
+      } catch (e) {
+        console.error('Failed to fetch stock history:', e)
+      }
+    } catch (e) {
+      setError(e.message)
+    }
+
+    setLoading(false)
+  }, [code])
 
   // 检查快捷搜索
   useEffect(() => {
@@ -23,7 +68,7 @@ function SingleStock() {
     } catch (e) {
       console.error('Failed to load quick search code:', e)
     }
-  }, [])
+  }, [handleSearch])
 
   // 获取雷达图配置
   const getRadarOption = (stock) => {
@@ -68,50 +113,6 @@ function SingleStock() {
         }]
       }]
     }
-  }
-
-  const handleSearch = async (overrideCode) => {
-    const targetCode = overrideCode || code
-    if (!targetCode.trim()) return
-
-    setLoading(true)
-    setError(null)
-    setStock(null)
-    setHistory([])
-
-    try {
-      // 自动补全代码格式
-      let searchCode = targetCode.trim().toUpperCase()
-      if (!searchCode.startsWith('SH') && !searchCode.startsWith('SZ')) {
-        if (searchCode.startsWith('6')) {
-          searchCode = 'SH' + searchCode
-        } else {
-          searchCode = 'SZ' + searchCode
-        }
-      }
-
-      const res = await fetch(`/api/stock/${searchCode}`)
-      if (!res.ok) {
-        throw new Error('股票未找到')
-      }
-      const data = await res.json()
-      setStock(data)
-
-      // 获取历史数据
-      try {
-        const historyRes = await fetch(`/api/history/${searchCode}?days=7`)
-        if (historyRes.ok) {
-          const historyData = await historyRes.json()
-          setHistory(historyData.data || [])
-        }
-      } catch (e) {
-        console.error('Failed to fetch stock history:', e)
-      }
-    } catch (e) {
-      setError(e.message)
-    }
-
-    setLoading(false)
   }
 
   // 战力历史走势图配置
