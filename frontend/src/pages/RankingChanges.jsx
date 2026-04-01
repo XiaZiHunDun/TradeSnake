@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { TrendingUp, TrendingDown, Trophy, AlertTriangle, Star } from 'lucide-react'
 import { useWatchlist } from '../hooks/useWatchlist'
 
@@ -10,11 +10,7 @@ function RankingChanges() {
   const [days, setDays] = useState(30)
   const { toggle, isInWatchlist } = useWatchlist()
 
-  useEffect(() => {
-    fetchData()
-  }, [days])
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -46,7 +42,11 @@ function RankingChanges() {
       setError(e.message || '数据加载失败，请检查网络连接')
     }
     setLoading(false)
-  }
+  }, [days])
+
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
 
   const getCPColor = (cp) => {
     if (cp >= 70) return 'cp-high'
