@@ -438,6 +438,228 @@ class StockCP:
         else:
             return '较低'
 
+    def get_cp_explanation(self) -> dict:
+        """
+        获取战力分解说明 v16
+
+        展示为什么这只股票得到这个战力值，让用户理解每个因子的贡献
+
+        返回格式：
+        {
+            "code": "600519",
+            "name": "贵州茅台",
+            "total_cp": 95.5,
+            "factors": [
+                {"name": "成长分", "weight": "30%", "raw_score": 85, "norm_score": 28.5, "detail": "..."},
+                ...
+            ],
+            "risk": {...},
+            "summary": "..."
+        }
+        """
+        # 权重配置
+        weights = {
+            'growth': {'weight': 0.30, 'name': '成长分'},
+            'value': {'weight': 0.25, 'name': '价值分'},
+            'quality': {'weight': 0.20, 'name': '质量分'},
+            'momentum': {'weight': 0.15, 'name': '动量分'},
+        }
+
+        # 计算各因子的贡献
+        factors = []
+
+        # 成长分详情
+        net_g = max(0, min(300, self.net_profit_growth))
+        rev_g = max(-50, min(100, self.revenue_growth))
+        growth_raw = net_g * 0.6 + rev_g * 0.4
+        factors.append({
+            "name": "成长分",
+            "weight": "30%",
+            "raw_score": round(growth_raw, 1),
+            "contribution": round(self.growth_score * 0.30, 1),
+            "detail": f"净利润增长:{self.net_profit_growth:.1f}%(限制后:{net_g:.1f}%) × 0.6 + 营收增长:{self.revenue_growth:.1f}%(限制后:{rev_g:.1f}%) × 0.4"
+        })
+
+        # 价值分详情
+        base_roe = min(max(0, self.roe), 25)
+        pe_score = 0
+        pe_explain = ""
+        if self.pe > 0:
+            if 5 <= self.pe <= 20:
+                pe_score = 10
+                pe_explain = f"PE={self.pe:.1f}在合理区间[5,20]，+10分"
+            elif self.pe < 5:
+                pe_score = 5
+                pe_explain = f"PE={self.pe:.1f}偏低，可能有问题，+5分"
+            elif 20 < self.pe <= 30:
+                pe_score = 7
+                pe_explain = f"PE={self.pe:.1f}略高，+7分"
+            elif 30 < self.pe <= 50:
+                pe_score = 3
+                pe_explain = f"PE={self.pe:.1f}偏高，+3分"
+            elif self.pe > 50:
+                pe_score = -5
+                pe_explain = f"PE={self.pe:.1f}过高，-5分"
+            elif self.pe > 100:
+                pe_score = -10
+                pe_explain = f"PE={self.pe:.1f}极高，-10分"
+        else:
+            pe_explain = f"PE={self.pe:.1f}为负，不参与评分"
+
+        peg_bonus = 0
+        peg_explain = ""
+        if self.pe > 0 and self.net_profit_growth > 0:
+            peg = self.pe / self.net_profit_growth
+            if peg <= 0.5:
+                peg_bonus = 8
+                peg_explain = f"PEG={peg:.2f}<=0.5，成长性价比极高，+8分"
+            elif peg <= 1:
+                peg_bonus = 5
+                peg_explain = f"PEG={peg:.2f}<=1，成长性价比合理，+5分"
+            elif peg <= 2:
+                peg_bonus = 0
+                peg_explain = f"PEG={peg:.2f}<=2，成长性价比一般"
+            else:
+                peg_bonus = -5
+                peg_explain = f"PEG={peg:.2f}>2，成长性价比差，-5分"
+        elif self.net_profit_growth < 0:
+            peg_explain = f"负增长，-3分"
+
+        value_detail = f"ROE基础分:{base_roe:.1f} + PE健康度:{pe_score}分({pe_explain}) + PEG估值:{peg_bonus}分({peg_explain})"
+        factors.append({
+            "name": "价值分",
+            "weight": "25%",
+            "raw_score": round(self.value_score / 0.25, 1) if self.value_score > 0 else 0,
+            "contribution": round(self.value_score * 0.25, 1),
+            "detail": value_detail
+        })
+
+        # 质量分详情
+        cf_score = 0
+        cf_explain = ""
+        if self.cashflow > 0 and self.roe > 0:
+            cf_ratio = self.cashflow / (self.roe * 10 + 1)
+            if 0.5 <= cf_ratio <= 3:
+                cf_score = 15
+                cf_explain = f"现金流/ROE比={cf_ratio:.2f}在合理区间[0.5,3]，+15分"
+            elif cf_ratio > 3:
+                cf_score = 10
+                cf_explain = f"现金流/ROE比={cf_ratio:.2f}偏高，+10分"
+            else:
+                cf_score = 5
+                cf_explain = f"现金流/ROE比={cf_ratio:.2f}偏低，+5分"
+        elif self.cashflow <= 0 and self.roe > 0:
+            cf_score = -5
+            cf_explain = "有利润无现金流，问题，-5分"
+
+        gm_score = 0
+        gm_explain = ""
+        if self.gross_margin > 30:
+            gm_score = 10
+            gm_explain = f"毛利率={self.gross_margin:.1f}%>30%，护城河强，+10分"
+        elif self.gross_margin > 15:
+            gm_score = 6
+            gm_explain = f"毛利率={self.gross_margin:.1f}%>15%，有一定护城河，+6分"
+        elif self.gross_margin > 0:
+            gm_score = 3
+            gm_explain = f"毛利率={self.gross_margin:.1f}%>0%，护城河弱，+3分"
+        else:
+            gm_explain = f"毛利率={self.gross_margin:.1f}%为负，-5分"
+
+        debt_score = 0
+        debt_explain = ""
+        if self.debt_ratio > 80:
+            debt_score = -8
+            debt_explain = f"资产负债率={self.debt_ratio:.1f}%>80%，高负债风险，-8分"
+        elif self.debt_ratio > 60:
+            debt_score = -4
+            debt_explain = f"资产负债率={self.debt_ratio:.1f}%>60%，中等风险，-4分"
+        elif self.debt_ratio > 50:
+            debt_explain = f"资产负债率={self.debt_ratio:.1f}%在合理范围"
+        else:
+            debt_score = 3
+            debt_explain = f"资产负债率={self.debt_ratio:.1f}%<50%，低负债稳健，+3分"
+
+        quality_detail = f"现金流评分:{cf_score}分({cf_explain}) + 毛利率评分:{gm_score}分({gm_explain}) + 资产负债率评分:{debt_score}分({debt_explain})"
+        factors.append({
+            "name": "质量分",
+            "weight": "20%",
+            "raw_score": round(self.quality_score / 0.20, 1) if self.quality_score > 0 else 0,
+            "contribution": round(self.quality_score * 0.20, 1),
+            "detail": quality_detail
+        })
+
+        # 动量分详情
+        momentum_raw = max(-10, min(10, self.change_pct))
+        factors.append({
+            "name": "动量分",
+            "weight": "15%",
+            "raw_score": round(momentum_raw, 1),
+            "contribution": round(self.momentum_score * 0.15, 1),
+            "detail": f"当日涨跌幅:{self.change_pct:.2f}%，限制在[-10,10]后:{momentum_raw:.1f}"
+        })
+
+        # 风险详情
+        risk_items = []
+        if self.pe < 0:
+            risk_items.append("PE为负(亏损)")
+        elif self.pe > 100:
+            risk_items.append(f"PE极高({self.pe:.0f})")
+        elif self.pe > 50:
+            risk_items.append(f"PE偏高({self.pe:.0f})")
+
+        if self.roe < 0:
+            risk_items.append("ROE为负")
+        elif self.roe < 5:
+            risk_items.append(f"ROE偏低({self.roe:.1f}%)")
+
+        if self.net_profit_growth < -50:
+            risk_items.append(f"净利润暴跌({self.net_profit_growth:.1f}%)")
+        elif self.net_profit_growth < 0:
+            risk_items.append(f"净利润下降({self.net_profit_growth:.1f}%)")
+
+        if abs(self.change_pct) > 8:
+            risk_items.append(f"高波动({self.change_pct:.1f}%)")
+
+        # 生成总结
+        summary_parts = []
+        if self.growth_score > 70:
+            summary_parts.append("成长性优秀")
+        elif self.growth_score > 50:
+            summary_parts.append("成长性良好")
+
+        if self.value_score > 70:
+            summary_parts.append("价值被低估")
+        elif self.value_score > 50:
+            summary_parts.append("价值合理")
+
+        if self.quality_score > 70:
+            summary_parts.append("盈利质量高")
+        elif self.quality_score > 50:
+            summary_parts.append("盈利质量中等")
+
+        if self.risk_score < 30:
+            summary_parts.append("风险较低")
+        elif self.risk_score > 60:
+            summary_parts.append("风险较高")
+
+        summary = "，".join(summary_parts) if summary_parts else "综合表现一般"
+
+        return {
+            "code": self.code,
+            "name": self.name,
+            "total_cp": round(self.total_cp, 1),
+            "factors": factors,
+            "risk": {
+                "score": self.risk_score,
+                "level": self.get_risk_level(),
+                "items": risk_items,
+                "adjustment": f"× {1 - (self.risk_score / 100) * 0.10:.2f} (风险调整因子)"
+            },
+            "data_quality": self.data_quality,
+            "summary": f"{self.name}({self.code})战力{round(self.total_cp, 1)}分，{summary}。"
+        }
+
     def to_dict(self) -> dict:
         return {
             'code': self.code,

@@ -139,3 +139,51 @@ class CashOpportunityResponse(BaseModel):
     opportunity_cost: float
     equivalent_cp_loss: float
     hint: str
+
+
+class FactorDetail(BaseModel):
+    """战力因子详情"""
+    name: str
+    weight: str
+    raw_score: float
+    contribution: float
+    detail: str
+
+
+class RiskDetail(BaseModel):
+    """风险详情"""
+    score: float
+    level: str
+    items: list
+    adjustment: str
+
+
+class CPExplanationResponse(BaseModel):
+    """战力分解说明 v16"""
+    code: str
+    name: str
+    total_cp: float
+    factors: list
+    risk: RiskDetail
+    data_quality: str
+    summary: str
+
+
+class HoldingItem(BaseModel):
+    """持仓项"""
+    code: str
+    name: str
+    quantity: int
+    cost_price: float
+
+
+class HoldingsImportRequest(BaseModel):
+    """持仓导入请求"""
+    holdings: List[HoldingItem]
+
+
+class HoldingsExportResponse(BaseModel):
+    """持仓导出响应"""
+    holdings: List[HoldingItem]
+    total_count: int
+    export_time: str

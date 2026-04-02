@@ -8,7 +8,8 @@ from datetime import datetime
 
 from models.schemas import (
     CPListResponse, SingleStockResponse, StockCPData,
-    TradeDecisionResponse, CashOpportunityResponse, TradeCostDetail
+    TradeDecisionResponse, CashOpportunityResponse, TradeCostDetail,
+    CPExplanationResponse, HoldingItem, HoldingsImportRequest, HoldingsExportResponse
 )
 from core.cp_engine import (
     CPEngine, create_stock_from_raw,
@@ -786,4 +787,273 @@ async def get_cp_threshold(
         },
         "trade_cost_rate": round(TOTAL_TRADE_COST_RATE * 100, 3),
         "daily_cp_value": f"战力差1分 ≈ 年化收益1% ≈ 每日收益 {principal * 0.01 / 365:.0f} 元"
+    }
+
+
+# ============================================
+# 战力解释 API v16（因子透明化）
+# ============================================
+
+@router.get("/api/cp/explain/{code}")
+async def explain_stock_cp(
+    code: str,
+    force_refresh: bool = Query(default=False, description="是否强制刷新数据")
+):
+    """
+    获取股票战力分解说明 v16
+
+    解释这只股票的战力值是如何计算的，展示了每个因子的贡献：
+    - 成长分(30%): 净利润增长 + 营收增长
+    - 价值分(25%): ROE + PE健康度 + PEG估值
+    - 质量分(20%): 现金流 + 毛利率 + 资产负债率
+    - 动量分(15%): 当日涨跌幅
+
+    返回：
+    - 各因子的原始分、加权贡献、详细说明
+    - 风险评估详情
+    - 综合总结
+    """
+    # 获取股票
+    stock = cp_engine.get_by_code(code)
+
+    if not stock:
+        # 尝试强制刷新
+        if force_refresh:
+            success = await refresh_cp_data(limit=200)
+            stock = cp_engine.get_by_code(code)
+
+        if not stock:
+            raise HTTPException(status_code=404, detail=f"未找到股票 {code}")
+
+    # 返回战力分解
+    return stock.get_cp_explanation()
+
+
+# ============================================
+# 持仓管理 API v16（CSV导入/导出）
+# ============================================
+
+# 简单内存存储（生产环境应该用数据库）
+_holdings_storage: dict = {
+    "default": []  # 默认持仓列表
+}
+
+
+@router.get("/api/holdings/export")
+async def export_holdings():
+    """
+    导出持仓列表 v16
+
+    返回当前持仓列表，可用于CSV格式导出
+
+    返回：
+    - holdings: 持仓列表
+    - total_count: 持仓数量
+    - export_time: 导出时间
+    """
+    holdings = _holdings_storage.get("default", [])
+
+    return HoldingsExportResponse(
+        holdings=[HoldingItem(**h) for h in holdings],
+        total_count=len(holdings),
+        export_time=datetime.now().isoformat()
+    )
+
+
+@router.post("/api/holdings/import")
+async def import_holdings(request: HoldingsImportRequest):
+    """
+    导入持仓列表 v16
+
+    支持批量导入持仓数据，替换现有的持仓列表
+
+    请求格式：
+    {
+        "holdings": [
+            {"code": "600519", "name": "贵州茅台", "quantity": 100, "cost_price": 1800.0},
+            ...
+        ]
+    }
+
+    返回：
+    - imported_count: 导入数量
+    - holdings: 导入后的完整持仓列表
+    """
+    global _holdings_storage
+
+    # 验证数据
+    validated_holdings = []
+    errors = []
+
+    for i, h in enumerate(request.holdings):
+        try:
+            # 验证股票代码格式
+            code = str(h.code).strip()
+            if not code:
+                errors.append(f"第{i+1}行：股票代码不能为空")
+                continue
+
+            # 验证数量
+            if h.quantity <= 0:
+                errors.append(f"第{i+1}行({h.name})：持股数量必须大于0")
+                continue
+
+            # 验证成本价
+            if h.cost_price < 0:
+                errors.append(f"第{i+1}行({h.name})：成本价不能为负")
+                continue
+
+            validated_holdings.append({
+                "code": code,
+                "name": h.name or code,
+                "quantity": h.quantity,
+                "cost_price": h.cost_price
+            })
+        except Exception as e:
+            errors.append(f"第{i+1}行：解析错误 - {str(e)}")
+
+    # 保存
+    _holdings_storage["default"] = validated_holdings
+
+    return {
+        "imported_count": len(validated_holdings),
+        "total_count": len(validated_holdings),
+        "errors": errors if errors else None,
+        "message": f"成功导入 {len(validated_holdings)} 只持仓" if not errors else f"导入完成，但有 {len(errors)} 个错误"
+    }
+
+
+@router.get("/api/holdings")
+async def get_holdings():
+    """
+    获取持仓列表 v16
+
+    返回当前管理的持仓列表
+    """
+    holdings = _holdings_storage.get("default", [])
+    return {
+        "holdings": holdings,
+        "total_count": len(holdings)
+    }
+
+
+@router.post("/api/holdings/add")
+async def add_holding(holding: HoldingItem):
+    """
+    添加单只持仓 v16
+    """
+    global _holdings_storage
+
+    holdings = _holdings_storage.get("default", [])
+
+    # 检查是否已存在
+    for h in holdings:
+        if h["code"] == holding.code:
+            raise HTTPException(status_code=400, detail=f"股票 {holding.code} 已存在，请使用更新接口")
+
+    holdings.append({
+        "code": holding.code,
+        "name": holding.name or holding.code,
+        "quantity": holding.quantity,
+        "cost_price": holding.cost_price
+    })
+
+    return {
+        "message": f"成功添加 {holding.name or holding.code}",
+        "total_count": len(holdings)
+    }
+
+
+@router.delete("/api/holdings/{code}")
+async def delete_holding(code: str):
+    """
+    删除持仓 v16
+    """
+    global _holdings_storage
+
+    holdings = _holdings_storage.get("default", [])
+
+    original_count = len(holdings)
+    holdings = [h for h in holdings if h["code"] != code]
+
+    if len(holdings) == original_count:
+        raise HTTPException(status_code=404, detail=f"未找到股票 {code}")
+
+    _holdings_storage["default"] = holdings
+
+    return {
+        "message": f"成功删除 {code}",
+        "total_count": len(holdings)
+    }
+
+
+@router.get("/api/holdings/analysis")
+async def analyze_holdings():
+    """
+    持仓战力分析 v16
+
+    分析当前持仓的战力贡献、风险暴露、置换建议等
+    """
+    holdings = _holdings_storage.get("default", [])
+
+    if not holdings:
+        return {
+            "message": "暂无持仓",
+            "total_cp": 0,
+            "holdings_analysis": []
+        }
+
+    analysis = []
+    total_cp = 0
+    total_value = 0
+
+    for h in holdings:
+        stock = cp_engine.get_by_code(h["code"])
+        if stock:
+            value = h["quantity"] * stock.price
+            cp_contribution = stock.total_cp * h["quantity"]
+            total_cp += cp_contribution
+            total_value += value
+
+            analysis.append({
+                "code": h["code"],
+                "name": h["name"],
+                "quantity": h["quantity"],
+                "cost_price": h["cost_price"],
+                "current_price": stock.price,
+                "cost_value": h["cost_price"] * h["quantity"],
+                "current_value": value,
+                "profit_pct": ((stock.price - h["cost_price"]) / h["cost_price"] * 100) if h["cost_price"] > 0 else 0,
+                "cp": round(stock.total_cp, 1),
+                "cp_contribution": round(cp_contribution, 1),
+                "risk_level": stock.get_risk_level(),
+                "risk_score": stock.risk_score
+            })
+        else:
+            analysis.append({
+                "code": h["code"],
+                "name": h["name"],
+                "quantity": h["quantity"],
+                "cost_price": h["cost_price"],
+                "current_price": None,
+                "cost_value": h["cost_price"] * h["quantity"],
+                "current_value": None,
+                "profit_pct": None,
+                "cp": None,
+                "cp_contribution": None,
+                "risk_level": "未知",
+                "risk_score": None,
+                "error": "股票数据未找到"
+            })
+
+    # 按战力排序
+    analysis.sort(key=lambda x: x.get("cp") or 0, reverse=True)
+
+    return {
+        "total_cp": round(total_cp, 1),
+        "total_value": round(total_value, 2),
+        "holdings_count": len(holdings),
+        "holdings_analysis": analysis,
+        "avg_cp": round(total_cp / len(holdings), 1) if holdings else 0,
+        "message": f"持仓 {len(holdings)} 只，总战力 {round(total_cp, 1)}，总市值 {round(total_value/10000, 2)}万元"
     }
