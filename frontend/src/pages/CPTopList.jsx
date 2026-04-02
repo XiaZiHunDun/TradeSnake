@@ -14,6 +14,7 @@ function CPTopList() {
   const [sortOrder, setSortOrder] = useState('desc') // desc, asc
   const [filterMode, setFilterMode] = useState('all') // all, watchlist
   const [cpRange, setCpRange] = useState('all') // all, high, mid, low
+  const [boardFilter, setBoardFilter] = useState('main') // main, all, gem, star
   const [autoRefresh, setAutoRefresh] = useState(true) // 自动刷新开关
   const { watchlist, toggle, isInWatchlist } = useWatchlist()
   const [compareList, setCompareList] = useState([]) // 最多3只股票
@@ -238,14 +239,15 @@ function CPTopList() {
     }, 5 * 60 * 1000)
 
     return () => clearInterval(interval)
-  }, [autoRefresh])
+  }, [autoRefresh, boardFilter])
 
   const fetchData = async () => {
     setLoading(true)
     setError(null)
     try {
+      const boardParam = boardFilter === 'all' ? '' : `&board=${boardFilter}`
       const [topRes, healthRes] = await Promise.all([
-        fetch('/api/cp/top?limit=200'),
+        fetch(`/api/cp/top?limit=200${boardParam}`),
         fetch('/api/health')
       ])
 
@@ -461,6 +463,27 @@ function CPTopList() {
               }`}
             >
               低战力
+            </button>
+          </div>
+          {/* 板块筛选 - 新手友好 */}
+          <div className="flex items-center gap-1 bg-deep-night rounded-lg p-1">
+            <button
+              onClick={() => setBoardFilter('main')}
+              className={`px-3 py-1 rounded text-sm transition-colors flex items-center gap-1 ${
+                boardFilter === 'main' ? 'bg-green-500/20 text-green-500' : 'text-gray-400 hover:text-white'
+              }`}
+              title="新手可交易"
+            >
+              <Shield className="w-3 h-3" />
+              主板
+            </button>
+            <button
+              onClick={() => setBoardFilter('all')}
+              className={`px-3 py-1 rounded text-sm transition-colors ${
+                boardFilter === 'all' ? 'bg-accent-blue/20 text-accent-blue' : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              全部
             </button>
           </div>
         </div>
@@ -701,7 +724,25 @@ function CPTopList() {
                 </td>
                 <td className="px-4 py-3">
                   <div>
-                    <p className="font-bold text-white">{stock.name}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-bold text-white">{stock.name}</p>
+                      {/* 板块标签 */}
+                      {stock.board_type !== 'main' && (
+                        <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                          stock.board_type === 'gem' ? 'bg-orange-500/20 text-orange-400' :
+                          stock.board_type === 'star' ? 'bg-purple-500/20 text-purple-400' :
+                          'bg-blue-500/20 text-blue-400'
+                        }`}>
+                          {stock.board_name}
+                        </span>
+                      )}
+                      {/* 新手不可交易提示 */}
+                      {!stock.can_trade_newbie && (
+                        <span className="px-1.5 py-0.5 rounded text-xs bg-gray-500/20 text-gray-400" title={stock.trade_requirement}>
+                          限
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-gray-500">{stock.code}</p>
                   </div>
                 </td>

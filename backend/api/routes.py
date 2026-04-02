@@ -90,7 +90,12 @@ def _build_stock_cp_data(stock):
         market_cap=stock.market_cap,
         high=stock.high,
         low=stock.low,
-        data_quality=stock.data_quality
+        data_quality=stock.data_quality,
+        # 板块信息
+        board_type=stock.board_type,
+        board_name=stock.board_name,
+        can_trade_newbie=stock.can_trade_newbie,
+        trade_requirement=stock.trade_requirement
     )
 
 
@@ -202,9 +207,16 @@ async def health_check():
 @router.get("/api/cp/top")
 async def get_cp_top(
     limit: int = Query(default=50, ge=1, le=200),
-    force_refresh: bool = Query(default=False)
+    force_refresh: bool = Query(default=False),
+    board: str = Query(default=None, description="板块过滤: main=主板, gem=创业板, star=科创板, 不填=全部")
 ):
-    """获取战力榜TOP N"""
+    """获取战力榜TOP N
+
+    Args:
+        limit: 返回数量
+        force_refresh: 强制刷新数据
+        board: 板块过滤。main=主板(新手可交易), gem=创业板, star=科创板, 不填=全部
+    """
     global last_update_time
 
     # 如果数据为空或强制刷新，则刷新数据
@@ -222,8 +234,8 @@ async def get_cp_top(
     if not cp_engine.stocks:
         return {"error": "暂无数据", "total": 0, "data": [], "updated_at": None}
 
-    # 获取TOP N
-    top_stocks = cp_engine.get_top(n=limit)
+    # 获取TOP N（支持板块过滤）
+    top_stocks = cp_engine.get_top(n=limit, board=board)
 
     data = []
     for s in top_stocks:
@@ -237,8 +249,16 @@ async def get_cp_top(
 
 
 @router.get("/api/cp/bottom")
-async def get_cp_bottom(limit: int = Query(default=10, ge=1, le=50)):
-    """获取战力榜BOTTOM N（避雷区）"""
+async def get_cp_bottom(
+    limit: int = Query(default=10, ge=1, le=50),
+    board: str = Query(default=None, description="板块过滤: main=主板, gem=创业板, star=科创板, 不填=全部")
+):
+    """获取战力榜BOTTOM N（避雷区）
+
+    Args:
+        limit: 返回数量
+        board: 板块过滤。main=主板(新手可交易), gem=创业板, star=科创板, 不填=全部
+    """
     global last_update_time
 
     if not cp_engine.stocks:
@@ -246,7 +266,7 @@ async def get_cp_bottom(limit: int = Query(default=10, ge=1, le=50)):
         if not success and not cp_engine.stocks:
             return {"error": "数据刷新失败，请稍后重试", "total": 0, "data": [], "updated_at": None}
 
-    bottom_stocks = cp_engine.get_bottom(n=limit)
+    bottom_stocks = cp_engine.get_bottom(n=limit, board=board)
 
     data = []
     for s in bottom_stocks:

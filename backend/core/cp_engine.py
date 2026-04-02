@@ -278,6 +278,47 @@ class StockCP:
     def __post_init__(self):
         self.calculate_scores()
 
+    @property
+    def board_type(self) -> str:
+        """根据代码判断板块类型"""
+        code_clean = self.code.lower().replace('sz', '').replace('sh', '')
+        if code_clean.startswith('688'):
+            return 'star'  # 科创板
+        elif code_clean.startswith('300'):
+            return 'gem'   # 创业板
+        elif code_clean.startswith('4') or code_clean.startswith('8'):
+            return 'bge'   # 北交所
+        else:
+            return 'main'  # 主板
+
+    @property
+    def board_name(self) -> str:
+        """获取板块显示名称"""
+        names = {
+            'main': '主板',
+            'gem': '创业板',
+            'star': '科创板',
+            'bge': '北交所'
+        }
+        return names.get(self.board_type, '主板')
+
+    @property
+    def can_trade_newbie(self) -> bool:
+        """新手是否可以交易"""
+        return self.board_type == 'main'
+
+    @property
+    def trade_requirement(self) -> str:
+        """交易权限要求"""
+        if self.can_trade_newbie:
+            return "新手可交易"
+        requirements = {
+            'gem': '需2年交易经验',
+            'star': '需50万资金门槛',
+            'bge': '需开通北交所权限'
+        }
+        return requirements.get(self.board_type, '')
+
     def calculate_scores(self):
         """计算各因子原始分
 
@@ -687,7 +728,12 @@ class StockCP:
             'market_cap': self.market_cap,
             'high': self.high,
             'low': self.low,
-            'data_quality': self.data_quality
+            'data_quality': self.data_quality,
+            # 板块信息
+            'board_type': self.board_type,
+            'board_name': self.board_name,
+            'can_trade_newbie': self.can_trade_newbie,
+            'trade_requirement': self.trade_requirement
         }
 
 
@@ -758,14 +804,36 @@ class CPEngine:
 
         return self.stocks
 
-    def get_top(self, n: int = 50) -> List[StockCP]:
-        """获取战力榜TOP N"""
-        sorted_stocks = sorted(self.stocks, key=lambda s: s.total_cp, reverse=True)
+    def get_top(self, n: int = 50, board: str = None) -> List[StockCP]:
+        """获取战力榜TOP N
+
+        Args:
+            n: 返回数量
+            board: 板块过滤，None表示全部，'main'表示主板，'all'表示全部（包含创业板科创板）
+        """
+        stocks = self.stocks
+        # 板块过滤
+        if board == 'main':
+            stocks = [s for s in stocks if s.can_trade_newbie]
+        elif board is not None and board != 'all':
+            stocks = [s for s in stocks if s.board_type == board]
+
+        sorted_stocks = sorted(stocks, key=lambda s: s.total_cp, reverse=True)
         return sorted_stocks[:n]
 
-    def get_bottom(self, n: int = 10) -> List[StockCP]:
-        """获取战力榜BOTTOM N（避雷区）"""
-        sorted_stocks = sorted(self.stocks, key=lambda s: s.total_cp, reverse=True)
+    def get_bottom(self, n: int = 10, board: str = None) -> List[StockCP]:
+        """获取战力榜BOTTOM N（避雷区）
+
+        Args:
+            n: 返回数量
+            board: 板块过滤，None表示全部，'main'表示主板
+        """
+        stocks = self.stocks
+        # 板块过滤
+        if board == 'main':
+            stocks = [s for s in stocks if s.can_trade_newbie]
+
+        sorted_stocks = sorted(stocks, key=lambda s: s.total_cp, reverse=True)
         return sorted_stocks[-n:]
 
     def get_by_code(self, code: str) -> Optional[StockCP]:

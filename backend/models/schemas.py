@@ -35,6 +35,11 @@ class StockCPData(BaseModel):
     high: float = 0  # 最高价
     low: float = 0  # 最低价
     data_quality: str = 'low'  # 数据质量: high/medium/low
+    # 板块信息
+    board_type: str = 'main'  # 板块类型: main/gem/star/bge
+    board_name: str = '主板'  # 板块显示名称
+    can_trade_newbie: bool = True  # 新手是否可以交易
+    trade_requirement: str = '新手可交易'  # 交易权限要求
 
 
 class CPListResponse(BaseModel):
@@ -74,6 +79,11 @@ class SingleStockResponse(BaseModel):
     high: float = 0  # 最高价
     low: float = 0  # 最低价
     data_quality: str = 'low'  # 数据质量: high/medium/low
+    # 板块信息
+    board_type: str = 'main'  # 板块类型: main/gem/star/bge
+    board_name: str = '主板'  # 板块显示名称
+    can_trade_newbie: bool = True  # 新手是否可以交易
+    trade_requirement: str = '新手可交易'  # 交易权限要求
 
 
 class Holding(BaseModel):
