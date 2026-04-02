@@ -16,6 +16,7 @@ from core.cp_engine import (
     CashCP, TradeDecision, TOTAL_TRADE_COST_RATE, TRADE_COST
 )
 from core.history import save_history, get_cp_changes, get_stock_history, get_historical_rankings, get_ranking_changes
+from core.database import get_db
 from data.fetcher import get_stock_data_api, get_single_stock_data
 from api.limits import limiter
 
@@ -161,9 +162,18 @@ async def refresh_cp_data(limit: int = 100, save_hist: bool = True):
     if save_hist:
         try:
             save_history(stock_dicts)
-            print(f"  历史记录已保存")
+            print(f"  历史记录已保存(JSON)")
         except Exception as e:
             print(f"  历史记录保存失败: {e}")
+
+        # 同时保存到SQLite（v17新增）
+        try:
+            db = get_db()
+            db.batch_upsert_stocks(stock_dicts)
+            db.record_cp_history(stock_dicts)
+            print(f"  SQLite已更新")
+        except Exception as e:
+            print(f"  SQLite保存失败: {e}")
 
     last_update_time = datetime.now()
     print(f"  战力计算完成，更新时间: {last_update_time}")
