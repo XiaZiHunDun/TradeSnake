@@ -57,13 +57,15 @@ class BacktestEngine:
     def get_stock_price_at_date(self, code: str, date: str) -> Optional[float]:
         """获取指定日期之后的第一个交易日价格（避免前视偏差）"""
         cursor = self.db.conn.cursor()
-        # 从SQLite获取当日价格
+        # 优先从price_history表获取历史价格
         cursor.execute("""
-            SELECT price FROM stocks WHERE code = ?
-        """, (code,))
+            SELECT close FROM price_history
+            WHERE code = ? AND date <= ?
+            ORDER BY date DESC LIMIT 1
+        """, (code, date))
         row = cursor.fetchone()
         if row:
-            return row['price']
+            return row['close']
         return None
 
     def calculate_simple_backtest(
