@@ -1245,3 +1245,91 @@ async def get_holdings_alerts():
         "message": "持仓预警功能需要持仓管理模块支持"
     }
 
+
+# ==================== 回测API (v17.4) ====================
+
+from core.backtest import get_backtest_engine, BACKTEST_DISCLAIMER
+
+
+@router.get("/api/backtest/simple")
+async def simple_backtest(
+    start_date: str = Query(default="2025-01-01", description="回测开始日期"),
+    end_date: str = Query(default="2025-12-31", description="回测结束日期"),
+    holding_days: int = Query(default=30, ge=7, le=365, description="持有天数"),
+    top_n: int = Query(default=10, ge=5, le=50, description="持有TOP N股票")
+):
+    """
+    简单持有回测
+
+    策略：持有战力榜TOP N股票，定期调仓
+    """
+    engine = get_backtest_engine()
+    result = engine.calculate_simple_backtest(
+        start_date=start_date,
+        end_date=end_date,
+        holding_days=holding_days,
+        top_n=top_n
+    )
+
+    if "error" in result:
+        return result
+
+    return {
+        **result,
+        "warning": "回测结果仅供参考，不构成投资建议"
+    }
+
+
+@router.get("/api/backtest/compare")
+async def compare_backtest(
+    start_date: str = Query(default="2025-01-01", description="回测开始日期"),
+    end_date: str = Query(default="2025-12-31", description="回测结束日期"),
+    holding_days: int = Query(default=30, ge=7, le=365, description="持有天数")
+):
+    """
+    对比回测
+
+    对比不同TOP N阈值的收益表现
+    """
+    engine = get_backtest_engine()
+    result = engine.calculate_compare_backtest(
+        start_date=start_date,
+        end_date=end_date,
+        holding_days=holding_days
+    )
+
+    if "error" in result:
+        return result
+
+    return {
+        **result,
+        "warning": "回测结果仅供参考，不构成投资建议"
+    }
+
+
+@router.get("/api/backtest/benchmark")
+async def benchmark_backtest(
+    start_date: str = Query(default="2025-01-01", description="回测开始日期"),
+    end_date: str = Query(default="2025-12-31", description="回测结束日期"),
+    benchmark: str = Query(default="hs300", description="基准指数: hs300/zz500/equal_weight")
+):
+    """
+    基准对比回测
+
+    对比策略收益与基准指数
+    """
+    engine = get_backtest_engine()
+    result = engine.calculate_benchmark_backtest(
+        start_date=start_date,
+        end_date=end_date,
+        benchmark=benchmark
+    )
+
+    if "error" in result:
+        return result
+
+    return {
+        **result,
+        "warning": "回测结果仅供参考，不构成投资建议"
+    }
+
