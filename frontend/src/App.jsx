@@ -18,6 +18,7 @@ const Recommend = lazy(() => import('./pages/Recommend'))
 const PortfolioSimulator = lazy(() => import('./pages/PortfolioSimulator'))
 const RankingChanges = lazy(() => import('./pages/RankingChanges'))
 const SectorAnalysis = lazy(() => import('./pages/SectorAnalysis'))
+const Backtest = lazy(() => import('./pages/Backtest'))
 
 // 页面加载骨架
 function PageSkeleton() {
@@ -35,7 +36,7 @@ function PageSkeleton() {
 
 function App() {
   const [refreshKey, setRefreshKey] = useState(0)
-  const [currentPage, setCurrentPage] = useState('toplist') // 'toplist' | 'search' | 'personal' | 'recommend' | 'simulator' | 'rankings' | 'sector'
+  const [currentPage, setCurrentPage] = useState('toplist') // 'toplist' | 'search' | 'personal' | 'recommend' | 'simulator' | 'rankings' | 'sector' | 'backtest'
   const [showSettings, setShowSettings] = useState(false)
   const [showEducation, setShowEducation] = useState(false) // 战力学堂
   const [showDataSource, setShowDataSource] = useState(false) // 数据说明
@@ -55,6 +56,7 @@ function App() {
         case '5': setCurrentPage('simulator'); break
         case '6': setCurrentPage('rankings'); break
         case '7': setCurrentPage('sector'); break
+        case '8': setCurrentPage('backtest'); break
         case 'r':
         case 'R':
           handleRefresh()
@@ -125,6 +127,9 @@ function App() {
               )}
               {currentPage === 'sector' && (
                 <SectorAnalysis />
+              )}
+              {currentPage === 'backtest' && (
+                <Backtest />
               )}
             </Suspense>
           </ErrorBoundary>

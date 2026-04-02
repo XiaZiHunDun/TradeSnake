@@ -192,6 +192,17 @@ function Header({ onRefresh, currentPage, onNavigate, onOpenSettings, onOpenEduc
               <BarChart3 className="w-4 h-4" />
               行业分析
             </button>
+            <button
+              onClick={() => onNavigate('backtest')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                currentPage === 'backtest'
+                  ? 'bg-accent-blue/20 text-accent-blue'
+                  : 'text-gray-400 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <Calculator className="w-4 h-4" />
+              回测
+            </button>
           </nav>
 
           {/* 全局快捷搜索 */}
