@@ -39,14 +39,31 @@ function NotificationCenter({ isOpen, onClose }) {
       case NOTIFICATION_TYPES.PRICE_ALERT:
         return <TrendingUp className="w-4 h-4 text-red-500" />
       case NOTIFICATION_TYPES.CP_DROP:
+      case 'cp_drop':
         return <TrendingDown className="w-4 h-4 text-red-500" />
+      case 'cp_drop_danger':
+        return <TrendingDown className="w-4 h-4 text-red-700" />
+      case 'cp_trend_drop':
+        return <TrendingDown className="w-4 h-4 text-orange-500" />
       case NOTIFICATION_TYPES.CP_RISE:
+      case 'new_opportunity':
         return <TrendingUp className="w-4 h-4 text-green-500" />
-      case NOTIFICATION_TYPES.NEW_TOP10:
+      case 'swap_signal':
         return <Star className="w-4 h-4 text-yellow-500" />
+      case 'risk_level_up':
+        return <AlertCircle className="w-4 h-4 text-orange-500" />
       default:
         return <AlertCircle className="w-4 h-4 text-blue-500" />
     }
+  }
+
+  // 获取通知级别颜色
+  const getLevelColor = (notification) => {
+    // 优先使用data中的level
+    const level = notification.data?.level
+    if (level === 'danger') return 'border-l-red-500'
+    if (level === 'warning') return 'border-l-yellow-500'
+    return 'border-l-blue-500'
   }
 
   const formatTime = (isoString) => {
@@ -137,24 +154,40 @@ function NotificationCenter({ isOpen, onClose }) {
       )}
 
       {/* 操作栏 */}
-      {notifications.length > 0 && (
-        <div className="px-4 py-2 border-b border-border-dark flex items-center justify-between bg-deep-night/30">
-          <button
-            onClick={markAllAsRead}
-            className="flex items-center gap-1 text-xs text-gray-400 hover:text-white transition-colors"
-          >
-            <CheckCheck className="w-3 h-3" />
-            全部已读
-          </button>
-          <button
-            onClick={clearAll}
-            className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-400 transition-colors"
-          >
-            <Trash2 className="w-3 h-3" />
-            清空
-          </button>
-        </div>
-      )}
+      <div className="px-4 py-2 border-b border-border-dark flex items-center justify-between bg-deep-night/30">
+        <button
+          onClick={async () => {
+            try {
+              await fetch('/api/alerts/check')
+              window.location.reload()
+            } catch (e) {
+              console.error('Failed to check alerts:', e)
+            }
+          }}
+          className="flex items-center gap-1 text-xs text-accent-blue hover:text-white transition-colors"
+        >
+          <Bell className="w-3 h-3" />
+          检查预警
+        </button>
+        {notifications.length > 0 && (
+          <>
+            <button
+              onClick={markAllAsRead}
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-white transition-colors"
+            >
+              <CheckCheck className="w-3 h-3" />
+              全部已读
+            </button>
+            <button
+              onClick={clearAll}
+              className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-400 transition-colors"
+            >
+              <Trash2 className="w-3 h-3" />
+              清空
+            </button>
+          </>
+        )}
+      </div>
 
       {/* 通知列表 */}
       <div className="max-h-80 overflow-y-auto">
@@ -167,7 +200,7 @@ function NotificationCenter({ isOpen, onClose }) {
           notifications.map((notification) => (
             <div
               key={notification.id}
-              className={`px-4 py-3 border-b border-border-dark/50 hover:bg-white/5 transition-colors ${
+              className={`px-4 py-3 border-b border-border-dark/50 hover:bg-white/5 transition-colors border-l-2 ${getLevelColor(notification)} ${
                 notification.status === 'unread' ? 'bg-accent-blue/5' : ''
               }`}
             >

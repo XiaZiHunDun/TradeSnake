@@ -2,12 +2,15 @@ import { createContext, useContext, useState, useEffect, useCallback } from 'rea
 
 const NotificationContext = createContext(null)
 
-// 通知类型
+// 通知类型（与后端alert_type对应）
 const NOTIFICATION_TYPES = {
   PRICE_ALERT: 'price_alert',
   CP_DROP: 'cp_drop',
-  CP_RISE: 'cp_rise',
-  NEW_TOP10: 'new_top10',
+  CP_DROP_DANGER: 'cp_drop_danger',
+  CP_TREND_DROP: 'cp_trend_drop',
+  RISK_LEVEL_UP: 'risk_level_up',
+  SWAP_SIGNAL: 'swap_signal',
+  NEW_OPPORTUNITY: 'new_opportunity',
   SYSTEM: 'system'
 }
 
@@ -18,22 +21,90 @@ const NOTIFICATION_STATUS = {
   DISMISSED: 'dismissed'
 }
 
+const API_BASE = ''
+
 export function NotificationProvider({ children }) {
   const [notifications, setNotifications] = useState([])
   const [settings, setSettings] = useState({
     enabled: true,
-    priceAlertThreshold: 5, // 涨跌幅超过5%
-    cpAlertThreshold: 10,  // CP变化超过10
-    soundEnabled: true
+    priceAlertThreshold: 5,
+    cpAlertThreshold: 10,
+    soundEnabled: true,
+    alertConfig: {}
   })
 
-  // 从localStorage加载通知
+  // 从API获取预警列表
+  const fetchAlerts = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/alerts?limit=100`)
+      if (res.ok) {
+        const data = await res.json()
+        const apiAlerts = data.alerts || []
+        const converted = apiAlerts.map(alert => ({
+          id: alert.id,
+          type: alert.type || NOTIFICATION_TYPES.SYSTEM,
+          title: alert.title || getDefaultTitle(alert.type),
+          message: alert.message || '',
+          data: {
+            code: alert.code,
+            name: alert.name,
+            level: alert.level,
+            cp_before: alert.cp_before,
+            cp_after: alert.cp_after
+          },
+          status: alert.is_read ? NOTIFICATION_STATUS.READ : NOTIFICATION_STATUS.UNREAD,
+          createdAt: alert.created_at || new Date().toISOString(),
+          expires_at: alert.expires_at
+        }))
+        setNotifications(prev => mergeAndSort(prev, converted))
+      }
+    } catch (e) {
+      console.error('Failed to fetch alerts:', e)
+    }
+  }, [])
+
+  // 合并并排序通知
+  const mergeAndSort = (local, api) => {
+    const merged = [...api]
+    local.forEach(n => {
+      if (!n.id || String(n.id).length > 13) {
+        const exists = merged.find(m => m.id === n.id)
+        if (!exists) merged.push(n)
+      }
+    })
+    return merged.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+  }
+
+  const getDefaultTitle = (type) => {
+    const titles = {
+      'cp_drop': '战力下降预警',
+      'cp_drop_danger': '战力大幅下降',
+      'cp_trend_drop': '连续下跌预警',
+      'risk_level_up': '风险等级变化',
+      'swap_signal': '换股信号',
+      'new_opportunity': '新股机会',
+      'system': '系统通知'
+    }
+    return titles[type] || '预警通知'
+  }
+
+  // 初始化
+  useEffect(() => {
+    fetchAlerts()
+    const interval = setInterval(fetchAlerts, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [fetchAlerts])
+
+  // 从localStorage加载本地通知
   useEffect(() => {
     const saved = localStorage.getItem('notifications')
     if (saved) {
       try {
         const parsed = JSON.parse(saved)
-        setNotifications(parsed)
+        const localOnly = parsed.filter(n => !n.id || String(n.id).length > 13)
+        if (localOnly.length > 0) {
+          setNotifications(prev => mergeAndSort(prev, localOnly))
+        }
       } catch (e) {
         console.error('Failed to load notifications:', e)
       }
@@ -44,7 +115,7 @@ export function NotificationProvider({ children }) {
   useEffect(() => {
     try {
       if (notifications.length > 0) {
-        localStorage.setItem('notifications', JSON.stringify(notifications.slice(0, 100))) // 最多保存100条
+        localStorage.setItem('notifications', JSON.stringify(notifications.slice(0, 100)))
       }
     } catch (e) {
       console.error('Failed to save notifications:', e)
@@ -62,30 +133,46 @@ export function NotificationProvider({ children }) {
       status: NOTIFICATION_STATUS.UNREAD,
       createdAt: new Date().toISOString()
     }
-
-    setNotifications(prev => [newNotification, ...prev].slice(0, 100))
-
-    // 播放提示音
+    setNotifications(prev => mergeAndSort(prev, [newNotification]))
     if (settings.soundEnabled && settings.enabled) {
       playNotificationSound()
     }
-
     return newNotification.id
   }, [settings.soundEnabled, settings.enabled])
 
   // 标记已读
-  const markAsRead = useCallback((notificationId) => {
+  const markAsRead = useCallback(async (notificationId) => {
     setNotifications(prev =>
       prev.map(n =>
         n.id === notificationId ? { ...n, status: NOTIFICATION_STATUS.READ } : n
       )
     )
+    if (Number.isInteger(notificationId) && notificationId > 0) {
+      try {
+        await fetch(`${API_BASE}/api/alerts/read`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ alert_ids: [notificationId] })
+        })
+      } catch (e) {
+        console.error('Failed to mark alert as read:', e)
+      }
+    }
   }, [])
 
   // 标记全部已读
-  const markAllAsRead = useCallback(() => {
+  const markAllAsRead = useCallback(async () => {
     setNotifications(prev =>
       prev.map(n => ({ ...n, status: NOTIFICATION_STATUS.READ })))
+    try {
+      await fetch(`${API_BASE}/api/alerts/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ all: true })
+      })
+    } catch (e) {
+      console.error('Failed to mark all alerts as read:', e)
+    }
   }, [])
 
   // 删除通知
@@ -102,10 +189,7 @@ export function NotificationProvider({ children }) {
     setNotifications([])
   }, [])
 
-  // 获取未读数量
   const unreadCount = notifications.filter(n => n.status === NOTIFICATION_STATUS.UNREAD).length
-
-  // 获取可见通知（未删除的）
   const visibleNotifications = notifications.filter(n => n.status !== NOTIFICATION_STATUS.DISMISSED)
 
   // 更新设置
@@ -123,11 +207,27 @@ export function NotificationProvider({ children }) {
     const savedSettings = localStorage.getItem('notificationSettings')
     if (savedSettings) {
       try {
-        setSettings(JSON.parse(savedSettings))
+        setSettings(prev => ({ ...prev, ...JSON.parse(savedSettings) }))
       } catch (e) {
-      console.error('Failed to load notification settings:', e)
+        console.error('Failed to load notification settings:', e)
+      }
     }
+  }, [])
+
+  // 加载预警配置
+  useEffect(() => {
+    const fetchAlertConfig = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/alerts/config`)
+        if (res.ok) {
+          const data = await res.json()
+          setSettings(prev => ({ ...prev, alertConfig: data.configs || {} }))
+        }
+      } catch (e) {
+        console.error('Failed to fetch alert config:', e)
+      }
     }
+    fetchAlertConfig()
   }, [])
 
   const value = {
@@ -164,16 +264,12 @@ function playNotificationSound() {
     const audioContext = new (window.AudioContext || window.webkitAudioContext)()
     const oscillator = audioContext.createOscillator()
     const gainNode = audioContext.createGain()
-
     oscillator.connect(gainNode)
     gainNode.connect(audioContext.destination)
-
     oscillator.frequency.value = 800
     oscillator.type = 'sine'
-
     gainNode.gain.setValueAtTime(0.3, audioContext.currentTime)
     gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3)
-
     oscillator.start(audioContext.currentTime)
     oscillator.stop(audioContext.currentTime + 0.3)
   } catch (e) {
