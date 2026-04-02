@@ -1067,3 +1067,181 @@ async def analyze_holdings():
         "avg_cp": round(total_cp / len(holdings), 1) if holdings else 0,
         "message": f"持仓 {len(holdings)} 只，总战力 {round(total_cp, 1)}，总市值 {round(total_value/10000, 2)}万元"
     }
+
+
+# ==================== 预警API (v17.2) ====================
+
+from core.alert_engine import get_alert_engine, AlertDeduplicator, WARN_RULES
+
+
+@router.get("/api/alerts")
+async def get_alerts(
+    unread_only: bool = Query(default=False, description="仅返回未读预警"),
+    limit: int = Query(default=50, ge=1, le=200)
+):
+    """获取预警列表"""
+    alert_engine = get_alert_engine()
+    alerts = alert_engine.get_alerts(unread_only=unread_only, limit=limit)
+
+    # 格式化输出
+    formatted_alerts = []
+    for alert in alerts:
+        formatted_alerts.append({
+            "id": alert['id'],
+            "type": alert['alert_type'],
+            "code": alert['code'],
+            "name": alert['name'],
+            "level": alert['level'],
+            "title": alert.get('title', ''),
+            "message": alert.get('message', ''),
+            "cp_before": alert.get('cp_before', 0),
+            "cp_after": alert.get('cp_after', 0),
+            "is_read": bool(alert['is_read']),
+            "created_at": alert['created_at'],
+            "expires_at": alert.get('expires_at', '')
+        })
+
+    summary = alert_engine.get_alert_summary()
+
+    return {
+        "alerts": formatted_alerts,
+        "unread_count": summary.get('unread', 0),
+        "total_count": summary.get('total', len(alerts)),
+        "summary": {
+            "danger_unread": summary.get('danger_unread', 0),
+            "warning_unread": summary.get('warning_unread', 0)
+        }
+    }
+
+
+@router.get("/api/alerts/summary")
+async def get_alert_summary():
+    """获取预警聚合摘要"""
+    alert_engine = get_alert_engine()
+    summary = alert_engine.get_alert_summary()
+
+    return {
+        "total": summary.get('total', 0),
+        "unread": summary.get('unread', 0),
+        "by_level": {
+            "danger": summary.get('danger_unread', 0),
+            "warning": summary.get('warning_unread', 0)
+        },
+        "latest_time": datetime.now().isoformat()
+    }
+
+
+@router.post("/api/alerts/read")
+async def mark_alerts_read(request: Request):
+    """标记预警为已读"""
+    body = await request.json()
+    alert_engine = get_alert_engine()
+
+    if body.get('all'):
+        alert_engine.mark_read(all=True)
+        return {"status": "success", "message": "已标记所有预警为已读"}
+    elif body.get('alert_ids'):
+        alert_engine.mark_read(alert_ids=body['alert_ids'])
+        return {"status": "success", "message": f"已标记 {len(body['alert_ids'])} 条预警为已读"}
+    else:
+        raise HTTPException(status_code=400, detail="请提供 alert_ids 列表或 all=true")
+
+
+@router.get("/api/alerts/check")
+async def check_alerts():
+    """触发预警检查（定时任务调用）"""
+    alert_engine = get_alert_engine()
+
+    # 获取当前战力数据
+    if not cp_engine.stocks:
+        return {"status": "skipped", "message": "无战力数据，跳过预警检查"}
+
+    # 生成预警
+    alerts = alert_engine.generate_all_alerts()
+
+    # 保存预警
+    saved_count = 0
+    for alert in alerts:
+        if isinstance(alert, dict):
+            alert_engine.save_alert(alert)
+            saved_count += 1
+        else:
+            # Alert对象
+            alert_engine.save_alert(alert)
+            saved_count += 1
+
+    return {
+        "status": "success",
+        "generated": len(alerts),
+        "saved": saved_count,
+        "message": f"预警检查完成，生成 {saved_count} 条新预警"
+    }
+
+
+@router.get("/api/alerts/config")
+async def get_alert_config():
+    """获取预警配置"""
+    alert_engine = get_alert_engine()
+    db = get_db()
+
+    configs = {}
+    for rule_type in WARN_RULES.keys():
+        config = db.get_alert_config(rule_type)
+        if config:
+            configs[rule_type] = {
+                "threshold": config['threshold'],
+                "cooldown_hours": config['cooldown_hours'],
+                "is_enabled": bool(config['is_enabled'])
+            }
+        else:
+            # 使用默认配置
+            rule_config = WARN_RULES[rule_type]
+            configs[rule_type] = {
+                "threshold": rule_config.get('threshold', rule_config.get('threshold_drop', 0)),
+                "cooldown_hours": rule_config.get('cooldown_hours', 24),
+                "is_enabled": True
+            }
+
+    return {
+        "configs": configs,
+        "rules_description": {
+            "cp_drop": "战力单日下降超过阈值触发预警",
+            "cp_drop_danger": "战力单日大幅下降（>=25分）触发danger级别预警",
+            "cp_trend_drop": "连续5天累计下跌触发趋势预警",
+            "risk_level_up": "风险等级上升时触发",
+            "swap_signal": "发现更优换股目标时提示",
+            "new_opportunity": "股票进入TOP10或战力超80分时提示"
+        }
+    }
+
+
+@router.post("/api/alerts/config")
+async def update_alert_config(request: Request):
+    """更新预警配置"""
+    body = await request.json()
+    db = get_db()
+
+    for rule_type, config in body.get('configs', {}).items():
+        if rule_type in WARN_RULES:
+            threshold = config.get('threshold', WARN_RULES[rule_type].get('threshold', 15))
+            cooldown = config.get('cooldown_hours', WARN_RULES[rule_type].get('cooldown_hours', 24))
+            is_enabled = config.get('is_enabled', True)
+
+            db.set_alert_config(rule_type, threshold, cooldown)
+            # 注意：is_enabled的存储需要扩展表结构，当前只存threshold和cooldown
+
+    return {"status": "success", "message": "预警配置已更新"}
+
+
+@router.get("/api/holdings/alerts")
+async def get_holdings_alerts():
+    """获取持仓预警状态"""
+    alert_engine = get_alert_engine()
+
+    # TODO: 从持仓管理模块获取实际持仓
+    # 当前返回示例数据
+    return {
+        "holdings": [],
+        "message": "持仓预警功能需要持仓管理模块支持"
+    }
+
