@@ -1,5 +1,5 @@
 """
-预警引擎 - TradeSnake v17.2
+预警引擎 - TradeSnake v17.2+v18.x
 
 功能：
 - 持仓战力变化预警
@@ -7,14 +7,20 @@
 - 换股信号预警
 - 新机会预警
 - 预警去重 + 冷却机制
+- 动态阈值调整
 """
 
+import asyncio
 import time
+import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 
-from core.database import get_db
+try:
+    from backend.core.database import get_db
+except ImportError:
+    from core.database import get_db
 
 
 # 预警规则配置
@@ -144,15 +150,60 @@ class AlertEngine:
                     cooldown_hours=config.get('cooldown_hours', 24)
                 )
 
-    def check_cp_drop(self, code: str, name: str, current_cp: float, previous_cp: float) -> Optional[Alert]:
+    def get_dynamic_threshold(self, rule_type: str = 'cp_drop', lookback_days: int = 30) -> Dict:
+        """
+        基于历史波动率计算动态阈值
+
+        算法：threshold = max(最小阈值, 均值 + k倍标准差)
+        - 保守市场：k=1.0，更容易触发预警
+        - 正常市场：k=1.5
+        - 波动市场：k=2.0，更难触发预警
+        """
+        # 获取最近N天的战力变化数据
+        changes = []
+        for days in range(1, lookback_days + 1):
+            date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+            history = self.db.get_cp_changes(days=days)
+            for h in history:
+                if h.get('change', 0) > 0:  # 只统计下跌
+                    changes.append(h['change'])
+
+        if len(changes) < 10:
+            # 数据不足，使用静态默认值
+            return {'threshold': WARN_RULES.get(rule_type, {}).get('threshold', 15), 'is_dynamic': False}
+
+        changes_arr = np.array(changes)
+        mean_change = np.mean(changes_arr)
+        std_change = np.std(changes_arr)
+
+        # 根据标准差系数计算动态阈值
+        k = 1.5  # 1.5倍标准差
+        base_threshold = WARN_RULES.get(rule_type, {}).get('threshold', 15)
+        dynamic_threshold = max(base_threshold, mean_change + k * std_change)
+
+        return {
+            'threshold': round(dynamic_threshold, 1),
+            'mean': round(mean_change, 2),
+            'std': round(std_change, 2),
+            'is_dynamic': True,
+            'sample_size': len(changes)
+        }
+
+    def check_cp_drop(self, code: str, name: str, current_cp: float, previous_cp: float, use_dynamic: bool = True) -> Optional[Alert]:
         """检查战力下降预警"""
         if previous_cp <= 0 or current_cp <= 0:
             return None
 
         drop = previous_cp - current_cp
-        config = WARN_RULES.get('cp_drop', {})
-        config_db = self.db.get_alert_config('cp_drop')
-        threshold = config_db.get('threshold', config.get('threshold', 15)) if config_db else config.get('threshold', 15)
+
+        # 获取阈值（动态或静态）
+        if use_dynamic:
+            dynamic_info = self.get_dynamic_threshold('cp_drop')
+            threshold = dynamic_info['threshold']
+        else:
+            config = WARN_RULES.get('cp_drop', {})
+            config_db = self.db.get_alert_config('cp_drop')
+            threshold = config_db.get('threshold', config.get('threshold', 15)) if config_db else config.get('threshold', 15)
 
         if drop >= threshold:
             # 检查去重
@@ -341,6 +392,23 @@ class AlertEngine:
             'cp_after': alert.cp_after,
             'expires_at': alert.expires_at
         })
+
+        # WebSocket广播（v18.x）
+        try:
+            from backend.api.websocket import broadcast_alert
+            asyncio.create_task(broadcast_alert({
+                'id': alert_id,
+                'type': alert.alert_type,
+                'code': alert.code,
+                'name': alert.name,
+                'level': alert.level,
+                'title': alert.title,
+                'message': alert.message,
+                'created_at': datetime.now().isoformat()
+            }))
+        except Exception as e:
+            print(f"WebSocket广播失败: {e}")
+
         return alert_id
 
     def get_alerts(self, unread_only: bool = False, limit: int = 50) -> List[Dict]:

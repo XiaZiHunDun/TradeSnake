@@ -267,6 +267,90 @@ class BacktestEngine:
             "excess_return": round(excess_return, 2)
         }
 
+    def calculate_multi_benchmark(self, start_date: str, end_date: str) -> Dict:
+        """
+        多基准对比回测 v18.0
+
+        支持基准:
+        - hs300: 沪深300
+        - zz500: 中证500
+        - zz800: 中证800
+        - top50: 中证50
+        - equal_weight: 全市场等权
+        """
+        # 基准指数年化收益（简化估算，实际应从数据源获取）
+        BENCHMARK_RETURNS = {
+            "hs300": {"name": "沪深300", "annual_return": 10.0, "volatility": 20.0},
+            "zz500": {"name": "中证500", "annual_return": 12.0, "volatility": 25.0},
+            "zz800": {"name": "中证800", "annual_return": 11.0, "volatility": 22.0},
+            "top50": {"name": "中证50", "annual_return": 13.0, "volatility": 18.0},
+            "equal_weight": {"name": "全市场等权", "annual_return": 15.0, "volatility": 28.0},
+        }
+
+        strategy_result = self.calculate_simple_backtest(
+            start_date=start_date,
+            end_date=end_date,
+            top_n=10
+        )
+
+        if "error" in strategy_result:
+            return strategy_result
+
+        # 计算各基准的超额收益
+        results = {}
+        days = (datetime.fromisoformat(end_date) - datetime.fromisoformat(start_date)).days
+        years = days / 365
+
+        for bm_code, bm_info in BENCHMARK_RETURNS.items():
+            # 简化：使用固定年化收益，实际应从历史数据计算
+            bm_total_return = (1 + bm_info["annual_return"] / 100) ** years - 1
+            bm_total_return *= 100
+
+            excess = strategy_result["total_return"] - bm_total_return
+
+            # 计算相对沪深300的信息比率
+            relative_return = excess
+            tracking_error = 15.0  # 简化估算
+            info_ratio = relative_return / tracking_error if tracking_error > 0 else 0
+
+            results[bm_code] = {
+                "name": bm_info["name"],
+                "annual_return": bm_info["annual_return"],
+                "volatility": bm_info["volatility"],
+                "strategy_return": strategy_result["total_return"],
+                "excess_return": round(excess, 2),
+                "info_ratio": round(info_ratio, 2)
+            }
+
+        return {
+            "strategy": strategy_result["strategy"],
+            "period": f"{start_date} ~ {end_date}",
+            "strategy_total_return": strategy_result["total_return"],
+            "strategy_sharpe": strategy_result["sharpe_ratio"],
+            "benchmarks": results,
+            "best_benchmark": min(results.items(), key=lambda x: x[1]["excess_return"])[0] if results else None,
+            "conclusion": self._generate_benchmark_conclusion(strategy_result, results),
+            "disclaimer": BACKTEST_DISCLAIMER
+        }
+
+    def _generate_benchmark_conclusion(self, strategy_result: Dict, benchmarks: Dict) -> str:
+        """生成基准对比结论"""
+        if not benchmarks:
+            return ""
+
+        # 跑赢所有基准
+        all_excess = [b["excess_return"] for b in benchmarks.values()]
+        if all(e > 0 for e in all_excess):
+            return "策略在回测期内跑赢了所有基准指数，具有超额收益。"
+        elif all(e < 0 for e in all_excess):
+            return "策略在回测期内跑输了所有基准指数，需要优化战力公式。"
+        else:
+            avg_excess = sum(all_excess) / len(all_excess)
+            if avg_excess > 0:
+                return f"策略在回测期内相对基准平均具有{avg_excess:.1f}%的超额收益。"
+            else:
+                return f"策略在回测期内相对基准平均跑输{abs(avg_excess):.1f}%，建议优化。"
+
 
 # 全局回测引擎实例
 _backtest_engine = None

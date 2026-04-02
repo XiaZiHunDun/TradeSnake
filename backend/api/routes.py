@@ -1333,3 +1333,53 @@ async def benchmark_backtest(
         "warning": "回测结果仅供参考，不构成投资建议"
     }
 
+
+@router.get("/api/backtest/multi-benchmark")
+async def multi_benchmark_backtest(
+    start_date: str = Query(default="2025-01-01", description="回测开始日期"),
+    end_date: str = Query(default="2025-12-31", description="回测结束日期")
+):
+    """
+    多基准对比回测 v18.0
+
+    对比策略与多个基准指数的表现:
+    - 沪深300 (hs300)
+    - 中证500 (zz500)
+    - 中证800 (zz800)
+    - 中证50 (top50)
+    - 全市场等权 (equal_weight)
+    """
+    engine = get_backtest_engine()
+    result = engine.calculate_multi_benchmark(
+        start_date=start_date,
+        end_date=end_date
+    )
+
+    if "error" in result:
+        return result
+
+    return {
+        **result,
+        "warning": "回测结果仅供参考，不构成投资建议"
+    }
+
+
+@router.get("/api/backtest/threshold-info")
+async def get_threshold_info():
+    """
+    获取动态阈值信息 v17.x
+
+    查看当前预警阈值是如何根据历史波动率计算的
+    """
+    alert_engine = get_alert_engine()
+    dynamic_info = alert_engine.get_dynamic_threshold('cp_drop', lookback_days=30)
+
+    return {
+        "rule_type": "cp_drop",
+        "description": "战力下降预警阈值",
+        "dynamic_threshold": dynamic_info,
+        "static_default": 15,
+        "formula": "threshold = max(最小阈值, 均值 + 1.5倍标准差)",
+        "note": "动态阈值基于过去30天的战力波动统计"
+    }
+

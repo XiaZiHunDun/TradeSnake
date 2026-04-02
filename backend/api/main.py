@@ -3,18 +3,22 @@ TradeSnake API 主入口
 """
 
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from api.routes import router
 from api.limits import limiter
+from api.websocket import WebSocketManager
 
 app = FastAPI(
     title="TradeSnake API",
     description="股市贪吃蛇 - 战力值计算API",
     version="0.1.0"
 )
+
+# WebSocket管理器
+ws_manager = WebSocketManager()
 
 # 添加速率限制
 app.state.limiter = limiter
@@ -39,6 +43,21 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(router)
+
+# WebSocket端点
+@app.websocket("/ws/alerts")
+async def websocket_alerts(websocket: WebSocket):
+    """WebSocket实时预警推送"""
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            # 保持连接，等待服务器推送
+            data = await websocket.receive_text()
+            # 客户端可以发送心跳
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
 
 
 @app.get("/")
