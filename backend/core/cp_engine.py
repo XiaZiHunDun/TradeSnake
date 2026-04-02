@@ -16,6 +16,225 @@ WEIGHTS = {
     'risk_penalty': 0.10  # 风险惩罚因子
 }
 
+# ============================================
+# 交易成本常量 v15（包含手续费建模）
+# ============================================
+# A股交易费用（2024年最新标准）
+TRADE_COST = {
+    'commission': 0.0003,       # 券商佣金：万分之三，默认水平
+    'stamp_tax': 0.0005,        # 印花税：万分之五，仅卖出时收取
+    'transfer_fee': 0.00001,    # 过户费：十万分之一，沪市双向，深市免
+    'min_commission': 5.0,      # 最低佣金：5元/笔
+}
+
+# 完整换股一次的成本比率（买+卖）
+SELL_COST_RATE = TRADE_COST['commission'] + TRADE_COST['stamp_tax'] + TRADE_COST['transfer_fee']  # 0.081%
+BUY_COST_RATE = TRADE_COST['commission'] + TRADE_COST['transfer_fee']                              # 0.031%
+TOTAL_TRADE_COST_RATE = SELL_COST_RATE + BUY_COST_RATE  # 0.112%
+
+# 最小有意义交易量（使最低消费影响 < 0.02%）
+MIN_TRADE_VALUE = 50000  # 5万
+
+
+class CashCP:
+    """
+    现金战力计算 v15
+
+    核心思想：现金应视为"特殊股票"，其战力定义为持有现金的"机会成本"
+
+    公式：现金战力 = 本金 × (年化无风险利率 / 365) × 持有天数
+    示例：10万现金持有30天 = 100000 × (0.02 / 365) × 30 = 164.38 战力损失
+    """
+
+    RISK_FREE_RATE = 0.02  # 年化无风险利率 2%（国债/货基基准）
+
+    @classmethod
+    def get_opportunity_cost(cls, cash: float, days: int) -> float:
+        """
+        计算持有现金的每日机会成本（战力损失）
+
+        参数:
+            cash: 现金金额（元）
+            days: 持有天数
+
+        返回:
+            战力损失值（持有现金 vs 买入优质股）
+
+        示例:
+            CashCP.get_opportunity_cost(100000, 30) = 164.38
+        """
+        daily_rate = cls.RISK_FREE_RATE / 365
+        return cash * daily_rate * days
+
+    @classmethod
+    def get_daily_cost_rate(cls) -> float:
+        """获取每日机会成本比率"""
+        return cls.RISK_FREE_RATE / 365
+
+
+class TradeDecision:
+    """
+    换股决策引擎 v15
+
+    核心公式：
+        换股净收益 = (B战力 - A战力) × 本金 × 持有天数 - 交易成本
+
+    换股建议分级：
+        - 强烈建议换：净收益 > 交易成本的20%
+        - 可以考虑换：净收益 > 0
+        - 不建议换：净收益 <= 0（持有不动 🎯）
+        - 别换：净收益 < -交易成本的50%（会亏钱）
+    """
+
+    # 建议阈值
+    THRESHOLD_STRONG_BUY = 0.20  # 强烈建议换：净收益 > 成本20%
+    THRESHOLD_BUY = 0.0          # 可以考虑换：净收益 > 0
+    THRESHOLD_HOLD = -0.50       # 不建议换：净收益 < -成本50%
+
+    @classmethod
+    def calculate_trade_cost(cls, principal: float) -> dict:
+        """
+        计算完整换股的总成本
+
+        参数:
+            principal: 本金（元）
+
+        返回:
+            成本明细字典
+        """
+        sell_commission = max(principal * TRADE_COST['commission'], TRADE_COST['min_commission'])
+        sell_stamp = principal * TRADE_COST['stamp_tax']  # 印花税仅卖出
+        sell_transfer = principal * TRADE_COST['transfer_fee']
+
+        buy_commission = max(principal * TRADE_COST['commission'], TRADE_COST['min_commission'])
+        buy_transfer = principal * TRADE_COST['transfer_fee']
+
+        total_cost = (sell_commission + sell_stamp + sell_transfer +
+                      buy_commission + buy_transfer)
+
+        return {
+            'principal': principal,
+            'sell_commission': sell_commission,
+            'sell_stamp_tax': sell_stamp,
+            'sell_transfer_fee': sell_transfer,
+            'buy_commission': buy_commission,
+            'buy_transfer_fee': buy_transfer,
+            'total_cost': total_cost,
+            'cost_rate': total_cost / principal if principal > 0 else 0
+        }
+
+    @classmethod
+    def should_swap(cls,
+                   cp_a: float,
+                   cp_b: float,
+                   principal: float = 100000,
+                   holding_days: int = 30) -> dict:
+        """
+        判断是否应该从股票A换到股票B
+
+        参数:
+            cp_a: 当前股票战力
+            cp_b: 目标股票战力
+            principal: 本金（元），默认10万
+            holding_days: 计划持有天数，默认30天
+
+        返回:
+            决策建议字典，包含：
+            - cp_diff: 战力差
+            - expected_return: 预期收益率（年化）
+            - gross_profit: 毛收益（元）
+            - trade_cost: 交易成本（元）
+            - net_profit: 净收益（元）
+            - net_return: 净收益率
+            - action: 建议操作
+            - action_level: 操作等级 (strong_buy/buy/hold/danger)
+            - action_color: 颜色代码
+            - action_label: 操作标签
+        """
+        # 1. 战力差
+        cp_diff = cp_b - cp_a
+
+        # 2. 战力差转换为预期年化收益率
+        # 假设CP差1分（约1%）对应年化收益差1%
+        expected_return = cp_diff * 0.01  # 年化收益率
+
+        # 3. 考虑持有天数的实际收益
+        # 实际收益 = 年化收益 × (持有天数 / 365)
+        actual_return_rate = expected_return * (holding_days / 365)
+        gross_profit = principal * actual_return_rate
+
+        # 4. 交易成本
+        trade_cost = cls.calculate_trade_cost(principal)['total_cost']
+
+        # 5. 净收益
+        net_profit = gross_profit - trade_cost
+        net_return = net_profit / principal if principal > 0 else 0
+
+        # 6. 判断操作建议
+        cost_threshold_strong = trade_cost * (1 + cls.THRESHOLD_STRONG_BUY)
+        cost_threshold_danger = trade_cost * cls.THRESHOLD_HOLD
+
+        if net_profit > cost_threshold_strong:
+            action = 'swap'
+            action_level = 'strong_buy'
+            action_color = 'green'
+            action_label = '强烈建议换股'
+        elif net_profit > cls.THRESHOLD_BUY * trade_cost:
+            action = 'swap'
+            action_level = 'buy'
+            action_color = 'yellow'
+            action_label = '谨慎换股'
+        elif net_profit > cost_threshold_danger:
+            action = 'hold'
+            action_level = 'hold'
+            action_color = 'gray'
+            action_label = '持有不动 🎯'
+        else:
+            action = 'avoid'
+            action_level = 'danger'
+            action_color = 'red'
+            action_label = '别换！'
+
+        return {
+            'from_cp': cp_a,
+            'to_cp': cp_b,
+            'cp_diff': cp_diff,
+            'expected_return': expected_return,
+            'holding_days': holding_days,
+            'gross_profit': gross_profit,
+            'trade_cost': trade_cost,
+            'net_profit': net_profit,
+            'net_return': net_return,
+            'action': action,
+            'action_level': action_level,
+            'action_color': action_color,
+            'action_label': action_label,
+            'principal': principal,
+            'cost_breakdown': cls.calculate_trade_cost(principal)
+        }
+
+    @classmethod
+    def get_cp_threshold(cls,
+                        principal: float = 100000,
+                        holding_days: int = 30,
+                        threshold: float = 0) -> float:
+        """
+        计算需要最小战力差才能达到指定收益率
+
+        参数:
+            principal: 本金
+            holding_days: 持有天数
+            threshold: 目标收益率（默认为0，即不亏钱的临界点）
+
+        返回:
+            需要的最小战力差
+        """
+        trade_cost = cls.calculate_trade_cost(principal)['total_cost']
+        # net_profit = cp_diff * 0.01 * principal * (days/365) - trade_cost >= threshold
+        # cp_diff >= (trade_cost + threshold) / (0.01 * principal * (days/365))
+        daily_cp_value = 0.01 * principal * (holding_days / 365)
+        return (trade_cost + threshold) / daily_cp_value if daily_cp_value > 0 else float('inf')
+
 
 @dataclass
 class StockCP:

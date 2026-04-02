@@ -6,8 +6,14 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Query, Request
 from datetime import datetime
 
-from models.schemas import CPListResponse, SingleStockResponse, StockCPData
-from core.cp_engine import CPEngine, create_stock_from_raw
+from models.schemas import (
+    CPListResponse, SingleStockResponse, StockCPData,
+    TradeDecisionResponse, CashOpportunityResponse, TradeCostDetail
+)
+from core.cp_engine import (
+    CPEngine, create_stock_from_raw,
+    CashCP, TradeDecision, TOTAL_TRADE_COST_RATE, TRADE_COST
+)
 from core.history import save_history, get_cp_changes, get_stock_history, get_historical_rankings, get_ranking_changes
 from data.fetcher import get_stock_data_api, get_single_stock_data
 from api.limits import limiter
@@ -605,3 +611,179 @@ async def get_batch_stocks(codes: list[str]):
             continue
 
     return {"total": len(result), "data": result}
+
+
+# ============================================
+# 换股决策 API v15（交易成本建模）
+# ============================================
+
+@router.get("/api/trade/should_swap")
+async def should_swap(
+    from_code: str = Query(..., description="当前股票代码"),
+    to_code: str = Query(..., description="目标股票代码"),
+    principal: float = Query(default=100000, ge=1000, description="本金（元）"),
+    holding_days: int = Query(default=30, ge=1, le=365, description="计划持有天数")
+):
+    """
+    判断是否应该换股 v15
+
+    考虑因素：
+    - 战力差：目标股票战力 - 当前股票战力
+    - 持有天数：持有越久，换股成本越值得
+    - 交易成本：佣金+印花税+过户费，最低5元/笔
+
+    核心公式：
+        换股净收益 = (B战力 - A战力) × 本金 × (持有天数/365) - 交易成本
+
+    返回：
+    - action: swap/hold/avoid
+    - action_level: strong_buy/buy/hold/danger
+    - action_color: green/yellow/gray/red
+    - action_label: 操作建议文字
+    """
+    # 获取两只股票的战力
+    stock_from = cp_engine.get_by_code(from_code)
+    stock_to = cp_engine.get_by_code(to_code)
+
+    if not stock_from:
+        raise HTTPException(status_code=404, detail=f"未找到股票 {from_code}")
+    if not stock_to:
+        raise HTTPException(status_code=404, detail=f"未找到股票 {to_code}")
+
+    # 计算换股决策
+    decision = TradeDecision.should_swap(
+        cp_a=stock_from.total_cp,
+        cp_b=stock_to.total_cp,
+        principal=principal,
+        holding_days=holding_days
+    )
+
+    return decision
+
+
+@router.get("/api/trade/cost")
+async def get_trade_cost(
+    principal: float = Query(default=100000, ge=1000, description="本金（元）")
+):
+    """
+    计算换股交易成本 v15
+
+    返回：
+    - 各项费用明细
+    - 总成本
+    - 成本比率
+    """
+    cost_detail = TradeDecision.calculate_trade_cost(principal)
+
+    return {
+        "principal": cost_detail['principal'],
+        "sell_costs": {
+            "commission": cost_detail['sell_commission'],
+            "stamp_tax": cost_detail['sell_stamp_tax'],
+            "transfer_fee": cost_detail['sell_transfer_fee']
+        },
+        "buy_costs": {
+            "commission": cost_detail['buy_commission'],
+            "transfer_fee": cost_detail['buy_transfer_fee']
+        },
+        "total_cost": cost_detail['total_cost'],
+        "cost_rate": round(cost_detail['cost_rate'] * 100, 3),
+        "min_trade_value_hint": "建议单次交易金额 >= 5万元，使最低消费影响 < 0.02%"
+    }
+
+
+@router.get("/api/trade/cash_cost")
+async def get_cash_opportunity_cost(
+    principal: float = Query(default=100000, ge=1000, description="本金（元）"),
+    days: int = Query(default=30, ge=1, le=365, description="持有天数")
+):
+    """
+    计算持有现金的机会成本 v15
+
+    核心思想：现金应视为"特殊股票"，其战力损失 = 持有现金的利息损失
+
+    公式：机会成本 = 本金 × (年化2% / 365) × 天数
+
+    返回：
+    - 每日机会成本率
+    - 持有期间总机会成本
+    - 等效战力损失
+    """
+    daily_cost_rate = CashCP.get_daily_cost_rate()
+    opportunity_cost = CashCP.get_opportunity_cost(principal, days)
+
+    # 战力损失估算（假设1元 ≈ 0.01战力）
+    equivalent_cp_loss = opportunity_cost * 0.01
+
+    hints = []
+    if principal < 50000:
+        hints.append(f"⚠️ 资金 < 5万，最低消费影响显著，换股成本偏高")
+    if days < 7:
+        hints.append(f"⚠️ 持有 < 7天，换股几乎不可能回本")
+    elif days < 30:
+        hints.append(f"⚠️ 持有 < 30天，换股需要较大战力差才能盈利")
+    else:
+        hints.append(f"✅ 持有 {days} 天以上，换股成本相对可控")
+
+    return {
+        "principal": principal,
+        "days": days,
+        "daily_cost_rate": round(daily_cost_rate * 100, 4),
+        "annual_cost_rate": 2.0,
+        "opportunity_cost": round(opportunity_cost, 2),
+        "equivalent_cp_loss": round(equivalent_cp_loss, 2),
+        "hints": hints,
+        "warning": "⚠️ 换股成本提醒：完整换股一次成本 ≈ 0.112%，建议持有 >= 30天再考虑换股"
+    }
+
+
+@router.get("/api/trade/cp_threshold")
+async def get_cp_threshold(
+    principal: float = Query(default=100000, ge=1000, description="本金（元）"),
+    holding_days: int = Query(default=30, ge=1, le=365, description="持有天数")
+):
+    """
+    计算换股所需的最小战力差阈值 v15
+
+    返回：
+    - 不亏钱的最小战力差
+    - 盈利10%的战力差要求
+    - 盈利20%的战力差要求
+    """
+    # 不亏钱
+    threshold_no_loss = TradeDecision.get_cp_threshold(
+        principal=principal,
+        holding_days=holding_days,
+        threshold=0
+    )
+
+    # 盈利10%
+    threshold_10pct = TradeDecision.get_cp_threshold(
+        principal=principal,
+        holding_days=holding_days,
+        threshold=principal * 0.10
+    )
+
+    # 盈利20%
+    threshold_20pct = TradeDecision.get_cp_threshold(
+        principal=principal,
+        holding_days=holding_days,
+        threshold=principal * 0.20
+    )
+
+    return {
+        "principal": principal,
+        "holding_days": holding_days,
+        "thresholds": {
+            "no_loss": round(threshold_no_loss, 2),
+            "profit_10pct": round(threshold_10pct, 2),
+            "profit_20pct": round(threshold_20pct, 2)
+        },
+        "explanation": {
+            "no_loss": f"战力差需要 > {threshold_no_loss:.1f} 分才能不亏钱",
+            "profit_10pct": f"战力差需要 > {threshold_10pct:.1f} 分才能盈利10%",
+            "profit_20pct": f"战力差需要 > {threshold_20pct:.1f} 分才能盈利20%"
+        },
+        "trade_cost_rate": round(TOTAL_TRADE_COST_RATE * 100, 3),
+        "daily_cp_value": f"战力差1分 ≈ 年化收益1% ≈ 每日收益 {principal * 0.01 / 365:.0f} 元"
+    }

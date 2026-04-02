@@ -98,3 +98,44 @@ class HealthResponse(BaseModel):
     data_fresh: bool
     last_update: Optional[str] = None
     stocks_count: int = 0
+
+
+class TradeCostDetail(BaseModel):
+    """交易成本明细"""
+    principal: float
+    sell_commission: float
+    sell_stamp_tax: float
+    sell_transfer_fee: float
+    buy_commission: float
+    buy_transfer_fee: float
+    total_cost: float
+    cost_rate: float
+
+
+class TradeDecisionResponse(BaseModel):
+    """换股决策响应 v15"""
+    from_cp: float
+    to_cp: float
+    cp_diff: float
+    expected_return: float
+    holding_days: int
+    gross_profit: float
+    trade_cost: float
+    net_profit: float
+    net_return: float
+    action: str
+    action_level: str
+    action_color: str
+    action_label: str
+    principal: float
+    cost_breakdown: TradeCostDetail
+
+
+class CashOpportunityResponse(BaseModel):
+    """现金机会成本响应 v15"""
+    principal: float
+    days: int
+    daily_cost_rate: float
+    opportunity_cost: float
+    equivalent_cp_loss: float
+    hint: str
