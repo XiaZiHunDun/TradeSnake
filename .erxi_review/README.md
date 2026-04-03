@@ -11,6 +11,8 @@
 | 2026-04-01 | [REVIEW_20260401_v3.md](./REVIEW_20260401_v3.md) | 深度评审（赚钱工具专项） | 80/100 |
 | 2026-04-01 | [REVIEW_20260401_v4.md](./REVIEW_20260401_v4.md) | 最终评审 | 86/100 |
 | 2026-04-01 | [REVIEW_20260401_v5_momentum.md](./REVIEW_20260401_v5_momentum.md) | 动量分增强建议 | 优化建议 |
+| 2026-04-02 | [REVIEW_20260402_trading_cost.md](./REVIEW_20260402_trading_cost.md) | 交易成本建模分析 | 工程师报告 |
+| 2026-04-02 | [ERXI_RESPONSE_trading_cost.md](./ERXI_RESPONSE_trading_cost.md) | 爱尔希补充建议 | 补充意见 |
 
 ---
 
