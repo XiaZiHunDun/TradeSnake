@@ -156,6 +156,20 @@ class Database:
                 )
             """)
 
+            # 7. 用户配置表（存储用户约束）
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_profile (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),  -- 单行配置
+                    capital REAL DEFAULT 20000,
+                    allowed_boards TEXT DEFAULT 'main',  -- 逗号分隔: main,gem,star
+                    risk_preference TEXT DEFAULT 'aggressive',
+                    consider_dividend INTEGER DEFAULT 1,
+                    keep_cash_reserve INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
             # 创建索引
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_cp_history_date ON cp_history(recorded_at)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_cp_history_code ON cp_history(code)")
@@ -457,6 +471,73 @@ class Database:
             cursor = self.conn.cursor()
             cursor.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
             self.conn.commit()
+
+    # ==================== 用户配置操作 ====================
+
+    def get_user_profile(self) -> Dict:
+        """获取用户配置"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM user_profile WHERE id = 1")
+        row = cursor.fetchone()
+        if row:
+            result = dict(row)
+            # 转换 allowed_boards 从字符串到列表
+            if 'allowed_boards' in result and result['allowed_boards']:
+                result['allowed_boards'] = result['allowed_boards'].split(',')
+            else:
+                result['allowed_boards'] = ['main']
+            # 转换整数字段
+            result['consider_dividend'] = bool(result.get('consider_dividend', 1))
+            result['keep_cash_reserve'] = bool(result.get('keep_cash_reserve', 0))
+            return result
+        else:
+            # 返回默认值
+            return {
+                'id': 1,
+                'capital': 20000,
+                'allowed_boards': ['main'],
+                'risk_preference': 'aggressive',
+                'consider_dividend': True,
+                'keep_cash_reserve': False
+            }
+
+    def save_user_profile(self, profile: Dict) -> bool:
+        """保存用户配置"""
+        with self._write_lock:
+            cursor = self.conn.cursor()
+            # 转换 allowed_boards 为字符串
+            boards = profile.get('allowed_boards', ['main'])
+            if isinstance(boards, list):
+                boards = ','.join(boards)
+
+            cursor.execute("""
+                INSERT OR REPLACE INTO user_profile (
+                    id, capital, allowed_boards, risk_preference,
+                    consider_dividend, keep_cash_reserve, updated_at
+                ) VALUES (1, ?, ?, ?, ?, ?, ?)
+            """, (
+                profile.get('capital', 20000),
+                boards,
+                profile.get('risk_preference', 'aggressive'),
+                int(profile.get('consider_dividend', True)),
+                int(profile.get('keep_cash_reserve', False)),
+                datetime.now().isoformat()
+            ))
+            self.conn.commit()
+            return True
+
+    def get_affordable_stocks_count(self, capital: float, boards: List[str]) -> int:
+        """获取可买的股票数量（价格在资金可容纳一手以内的）"""
+        cursor = self.conn.cursor()
+        boards_str = ','.join([f"'{b}'" for b in boards])
+        # 股票最小购买单位是1手=100股，所以价格<=capital/100的都可以买
+        cursor.execute(f"""
+            SELECT COUNT(*) as cnt FROM stocks
+            WHERE price > 0 AND price * 100 <= ?
+            AND board_type IN ({boards_str})
+        """, (capital,))
+        row = cursor.fetchone()
+        return row['cnt'] if row else 0
 
     def close(self):
         """关闭数据库连接"""

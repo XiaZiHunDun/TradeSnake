@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { TrendingUp, TrendingDown, Minus, ArrowUpDown, Star, GitCompare, X, RefreshCw, BarChart3, TrendingUp as TrendUp, Download, FileJson, FileSpreadsheet, ChevronDown, Shield } from 'lucide-react'
 import ReactECharts from 'echarts-for-react'
 import { useWatchlist } from '../hooks/useWatchlist'
@@ -241,7 +241,7 @@ function CPTopList() {
     return () => clearInterval(interval)
   }, [autoRefresh, boardFilter])
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -279,7 +279,7 @@ function CPTopList() {
       setError(e.message || '数据加载失败，请检查网络连接')
     }
     setLoading(false)
-  }
+  }, [boardFilter])
 
   // 排序和筛选数据（使用useMemo优化性能）
   const getSortedData = useMemo(() => {

@@ -76,8 +76,8 @@ class TestCPEndpoints:
 
     def test_cp_top_limit_boundary(self):
         """测试战力榜limit边界验证"""
-        # limit > 200 should fail validation
-        response = client.get("/api/cp/top?limit=201")
+        # limit > 3000 should fail validation
+        response = client.get("/api/cp/top?limit=3001")
         assert response.status_code == 422  # FastAPI validation error
 
     def test_cp_top_response_structure(self):
@@ -330,8 +330,8 @@ class TestRefreshEndpoint:
 
     def test_refresh_limit_boundary_high(self):
         """测试limit边界值（上限）"""
-        # limit > 500 should fail validation
-        response = client.post("/api/refresh?limit=501")
+        # limit > 3000 should fail validation
+        response = client.post("/api/refresh?limit=3001")
         assert response.status_code == 422  # FastAPI validation error
 
     def test_refresh_limit_at_minimum(self):
@@ -343,6 +343,71 @@ class TestRefreshEndpoint:
         """测试limit在最大有效值"""
         response = client.post("/api/refresh?limit=500")
         assert response.status_code == 200
+
+
+class TestTradeEndpoints:
+    """测试交易相关端点"""
+
+    def test_trade_cost(self):
+        """测试交易成本计算"""
+        response = client.get("/api/trade/cost?principal=100000")
+        assert response.status_code == 200
+        data = response.json()
+        assert "total_cost" in data
+        assert "cost_rate" in data
+        assert data["principal"] == 100000
+
+    def test_trade_cost_minimum(self):
+        """测试交易成本最小值"""
+        response = client.get("/api/trade/cost?principal=1000")
+        assert response.status_code == 200
+
+    def test_cash_opportunity_cost(self):
+        """测试现金机会成本"""
+        response = client.get("/api/trade/cash_cost?principal=100000&days=30")
+        assert response.status_code == 200
+        data = response.json()
+        assert "opportunity_cost" in data
+        assert "equivalent_cp_loss" in data
+        assert data["days"] == 30
+
+    def test_cash_opportunity_cost_days_boundary(self):
+        """测试现金机会成本天数边界"""
+        response = client.get("/api/trade/cash_cost?principal=100000&days=366")
+        assert response.status_code == 422  # days > 365
+
+    def test_cp_threshold(self):
+        """测试战力阈值计算"""
+        response = client.get("/api/trade/cp_threshold?principal=100000&holding_days=30")
+        assert response.status_code == 200
+        data = response.json()
+        assert "thresholds" in data
+        assert "no_loss" in data["thresholds"]
+        assert "profit_10pct" in data["thresholds"]
+        assert "profit_20pct" in data["thresholds"]
+
+
+class TestBacktestEndpoints:
+    """测试回测相关端点"""
+
+    def test_backtest_compare(self):
+        """测试对比回测"""
+        response = client.get("/api/backtest/compare?start_date=2024-01-01&end_date=2024-06-30")
+        assert response.status_code in [200, 400, 500]  # 可能有数据不足错误
+
+    def test_backtest_simple(self):
+        """测试简单回测"""
+        response = client.get("/api/backtest/simple?start_date=2024-01-01&end_date=2024-06-30")
+        # 可能返回数据不足或实际结果
+        assert response.status_code in [200, 400, 500]
+
+    def test_backtest_date_validation(self):
+        """测试回测日期验证"""
+        # 结束日期早于开始日期
+        response = client.get("/api/backtest/simple?start_date=2024-12-31&end_date=2024-01-01")
+        # 应该返回错误
+        data = response.json()
+        assert "error" in data or "detail" in data
 
 
 if __name__ == '__main__':

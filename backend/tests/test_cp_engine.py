@@ -9,7 +9,7 @@ import os
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.cp_engine import StockCP, CPEngine, create_stock_from_raw
+from core.cp_engine import StockCP, CPEngine, create_stock_from_raw, TradeDecision
 
 
 class TestStockCP:
@@ -137,6 +137,36 @@ class TestCPEngine:
 
         engine.add_stock(stock)
         assert len(engine.stocks) == 1
+
+    def test_add_stock_duplicate(self):
+        """测试添加重复股票会被忽略"""
+        engine = CPEngine()
+        stock1 = StockCP(
+            code='600519',
+            name='贵州茅台',
+            price=1800.0,
+            pe=45.0,
+            roe=30.0,
+            net_profit_growth=20.0,
+            revenue_growth=15.0,
+            change_pct=2.5
+        )
+        stock2 = StockCP(
+            code='600519',  # 相同代码
+            name='贵州茅台2',
+            price=1900.0,
+            pe=50.0,
+            roe=35.0,
+            net_profit_growth=25.0,
+            revenue_growth=20.0,
+            change_pct=3.0
+        )
+
+        engine.add_stock(stock1)
+        engine.add_stock(stock2)  # 应该被忽略
+
+        assert len(engine.stocks) == 1
+        assert engine.stocks[0].price == 1800.0  # 保持原值
 
     def test_calculate_all(self):
         """测试计算所有股票"""
@@ -538,6 +568,61 @@ class TestEdgeCases:
         # 不应崩溃
         assert stock.total_cp >= 0
         assert stock.risk_score <= 100
+
+
+class TestTradeDecision:
+    """测试换股决策类"""
+
+    def test_should_swap_buy(self):
+        """测试应该换股的情况"""
+        result = TradeDecision.should_swap(
+            cp_a=50,
+            cp_b=70,
+            principal=100000,
+            holding_days=30
+        )
+        assert result['action'] in ['swap', 'hold', 'avoid']
+        assert result['cp_diff'] == 20
+        assert result['holding_days'] == 30
+
+    def test_should_swap_same_cp(self):
+        """测试战力相同时不换股"""
+        result = TradeDecision.should_swap(
+            cp_a=60,
+            cp_b=60,
+            principal=100000,
+            holding_days=30
+        )
+        assert result['cp_diff'] == 0
+        assert result['action'] in ['hold', 'avoid']
+
+    def test_should_swap_danger(self):
+        """测试战力差为负数时应避免换股"""
+        result = TradeDecision.should_swap(
+            cp_a=70,
+            cp_b=50,
+            principal=100000,
+            holding_days=30
+        )
+        assert result['cp_diff'] == -20
+        assert result['action'] == 'avoid'
+
+    def test_get_cp_threshold(self):
+        """测试战力阈值计算"""
+        threshold = TradeDecision.get_cp_threshold(
+            principal=100000,
+            holding_days=30,
+            threshold=0
+        )
+        assert threshold > 0  # 应该有最小战力差要求
+
+    def test_calculate_trade_cost(self):
+        """测试交易成本计算"""
+        cost = TradeDecision.calculate_trade_cost(100000)
+        assert 'total_cost' in cost
+        assert 'cost_rate' in cost
+        assert cost['principal'] == 100000
+        assert cost['total_cost'] > 0
 
 
 if __name__ == '__main__':

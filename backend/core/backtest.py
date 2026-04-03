@@ -24,7 +24,11 @@ BACKTEST_DISCLAIMER = """
 - 过去表现不代表未来收益
 - 回测未考虑滑点、冲击成本、分红再投资
 - 幸存者偏差：已退市股票未纳入回测
+- 基准收益为估算值，实际可能差异较大
 """
+
+# 基准数据说明
+BENCHMARK_NOTE = "基准指数收益为历史统计估算值，非实时数据，实际收益可能差异较大"
 
 
 class BacktestEngine:
@@ -80,6 +84,21 @@ class BacktestEngine:
 
         策略：持有战力榜TOP N股票N天，每月调仓一次
         """
+        # 验证日期
+        try:
+            start = datetime.fromisoformat(start_date)
+            end = datetime.fromisoformat(end_date)
+            if end <= start:
+                return {
+                    "error": "结束日期必须晚于开始日期",
+                    "disclaimer": BACKTEST_DISCLAIMER
+                }
+        except ValueError:
+            return {
+                "error": "日期格式错误，请使用YYYY-MM-DD格式",
+                "disclaimer": BACKTEST_DISCLAIMER
+            }
+
         # 获取可用日期
         dates = self.get_available_dates(start_date, end_date)
         if len(dates) < 2:
@@ -332,7 +351,8 @@ class BacktestEngine:
             "benchmarks": results,
             "best_benchmark": min(results.items(), key=lambda x: x[1]["excess_return"])[0] if results else None,
             "conclusion": self._generate_benchmark_conclusion(strategy_result, results),
-            "disclaimer": BACKTEST_DISCLAIMER
+            "disclaimer": BACKTEST_DISCLAIMER,
+            "benchmark_note": BENCHMARK_NOTE
         }
 
     def _generate_benchmark_conclusion(self, strategy_result: Dict, benchmarks: Dict) -> str:

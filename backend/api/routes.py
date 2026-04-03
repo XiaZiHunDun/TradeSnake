@@ -9,7 +9,8 @@ from datetime import datetime
 from models.schemas import (
     CPListResponse, SingleStockResponse, StockCPData,
     TradeDecisionResponse, CashOpportunityResponse, TradeCostDetail,
-    CPExplanationResponse, HoldingItem, HoldingsImportRequest, HoldingsExportResponse
+    CPExplanationResponse, HoldingItem, HoldingsImportRequest, HoldingsExportResponse,
+    UserProfile, UserProfileResponse
 )
 from core.cp_engine import (
     CPEngine, create_stock_from_raw,
@@ -204,9 +205,68 @@ async def health_check():
     }
 
 
+@router.get("/api/user/profile", response_model=UserProfileResponse)
+async def get_user_profile():
+    """获取用户配置（包含个人约束）"""
+    db = get_db()
+    profile = db.get_user_profile()
+    affordable_count = db.get_affordable_stocks_count(
+        profile.get('capital', 20000),
+        profile.get('allowed_boards', ['main'])
+    )
+
+    # 构建筛选条件说明
+    boards = profile.get('allowed_boards', ['main'])
+    board_names = {
+        'main': '主板',
+        'gem': '创业板',
+        'star': '科创板',
+        'bge': '北交所'
+    }
+    board_desc = '、'.join([board_names.get(b, b) for b in boards])
+
+    filter_summary = (
+        f"资金{profile.get('capital', 20000):.0f}元 | "
+        f"可买板块: {board_desc} | "
+        f"可买股票约{affordable_count}只"
+    )
+
+    return UserProfileResponse(
+        profile=UserProfile(**profile),
+        affordable_stocks_count=affordable_count,
+        filter_summary=filter_summary
+    )
+
+
+@router.put("/api/user/profile")
+async def update_user_profile(profile: UserProfile):
+    """更新用户配置"""
+    db = get_db()
+
+    # 验证板块
+    valid_boards = ['main', 'gem', 'star', 'bge']
+    for board in profile.allowed_boards:
+        if board not in valid_boards:
+            raise HTTPException(status_code=400, detail=f"无效的板块: {board}")
+
+    # 验证资金量
+    if profile.capital < 100:
+        raise HTTPException(status_code=400, detail="资金量不能少于100元")
+
+    # 验证风险偏好
+    if profile.risk_preference not in ['conservative', 'balanced', 'aggressive']:
+        raise HTTPException(status_code=400, detail="无效的风险偏好")
+
+    profile_dict = profile.model_dump()
+    db.save_user_profile(profile_dict)
+
+    # 返回更新后的配置
+    return await get_user_profile()
+
+
 @router.get("/api/cp/top")
 async def get_cp_top(
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=3000),
     force_refresh: bool = Query(default=False),
     board: str = Query(default=None, description="板块过滤: main=主板, gem=创业板, star=科创板, 不填=全部")
 ):
@@ -354,7 +414,7 @@ async def get_single_stock(code: str):
 
 @router.post("/api/refresh")
 @limiter.limit("5/minute")
-async def refresh_data(request: Request, limit: int = Query(default=100, ge=10, le=500)):
+async def refresh_data(request: Request, limit: int = Query(default=500, ge=10, le=3000)):
     """手动刷新数据"""
     success = await refresh_cp_data(limit=limit)
     if success:
@@ -365,7 +425,7 @@ async def refresh_data(request: Request, limit: int = Query(default=100, ge=10, 
 
 @router.get("/api/cp/recommend")
 async def get_recommended_stocks(category: str = Query(default="value", description="类型: value=价值型, growth=成长型, momentum=趋势型, quality=质量型, allround=综合型")):
-    """获取推荐股票"""
+    """获取推荐股票（已应用用户约束过滤）"""
     # 验证category参数
     valid_categories = ["value", "growth", "momentum", "quality", "allround"]
     if category not in valid_categories:
@@ -376,9 +436,29 @@ async def get_recommended_stocks(category: str = Query(default="value", descript
         if not success and not cp_engine.stocks:
             return {"error": "数据刷新失败，请稍后重试", "category": category, "total": 0, "data": []}
 
+    # 获取用户配置并应用约束过滤
+    db = get_db()
+    user_profile = db.get_user_profile()
+    capital = user_profile.get('capital', 20000)
+    allowed_boards = user_profile.get('allowed_boards', ['main'])
+    consider_dividend = user_profile.get('consider_dividend', True)
+
     data = []
     for s in cp_engine.stocks:
-        data.append(_build_stock_cp_data(s))
+        stock_data = _build_stock_cp_data(s)
+
+        # 过滤1：板块过滤（根据用户允许的板块）
+        if stock_data.board_type not in allowed_boards:
+            continue
+
+        # 过滤2：资金过滤（能买得起至少1手 = price * 100 <= capital）
+        if stock_data.price > 0 and stock_data.price * 100 > capital:
+            continue
+
+        # 过滤3：股息考虑（如果不考虑股息，则股息率为0的也保留）
+        # 这里保留所有股票，让排序来体现优先级
+
+        data.append(stock_data)
 
     # 按类型筛选（使用v14公式权重计算综合战力）
     def calc_v14_score(s):
@@ -411,10 +491,23 @@ async def get_recommended_stocks(category: str = Query(default="value", descript
         filtered = [s for s in data if s.total_cp > 0]
         filtered.sort(key=lambda x: calc_v14_score(x), reverse=True)
 
+    # 如果考虑股息，将有股息的股票排前面
+    if consider_dividend:
+        # 分成两组：有股息的和无股息的
+        with_div = [s for s in filtered if (s.dividend_yield or 0) > 0]
+        without_div = [s for s in filtered if (s.dividend_yield or 0) == 0]
+        filtered = with_div + without_div
+
     return {
         "category": category,
         "total": len(filtered),
-        "data": filtered[:20]
+        "data": filtered[:20],
+        "filters": {
+            "capital": capital,
+            "allowed_boards": allowed_boards,
+            "consider_dividend": consider_dividend,
+            "affordable_count": len(data)
+        }
     }
 
 
@@ -672,6 +765,10 @@ async def should_swap(
     - action_color: green/yellow/gray/red
     - action_label: 操作建议文字
     """
+    # 验证：不能和自己比较
+    if from_code == to_code:
+        raise HTTPException(status_code=400, detail="不能和同一只股票比较，请选择不同的股票")
+
     # 获取两只股票的战力
     stock_from = cp_engine.get_by_code(from_code)
     stock_to = cp_engine.get_by_code(to_code)

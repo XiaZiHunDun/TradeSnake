@@ -14,7 +14,7 @@ from api.websocket import WebSocketManager
 app = FastAPI(
     title="TradeSnake API",
     description="股市贪吃蛇 - 战力值计算API",
-    version="0.1.0"
+    version="18.x"
 )
 
 # WebSocket管理器
@@ -64,7 +64,7 @@ async def websocket_alerts(websocket: WebSocket):
 async def root():
     return {
         "name": "TradeSnake API",
-        "version": "0.1.0",
+        "version": "18.x",
         "description": "股市贪吃蛇 - 战力值计算API"
     }
 

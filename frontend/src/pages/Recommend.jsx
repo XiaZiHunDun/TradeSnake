@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { TrendingUp, TrendingDown, Star, Zap, X } from 'lucide-react'
 import ReactECharts from 'echarts-for-react'
 import { useWatchlist } from '../hooks/useWatchlist'
@@ -60,7 +60,7 @@ function Recommend() {
     fetchRecommend()
   }, [recommendType])
 
-  const fetchRecommend = async () => {
+  const fetchRecommend = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -80,7 +80,7 @@ function Recommend() {
       setError(e.message || '数据加载失败，请检查网络连接')
     }
     setLoading(false)
-  }
+  }, [recommendType])
 
   const getCPColor = (cp) => {
     if (cp >= 70) return 'cp-high'

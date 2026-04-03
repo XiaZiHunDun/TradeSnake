@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { Plus, Trash2, Calculator, Zap } from 'lucide-react'
 import ReactECharts from 'echarts-for-react'
 
@@ -11,8 +11,8 @@ function PortfolioSimulator() {
   const [simResult, setSimResult] = useState(null)
   const [simChange, setSimChange] = useState(10) // 模拟战力变化值
 
-  // 搜索股票
-  const searchStock = async (code) => {
+  // 搜索股票 - 使用useCallback避免每次渲染重新创建
+  const searchStock = useCallback(async (code) => {
     if (!code.trim()) return
 
     setLoading(true)
@@ -39,7 +39,7 @@ function PortfolioSimulator() {
       setError('网络错误，请检查连接')
     }
     setLoading(false)
-  }
+  }, [])
 
   // 添加到模拟组合
   const addToSim = () => {
@@ -107,8 +107,8 @@ function PortfolioSimulator() {
     })
   }
 
-  // 获取模拟结果对比图表
-  const getCompareChartOption = () => {
+  // 获取模拟结果对比图表 - 使用useMemo避免重复计算
+  const compareChartOption = useMemo(() => {
     if (!simResult) return null
     return {
       tooltip: { trigger: 'axis' },
@@ -157,7 +157,7 @@ function PortfolioSimulator() {
         }
       ]
     }
-  }
+  }, [simResult, stocks, simChange])
 
   // 清空模拟
   const clearSim = () => {
@@ -339,7 +339,7 @@ function PortfolioSimulator() {
           {stocks.length > 0 && (
             <div className="mb-4 bg-deep-night rounded-lg p-4">
               <p className="text-gray-400 text-sm mb-2">战力贡献对比</p>
-              <ReactECharts option={getCompareChartOption()} style={{ height: '250px' }} />
+              <ReactECharts option={compareChartOption} style={{ height: '250px' }} />
             </div>
           )}
 

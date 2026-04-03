@@ -744,7 +744,10 @@ class CPEngine:
         self.stocks: List[StockCP] = []
 
     def add_stock(self, stock: StockCP):
-        """添加股票"""
+        """添加股票（自动去重）"""
+        # 检查是否已存在相同代码
+        if any(s.code == stock.code for s in self.stocks):
+            return  # 忽略重复添加
         self.stocks.append(stock)
 
     def calculate_all(self) -> List[StockCP]:

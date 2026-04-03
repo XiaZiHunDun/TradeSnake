@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { BarChart3, TrendingUp, PieChart, Crown } from 'lucide-react'
 import ReactECharts from 'echarts-for-react'
 
@@ -9,35 +9,8 @@ function SectorAnalysis() {
   const [selectedSector, setSelectedSector] = useState(null)
   const [sectorStocks, setSectorStocks] = useState([])
 
-  useEffect(() => {
-    fetchData()
-  }, [])
-
-  const fetchData = async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      // 获取所有股票数据
-      const res = await fetch('/api/cp/top?limit=200')
-      if (!res.ok) {
-        throw new Error('请求失败')
-      }
-      const json = await res.json()
-      if (json.error) {
-        setError(json.error)
-        setSectorData([])
-      } else {
-        processSectorData(json.data || [])
-      }
-    } catch (e) {
-      console.error('Failed to fetch data:', e)
-      setError(e.message || '数据加载失败，请检查网络连接')
-    }
-    setLoading(false)
-  }
-
   // 模拟行业分类（实际项目中应该从API获取真实行业数据）
-  const classifySector = (code) => {
+  const classifySector = useCallback((code) => {
     // 简单模拟分类
     const prefix = code.substring(0, 3)
     if (['600', '601', '603'].includes(prefix)) {
@@ -62,9 +35,10 @@ function SectorAnalysis() {
       return '科技'
     }
     return '其他'
-  }
+  }, [])
 
-  const processSectorData = (stocks) => {
+  // 处理行业数据
+  const processSectorData = useCallback((stocks) => {
     // 按行业分组
     const sectors = {}
     stocks.forEach(stock => {
@@ -96,7 +70,35 @@ function SectorAnalysis() {
     // 转换为数组并排序
     const sortedSectors = Object.values(sectors).sort((a, b) => b.avgCP - a.avgCP)
     setSectorData(sortedSectors)
-  }
+  }, [classifySector])
+
+  // 获取数据 - 使用useCallback避免useEffect中的 stale closure
+  const fetchData = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      // 获取所有股票数据
+      const res = await fetch('/api/cp/top?limit=200')
+      if (!res.ok) {
+        throw new Error('请求失败')
+      }
+      const json = await res.json()
+      if (json.error) {
+        setError(json.error)
+        setSectorData([])
+      } else {
+        processSectorData(json.data || [])
+      }
+    } catch (e) {
+      console.error('Failed to fetch data:', e)
+      setError(e.message || '数据加载失败，请检查网络连接')
+    }
+    setLoading(false)
+  }, [processSectorData])
+
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
 
   // 行业战力分布图
   const getSectorCPChart = () => {

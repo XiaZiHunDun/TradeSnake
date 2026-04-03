@@ -197,3 +197,21 @@ class HoldingsExportResponse(BaseModel):
     holdings: List[HoldingItem]
     total_count: int
     export_time: str
+
+
+class UserProfile(BaseModel):
+    """用户约束配置"""
+    capital: float = 20000  # 资金量，默认2万
+    allowed_boards: List[str] = ['main']  # 允许交易的板块: main/gem/star/bge
+    risk_preference: str = 'aggressive'  # 风险偏好: conservative/balanced/aggressive
+    consider_dividend: bool = True  # 是否考虑股息
+    keep_cash_reserve: bool = False  # 是否预留现金
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class UserProfileResponse(BaseModel):
+    """用户配置响应"""
+    profile: UserProfile
+    affordable_stocks_count: int = 0  # 当前可买股票数量
+    filter_summary: str = ""  # 筛选条件说明

@@ -14,8 +14,10 @@ import re
 import time
 import json
 import hashlib
+import threading
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
+from collections import OrderedDict
 
 # ==================== 常量配置 ====================
 # 重试配置
@@ -37,6 +39,60 @@ FINANCIAL_DATA_SOURCES = [
 ]
 
 
+# ==================== 内存缓存（LRU）====================
+
+class MemoryCache:
+    """线程安全的内存LRU缓存"""
+
+    def __init__(self, maxsize: int = 128, ttl_seconds: int = 60):
+        self._cache = OrderedDict()
+        self._timestamps = {}
+        self._maxsize = maxsize
+        self._ttl = ttl_seconds
+        self._lock = threading.RLock()
+
+    def get(self, key: str) -> Optional[any]:
+        """获取缓存值"""
+        with self._lock:
+            if key not in self._cache:
+                return None
+
+            # 检查TTL
+            if time.time() - self._timestamps[key] > self._ttl:
+                del self._cache[key]
+                del self._timestamps[key]
+                return None
+
+            # 移到末尾（最近使用）
+            self._cache.move_to_end(key)
+            return self._cache[key]
+
+    def set(self, key: str, value: any):
+        """设置缓存值"""
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            else:
+                if len(self._cache) >= self._maxsize:
+                    # 删除最旧的条目
+                    oldest = next(iter(self._cache))
+                    del self._cache[oldest]
+                    del self._timestamps[oldest]
+
+            self._cache[key] = value
+            self._timestamps[key] = time.time()
+
+    def clear(self):
+        """清空缓存"""
+        with self._lock:
+            self._cache.clear()
+            self._timestamps.clear()
+
+
+# 全局内存缓存实例
+_memory_cache = MemoryCache(maxsize=256, ttl_seconds=30)
+
+
 # ==================== 工具函数 ====================
 
 def ensure_dir(path: str):
@@ -51,7 +107,13 @@ def get_cache_path(cache_type: str) -> str:
 
 
 def read_cache(cache_type: str) -> Optional[Dict]:
-    """读取缓存"""
+    """读取缓存（优先从内存缓存读取）"""
+    # 优先从内存缓存读取
+    mem_value = _memory_cache.get(cache_type)
+    if mem_value is not None:
+        return mem_value
+
+    # 内存缓存未命中，从磁盘读取
     cache_file = get_cache_path(cache_type)
     if not os.path.exists(cache_file):
         return None
@@ -65,14 +127,21 @@ def read_cache(cache_type: str) -> Optional[Dict]:
         if datetime.now() > expire_time:
             return None
 
-        return cache.get('data')
+        data = cache.get('data')
+        # 写入内存缓存
+        if data is not None:
+            _memory_cache.set(cache_type, data)
+        return data
     except Exception as e:
         print(f"读取缓存失败 {cache_type}: {e}")
         return None
 
 
 def write_cache(cache_type: str, data: Dict, expire_minutes: int = CACHE_EXPIRE_MINUTES):
-    """写入缓存"""
+    """写入缓存（同时写入内存和磁盘）"""
+    # 先写入内存缓存
+    _memory_cache.set(cache_type, data)
+
     cache_file = get_cache_path(cache_type)
     try:
         cache = {
@@ -287,8 +356,8 @@ class MarketDataFetcher:
                 if len(fields) > 44 and fields[44] and fields[44] != '-':
                     try:
                         market_cap = float(fields[44])  # 已是亿单位
-                    except:
-                        pass
+                    except Exception:
+                        pass  # 市值解析失败不影响其他数据
 
                 stocks.append({
                     'code': code,
@@ -534,13 +603,25 @@ class StockDataFetcher:
         # 分批获取行情
         all_data = []
         batch_size = 50
+        failed_batches = 0
 
         for i in range(0, len(sample), batch_size):
             batch = sample.iloc[i:i+batch_size]
             codes = batch['code'].tolist()
-            market_data = self.market_fetcher.get_market_data(codes)
-            all_data.extend(market_data)
+            try:
+                market_data = self.market_fetcher.get_market_data(codes)
+                if market_data:
+                    all_data.extend(market_data)
+                else:
+                    failed_batches += 1
+            except Exception as e:
+                failed_batches += 1
+                print(f"  批次获取失败 ({i//batch_size + 1}): {e}")
             time.sleep(0.05)  # 避免请求过快
+
+        # 如果成功率太低，输出警告
+        if failed_batches > 0 and len(all_data) == 0:
+            print(f"  警告: 所有批次获取失败，共 {failed_batches} 个批次")
 
         return all_data
 
@@ -617,14 +698,17 @@ class StockDataFetcher:
 
 # ==================== 便捷函数 ====================
 
-# 全局实例（复用）
+# 全局实例（复用，线程安全）
 _global_fetcher = None
+_global_fetcher_lock = threading.Lock()
 
 def get_stock_data_api(limit: int = 100) -> List[Dict]:
     """便捷函数：获取股票数据"""
     global _global_fetcher
     if _global_fetcher is None:
-        _global_fetcher = StockDataFetcher()
+        with _global_fetcher_lock:
+            if _global_fetcher is None:  # 双重检查锁定
+                _global_fetcher = StockDataFetcher()
     return _global_fetcher.get_full_stock_data(limit)
 
 
