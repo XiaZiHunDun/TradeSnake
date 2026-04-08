@@ -48,7 +48,7 @@
 
 ```
 simulator/
-├── __init__.py           # 模块导出（v19.1）
+├── __init__.py           # 模块导出（v19.7）
 ├── database.py           # SQLite数据库封装（WAL模式）
 ├── account.py            # 账户管理（含冻结资金、费用计算）
 ├── portfolio.py          # 持仓管理（FIFO批次 + 除权除息）

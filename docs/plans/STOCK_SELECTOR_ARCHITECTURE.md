@@ -283,7 +283,7 @@ class StockSelector:
 stock_selector/
 ├── __init__.py              # 模块导出
 ├── config.py                # 筛选配置（含动态调整+更新频率）
-├── selector.py              # 主筛选器 (Facade)
+├── stock_selector.py        # 主筛选器 (Facade)
 ├── pool_manager.py          # 股票池管理器
 ├── update_strategy.py       # ⚠️ 数据更新频率策略 🆕
 ├── filters/

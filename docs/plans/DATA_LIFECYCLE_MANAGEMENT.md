@@ -617,25 +617,33 @@ def log_cleanup_audit(operation: str, details: dict, records_deleted: int,
 ### 8.1 清理报告生成
 
 ```python
-def generate_cleanup_report() -> str:
-    """生成清理报告"""
+def generate_cleanup_report(results: Dict) -> str:
+    """生成清理报告
+
+    Args:
+        results: 清理操作结果，包含以下结构:
+            - timestamp: 清理执行时间
+            - operations: 操作列表，每项包含:
+                - operation: 操作名称
+                - status: success/failed
+                - deleted_count: 删除数量
+                - freed_bytes: 释放字节数
+    """
     report = f"""
-📊 数据清理报告 ({datetime.now().strftime('%Y-%m-%d %H:%M')})
+📊 数据清理报告 ({results.get('timestamp', datetime.now().isoformat())})
 
-✅ 已完成清理：
-├── DuckDB 日K线: 清理 {deleted} 条过期记录，释放 {freed_mb} MB
-├── DuckDB 分钟K: 清理 {minute_deleted} 条，释放 {minute_mb} MB
-├── JSON 缓存: 清理 {cache_deleted} 个过期文件，释放 {cache_mb} MB
-└── SQLite 历史: 清理 {sqlite_deleted} 条旧记录
+✅ 执行结果：
+"""
+    for op in results.get("operations", []):
+        status_icon = "✅" if op.get("status") == "success" else "❌"
+        report += f"{status_icon} {op.get('operation')}: 删除 {op.get('deleted_count', 0)} 条，释放 {op.get('freed_bytes', 0) / 1024:.1f} KB\n"
 
+    storage = check_storage_water_level()
+    report += f"""
 📦 当前存储状态：
-├── DuckDB 日K: {duckdb_size} MB (使用率 {duckdb_usage}%)
-├── DuckDB 分K: {minute_size} MB (使用率 {minute_usage}%)
-├── SQLite: {sqlite_size} MB
-├── JSON 缓存: {cache_size} MB
-└── 总计: {total_size} MB / {limit} GB 上限
-
-💡 建议：{suggestion}
+├── 使用率: {storage['usage_percent']}%
+├── 状态: {storage['status']}
+└── 可用空间: {storage['free_bytes'] / 1024 / 1024 / 1024:.2f} GB
 """
     return report
 ```
