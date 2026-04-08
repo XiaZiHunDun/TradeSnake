@@ -1,4 +1,4 @@
-import { RefreshCw, Zap, List, Search, User, Sparkles, Menu, X, Sun, Moon, Calculator, Settings, Trophy, Bell, BarChart3, BookOpen } from 'lucide-react'
+import { RefreshCw, Zap, List, Search, User, Sparkles, Menu, X, Sun, Moon, Calculator, Settings, Trophy, Bell, BarChart3, BookOpen, Wallet } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useTheme } from '../hooks/useTheme'
 import NotificationCenter from './NotificationCenter'
@@ -147,6 +147,17 @@ function Header({ onRefresh, currentPage, onNavigate, onOpenSettings, onOpenEduc
             >
               <User className="w-4 h-4" />
               我的战力
+            </button>
+            <button
+              onClick={() => onNavigate('trading')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                currentPage === 'trading'
+                  ? 'bg-cp-high/20 text-cp-high'
+                  : 'text-gray-400 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <Wallet className="w-4 h-4" />
+              模拟交易
             </button>
             <button
               onClick={() => onNavigate('recommend')}
@@ -379,6 +390,15 @@ function Header({ onRefresh, currentPage, onNavigate, onOpenSettings, onOpenEduc
               >
                 <User className="w-5 h-5" />
                 我的战力
+              </button>
+              <button
+                onClick={() => { onNavigate('trading'); setMobileMenuOpen(false) }}
+                className={`flex items-center gap-2 px-4 py-3 rounded-lg transition-colors ${
+                  currentPage === 'trading' ? 'bg-cp-high/20 text-cp-high' : 'text-gray-400'
+                }`}
+              >
+                <Wallet className="w-5 h-5" />
+                模拟交易
               </button>
               <button
                 onClick={() => { onNavigate('recommend'); setMobileMenuOpen(false) }}

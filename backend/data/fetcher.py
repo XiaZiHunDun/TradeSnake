@@ -15,6 +15,7 @@ import time
 import json
 import hashlib
 import threading
+import baostock as bs
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 from collections import OrderedDict
@@ -456,21 +457,67 @@ class FinancialDataFetcher:
             market = 'SZ'
 
         # 获取东方财富数据
-        data = self._fetch_from_eastmoney(symbol, market)
-        if data:
-            write_cache(cache_key, data, expire_minutes=60 * 24)  # 财务数据缓存24小时
-            return data
+        # 先尝试东方财富（更快）
+        em_data = self._fetch_from_eastmoney(symbol, market)
 
-        # 东方财富失败，尝试备用
-        data = self._fetch_backup(symbol, market)
-        if data:
-            write_cache(cache_key, data, expire_minutes=60 * 24)
-            return data
+        # 同时获取baostock数据（更全面）
+        bs_data = self._fetch_from_baostock(symbol)
+
+        # 合并数据：优先使用东方财富的值，baostock补充缺失字段
+        if em_data and bs_data:
+            # 东方财富有数据，baostock补充缺失字段
+            result = em_data.copy()
+            if result.get('gross_margin', 0) == 0 and bs_data.get('gross_margin', 0) > 0:
+                result['gross_margin'] = bs_data['gross_margin']
+            if result.get('revenue', 0) == 0 and bs_data.get('revenue', 0) > 0:
+                result['revenue'] = bs_data['revenue']
+            if result.get('debt_ratio', 0) == 0 and bs_data.get('debt_ratio', 0) > 0:
+                result['debt_ratio'] = bs_data['debt_ratio']
+            if result.get('cashflow', 0) == 0 and bs_data.get('cashflow', 0) != 0:
+                result['cashflow'] = bs_data['cashflow']
+            # 股息数据用baostock的
+            if bs_data.get('dividend_per_share'):
+                result['dividend_per_share'] = bs_data['dividend_per_share']
+            # 数据源标记
+            result['source'] = 'eastmoney+baostock'
+        elif em_data:
+            result = em_data
+        elif bs_data:
+            result = bs_data
+        else:
+            result = None
+
+        # 用akshare补充流动比率、利息保障倍数、扣非净利润等字段
+        try:
+            df_ak = ak.stock_financial_analysis_indicator(symbol=symbol, start_year='2023')
+            if df_ak is not None and len(df_ak) > 0:
+                latest_ak = df_ak.iloc[-1]
+                if result is None:
+                    result = {}
+                # 流动比率
+                current_ratio = latest_ak.get('流动比率', 0)
+                if current_ratio is not None and str(current_ratio) != 'nan':
+                    result['current_ratio'] = round(float(current_ratio), 2)
+                # 利息保障倍数
+                interest_coverage = latest_ak.get('利息支付倍数', 0)
+                if interest_coverage is not None and str(interest_coverage) != 'nan':
+                    result['interest_coverage'] = round(float(interest_coverage), 2)
+                # 扣非净利润（亿元）
+                deducted_net_profit = latest_ak.get('扣除非经常性损益后的净利润(元)', 0)
+                if deducted_net_profit is not None and str(deducted_net_profit) != 'nan':
+                    result['deducted_net_profit'] = round(float(deducted_net_profit) / 100000000, 2)
+        except Exception as e:
+            print(f"  akshare补充字段失败 {symbol}: {e}")
+
+        if result:
+            write_cache(cache_key, result, expire_minutes=60 * 24)
+            return result
 
         # 都失败，返回空数据（带标记）
         return {
             'roe': 0, 'net_profit_growth': 0, 'revenue_growth': 0,
             'gross_margin': 0, 'revenue': 0, 'cashflow': 0, 'debt_ratio': 0,
+            'current_ratio': 0, 'interest_coverage': 0, 'deducted_net_profit': 0,
             'dividend_yield': 0, 'turnover_rate': 0,
             'data_quality': 'low',  # 数据质量标记
             'source': 'none'
@@ -478,10 +525,13 @@ class FinancialDataFetcher:
 
     def _fetch_from_eastmoney(self, symbol: str, market: str) -> Optional[Dict]:
         """从东方财富获取财务数据（带重试）"""
+        # 注意：东方财富RPT_LICO_FN_CPD报告的部分字段已更名或废弃
+        # 目前仅确认以下字段可用：WEIGHTAVG_ROE, YSTZ, SJLTZ
+        # 其他字段（GPZYTZXJ, MAIN_BUSINESS_INCOME, OPERATE_CASHFLOW等）已不存在
         url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
         params = {
             "reportName": "RPT_LICO_FN_CPD",
-            "columns": "WEIGHTAVG_ROE,YSTZ,SJLTZ,GPZYTZXJ,MAIN_BUSINESS_INCOME,OPERATE_CASHFLOW,ASSET_LIAB_RATIO,DIVIDEND_RATIO",
+            "columns": "WEIGHTAVG_ROE,YSTZ,SJLTZ",
             "filter": f"(SECUCODE=\"{symbol}.{market}\")",
             "pageNumber": 1,
             "pageSize": 1,
@@ -503,11 +553,12 @@ class FinancialDataFetcher:
                         'roe': round(float(d.get('WEIGHTAVG_ROE', 0) or 0), 2),
                         'net_profit_growth': round(float(d.get('SJLTZ', 0) or 0), 2),
                         'revenue_growth': round(float(d.get('YSTZ', 0) or 0), 2),
-                        'gross_margin': round(float(d.get('GPZYTZXJ', 0) or 0), 2),
-                        'revenue': round(float(d.get('MAIN_BUSINESS_INCOME', 0) or 0) / 100000000, 2),
-                        'cashflow': round(float(d.get('OPERATE_CASHFLOW', 0) or 0) / 100000000, 2),
-                        'debt_ratio': round(float(d.get('ASSET_LIAB_RATIO', 0) or 0), 2),
-                        'dividend_yield': round(float(d.get('DIVIDEND_RATIO', 0) or 0), 2),
+                        # 其他字段由baostock补充
+                        'gross_margin': 0,
+                        'revenue': 0,
+                        'cashflow': 0,
+                        'debt_ratio': 0,
+                        'dividend_yield': 0,
                         'data_quality': 'high',
                         'source': 'eastmoney'
                     }
@@ -522,20 +573,249 @@ class FinancialDataFetcher:
         print(f"  东方财富财务API失败 {symbol}: {last_error}")
         return None
 
+    def _fetch_from_baostock(self, symbol: str) -> Optional[Dict]:
+        """从baostock获取财务数据"""
+        try:
+            # 转换代码格式
+            if symbol.startswith('6'):
+                baostock_code = f'sh.{symbol}'
+            else:
+                baostock_code = f'sz.{symbol}'
+
+            lg = bs.login()
+            if lg.error_code != '0':
+                bs.logout()
+                return None
+
+            result = {
+                'roe': 0,
+                'net_profit_growth': 0,
+                'revenue_growth': 0,
+                'gross_margin': 0,
+                'revenue': 0,
+                'cashflow': 0,
+                'debt_ratio': 0,
+                'dividend_yield': 0,
+                'data_quality': 'low',
+                'source': 'baostock'
+            }
+
+            # 获取盈利能力数据 (ROE, 毛利率, 营收)
+            try:
+                rs = bs.query_profit_data(code=baostock_code, year=2024, quarter=4)
+                if rs.error_code == '0':
+                    data = rs.get_data()
+                    if len(data) > 0:
+                        row = data.iloc[-1]
+                        # roeAvg 是 ROE 小数 (如 0.384 表示 38.4%)
+                        roe = row.get('roeAvg')
+                        if roe is not None and str(roe) != '' and str(roe) != 'nan':
+                            result['roe'] = round(float(roe) * 100, 2)
+                        # gpMargin 是毛利率小数 (如 0.92 表示 92%)
+                        gp = row.get('gpMargin')
+                        if gp is not None and str(gp) != '' and str(gp) != 'nan':
+                            result['gross_margin'] = round(float(gp) * 100, 2)
+                        # MBRevenue 是主营业务收入 (元)，转为亿元
+                        mbrevenue = row.get('MBRevenue')
+                        if mbrevenue is not None and str(mbrevenue) != '' and str(mbrevenue) != 'nan':
+                            result['revenue'] = round(float(mbrevenue) / 100000000, 2)
+            except Exception as e:
+                print(f"  baostock盈利能力获取失败 {symbol}: {e}")
+
+            # 获取成长能力数据 (净利润增长率)
+            try:
+                rs = bs.query_growth_data(code=baostock_code, year=2024, quarter=4)
+                if rs.error_code == '0':
+                    data = rs.get_data()
+                    if len(data) > 0:
+                        row = data.iloc[-1]
+                        # YOYNI 是净利润同比增长百分比
+                        yoyni = row.get('YOYNI')
+                        if yoyni is not None and str(yoyni) != '' and str(yoyni) != 'nan':
+                            result['net_profit_growth'] = round(float(yoyni) * 100, 2)
+                        # YOYOR 营收增长率
+                        yoyor = row.get('YOYOR')
+                        if yoyor is not None and str(yoyor) != '' and str(yoyor) != 'nan':
+                            result['revenue_growth'] = round(float(yoyor) * 100, 2)
+            except Exception as e:
+                print(f"  baostock成长能力获取失败 {symbol}: {e}")
+
+            # 获取资产负债表数据 (资产负债率)
+            # 注意：baostock的liabilityToAsset字段值异常，改用assetToEquity计算
+            # debt_ratio = (assets - equity) / assets = 1 - equity/assets = 1 - 1/(assetToEquity)
+            try:
+                rs = bs.query_balance_data(code=baostock_code, year=2024, quarter=4)
+                if rs.error_code == '0':
+                    data = rs.get_data()
+                    if len(data) > 0:
+                        row = data.iloc[-1]
+                        asset_to_equity = row.get('assetToEquity')
+                        if asset_to_equity is not None and str(asset_to_equity) != '' and str(asset_to_equity) != 'nan':
+                            ate = float(asset_to_equity)
+                            if ate > 0:
+                                result['debt_ratio'] = round((1 - 1/ate) * 100, 2)
+            except Exception as e:
+                print(f"  baostock资产负债表获取失败 {symbol}: {e}")
+
+            # 获取现金流数据 (经营现金流)
+            # baostock只提供比率字段(CFOToNP=经营现金流/净利润, CFOToOR=经营现金流/营收)
+            # 用CFOToNP判断正负，如果CFOToNP为空则用CFOToOR
+            try:
+                rs = bs.query_cash_flow_data(code=baostock_code, year=2024, quarter=4)
+                if rs.error_code == '0':
+                    data = rs.get_data()
+                    if len(data) > 0:
+                        row = data.iloc[-1]
+                        # 优先用CFOToNP，如果为空则用CFOToOR
+                        cfo_to_np = row.get('CFOToNP')
+                        cfo_ratio = None
+                        if cfo_to_np is not None and str(cfo_to_np) != '' and str(cfo_to_np) != 'nan':
+                            cfo_ratio = float(cfo_to_np)
+                        elif cfo_to_np is not None and str(cfo_to_np) == '':
+                            # CFOToNP为空，尝试用CFOToOR
+                            cfo_to_or = row.get('CFOToOR')
+                            if cfo_to_or is not None and str(cfo_to_or) != '' and str(cfo_to_or) != 'nan':
+                                cfo_ratio = float(cfo_to_or)
+                        if cfo_ratio is not None and cfo_ratio > 0:
+                            result['cashflow'] = 1  # 正现金流标记
+                        elif cfo_ratio is not None and cfo_ratio < 0:
+                            result['cashflow'] = -1  # 负现金流标记
+            except Exception as e:
+                print(f"  baostock现金流获取失败 {symbol}: {e}")
+
+            # 获取股息数据 (每股派息)
+            # 股息率需要用股价计算，这里先获取每股派息
+            try:
+                rs = bs.query_dividend_data(code=baostock_code, year=2024)
+                if rs.error_code == '0':
+                    data = rs.get_data()
+                    if len(data) > 0:
+                        row = data.iloc[-1]
+                        # dividCashPsBeforeTax 是每股派息(含税)，单位元
+                        dividend_ps = row.get('dividCashPsBeforeTax')
+                        if dividend_ps is not None and str(dividend_ps) != '' and str(dividend_ps) != 'nan':
+                            result['dividend_per_share'] = round(float(dividend_ps), 2)
+            except Exception as e:
+                print(f"  baostock股息数据获取失败 {symbol}: {e}")
+
+            bs.logout()
+
+            # 用akshare补充现金流绝对值（每股经营性现金流 × 总股本）
+            # 注意：baostock在logout后需要重新登录才能查询
+            try:
+                # 获取每股经营性现金流
+                df_ak = ak.stock_financial_analysis_indicator(symbol=symbol, start_year='2023')
+                if df_ak is not None and len(df_ak) > 0:
+                    latest_ak = df_ak.iloc[-1]
+                    ocf_per_share = latest_ak.get('每股经营性现金流(元)', 0)
+                    if ocf_per_share and float(ocf_per_share) > 0:
+                        # 重新登录baostock获取总股本
+                        lg2 = bs.login()
+                        if lg2.error_code == '0':
+                            rs_bs = bs.query_profit_data(code=baostock_code, year=2024, quarter=4)
+                            if rs_bs.error_code == '0':
+                                data_bs = rs_bs.get_data()
+                                if len(data_bs) > 0:
+                                    total_share = float(data_bs.iloc[-1].get('totalShare', 0)) / 100000000  # 转为亿股
+                                    if total_share > 0:
+                                        ocf_abs = float(ocf_per_share) * total_share
+                                        result['cashflow'] = round(ocf_abs, 2)  # 存储现金流绝对值（亿元）
+                                        result['cashflow_source'] = 'akshare+baostock'
+                                        print(f"  {symbol} 经营现金流绝对值: {ocf_abs:.2f}亿元 (每股{ocf_per_share}元 × {total_share:.2f}亿股)")
+                            bs.logout()
+            except Exception as e:
+                print(f"  akshare现金流补充失败 {symbol}: {e}")
+                # 清理可能导致的问题
+                if 'cashflow' in result and isinstance(result.get('cashflow'), str):
+                    result['cashflow'] = 0
+
+            # 如果获取到有效数据，提升质量标记
+            if result['roe'] > 0 or result['net_profit_growth'] != 0:
+                result['data_quality'] = 'medium'
+
+            return result
+
+        except Exception as e:
+            try:
+                bs.logout()
+            except:
+                pass
+            print(f"  baostock获取财务数据失败 {symbol}: {e}")
+            return None
+
     def _fetch_backup(self, symbol: str, market: str) -> Optional[Dict]:
-        """从备用源获取财务数据（使用akshare）"""
+        """从备用源获取财务数据（优先baostock，其次akshare）"""
+        # 先尝试baostock
+        data = self._fetch_from_baostock(symbol)
+        if data and (data['roe'] > 0 or data['net_profit_growth'] != 0):
+            return data
+
+        # 再尝试akshare
         try:
             # 使用akshare获取财务数据作为备用
             try:
                 df = ak.stock_financial_analysis_indicator(symbol=symbol)
                 if df is not None and len(df) > 0:
                     latest = df.iloc[-1]
+
+                    # 尝试获取ROE（兼容新旧列名）
+                    roe = (
+                        latest.get('加权净资产收益率（%）', 0) or
+                        latest.get('净资产收益率（%）', 0) or
+                        latest.get('加权平均净资产收益率', 0) or
+                        latest.get('净资产收益率(%)', 0) or
+                        0
+                    )
+
+                    # 尝试获取净利润增长率
+                    net_profit_growth = (
+                        latest.get('净利润增长率（%）', 0) or
+                        latest.get('净利润增长率', 0) or
+                        latest.get('净利润增长率(%)', 0) or
+                        0
+                    )
+
+                    # 尝试获取营收增长率
+                    revenue_growth = (
+                        latest.get('主营业务收入增长率（%）', 0) or
+                        latest.get('主营业务收入增长率', 0) or
+                        latest.get('主营业务收入增长率(%)', 0) or
+                        0
+                    )
+
+                    # 尝试获取毛利率
+                    gross_margin = (
+                        latest.get('销售毛利率（%）', 0) or
+                        latest.get('销售毛利率', 0) or
+                        latest.get('销售毛利率(%)', 0) or
+                        0
+                    )
+
+                    # 尝试获取流动比率
+                    current_ratio = latest.get('流动比率', 0)
+                    if current_ratio is None or str(current_ratio) == 'nan':
+                        current_ratio = 0
+
+                    # 尝试获取利息保障倍数
+                    interest_coverage = latest.get('利息支付倍数', 0)
+                    if interest_coverage is None or str(interest_coverage) == 'nan':
+                        interest_coverage = 0
+
+                    # 尝试获取扣非净利润（元转为亿元）
+                    deducted_net_profit = latest.get('扣除非经常性损益后的净利润(元)', 0)
+                    if deducted_net_profit is None or str(deducted_net_profit) == 'nan':
+                        deducted_net_profit = 0
+                    deducted_net_profit = round(float(deducted_net_profit or 0) / 100000000, 2)
+
                     return {
-                        'roe': round(float(latest.get('加权平均净资产收益率', 0) or 0), 2),
-                        'net_profit_growth': round(float(latest.get('净利润增长率', 0) or 0), 2),
-                        'revenue_growth': round(float(latest.get('主营业务收入增长率', 0) or 0), 2),
-                        'gross_margin': round(float(latest.get('销售毛利率', 0) or 0), 2),
+                        'roe': round(float(roe or 0), 2),
+                        'net_profit_growth': round(float(net_profit_growth or 0), 2),
+                        'revenue_growth': round(float(revenue_growth or 0), 2),
+                        'gross_margin': round(float(gross_margin or 0), 2),
                         'revenue': 0, 'cashflow': 0, 'debt_ratio': 0,
+                        'current_ratio': round(float(current_ratio or 0), 2),
+                        'interest_coverage': round(float(interest_coverage or 0), 2),
+                        'deducted_net_profit': deducted_net_profit,
                         'dividend_yield': 0,
                         'data_quality': 'medium',
                         'source': 'akshare'
@@ -573,8 +853,15 @@ class StockDataFetcher:
         """获取行情数据（兼容旧接口）"""
         return self.market_fetcher.get_market_data(codes)
 
-    def get_batch_market_data(self, limit: int = 300, prefer_top: bool = True) -> List[Dict]:
-        """批量获取市场数据（智能选择）"""
+    def get_batch_market_data(self, limit: int = 300, prefer_top: bool = True, page: int = 0) -> List[Dict]:
+        """批量获取市场数据（智能选择）
+
+        Args:
+            limit: 获取数量
+            prefer_top: 是否优先选择成交额高的股票
+            page: 页码，用于分页获取不同股票（每页limit个）
+                     page > 0 时自动使用随机采样
+        """
         stock_df = self.stock_list_fetcher.get_stock_list()
 
         # 基础过滤：沪深主板，排除ST
@@ -583,7 +870,8 @@ class StockDataFetcher:
             ~stock_df['name'].str.contains('ST', na=False)
         ]
 
-        if prefer_top:
+        # page > 0 时强制使用随机采样，确保获取不同的股票
+        if prefer_top and page == 0:
             # 优先选择成交额高的股票（更有代表性）
             top_codes = self.stock_list_fetcher.get_market_cap_leaders(limit * 2)
             if top_codes:
@@ -598,7 +886,9 @@ class StockDataFetcher:
             else:
                 sample = main_stocks.sample(n=min(limit, len(main_stocks)), random_state=42)
         else:
-            sample = main_stocks.sample(n=min(limit, len(main_stocks)), random_state=42)
+            # 使用页码作为随机种子的一部分，实现分页随机采样
+            seed = 42 + page * 17  # 不同的质数乘数确保分页随机性
+            sample = main_stocks.sample(n=min(limit, len(main_stocks)), random_state=seed)
 
         # 分批获取行情
         all_data = []
@@ -625,10 +915,16 @@ class StockDataFetcher:
 
         return all_data
 
-    def get_full_stock_data(self, limit: int = 100, prefer_top: bool = True) -> List[Dict]:
-        """获取完整股票数据（行情+财务）"""
+    def get_full_stock_data(self, limit: int = 100, prefer_top: bool = True, page: int = 0) -> List[Dict]:
+        """获取完整股票数据（行情+财务）
+
+        Args:
+            limit: 获取数量
+            prefer_top: 是否优先选择成交额高的股票
+            page: 页码，用于分页获取不同股票
+        """
         # 获取行情
-        market_data = self.get_batch_market_data(limit, prefer_top)
+        market_data = self.get_batch_market_data(limit, prefer_top, page=page)
 
         full_data = []
         success_count = 0
@@ -651,10 +947,17 @@ class StockDataFetcher:
             fin = self.financial_fetcher.get_financial_data(symbol)
 
             # 合并数据
+            price = mkt.get('price', 0)
+            # 计算股息率：如果有每股派息和股价，计算股息率 = 每股派息/股价*100
+            dividend_per_share = fin.get('dividend_per_share', 0)
+            dividend_yield = 0
+            if price > 0 and dividend_per_share > 0:
+                dividend_yield = round(dividend_per_share / price * 100, 2)
+
             data = {
                 'code': code,
                 'name': mkt.get('name', ''),
-                'price': mkt.get('price', 0),
+                'price': price,
                 'yesterday': mkt.get('yesterday', 0),
                 'open': mkt.get('open', 0),
                 'high': mkt.get('high', 0),
@@ -672,15 +975,15 @@ class StockDataFetcher:
                 'revenue': fin.get('revenue', 0),
                 'cashflow': fin.get('cashflow', 0),
                 'debt_ratio': fin.get('debt_ratio', 0),
-                'dividend_yield': fin.get('dividend_yield', 0),
+                'dividend_yield': dividend_yield,
                 'data_quality': fin.get('data_quality', 'low'),
                 'data_source': mkt.get('source', 'unknown')
             }
 
             full_data.append(data)
 
-            # 统计
-            if fin.get('data_quality') == 'high':
+            # 统计 - high和medium都算成功
+            if fin.get('data_quality') in ('high', 'medium'):
                 success_count += 1
             else:
                 fail_count += 1
@@ -702,14 +1005,19 @@ class StockDataFetcher:
 _global_fetcher = None
 _global_fetcher_lock = threading.Lock()
 
-def get_stock_data_api(limit: int = 100) -> List[Dict]:
-    """便捷函数：获取股票数据"""
+def get_stock_data_api(limit: int = 100, page: int = 0) -> List[Dict]:
+    """便捷函数：获取股票数据
+
+    Args:
+        limit: 获取数量
+        page: 页码，用于分页获取不同股票（每页limit个）
+    """
     global _global_fetcher
     if _global_fetcher is None:
         with _global_fetcher_lock:
             if _global_fetcher is None:  # 双重检查锁定
                 _global_fetcher = StockDataFetcher()
-    return _global_fetcher.get_full_stock_data(limit)
+    return _global_fetcher.get_full_stock_data(limit, page=page)
 
 
 def get_single_stock_data(code: str) -> Optional[Dict]:
@@ -741,10 +1049,17 @@ def get_single_stock_data(code: str) -> Optional[Dict]:
     financial_fetcher = FinancialDataFetcher()
     fin = financial_fetcher.get_financial_data(clean_code, use_cache=False)
 
+    # 计算股息率：如果有每股派息和股价，计算股息率 = 每股派息/股价*100
+    price = mkt.get('price', 0)
+    dividend_per_share = fin.get('dividend_per_share', 0)
+    dividend_yield = 0
+    if price > 0 and dividend_per_share > 0:
+        dividend_yield = round(dividend_per_share / price * 100, 2)
+
     return {
         'code': tencent_code,
         'name': mkt.get('name', ''),
-        'price': mkt.get('price', 0),
+        'price': price,
         'open': mkt.get('open', 0),
         'yesterday': mkt.get('yesterday', 0),
         'high': mkt.get('high', 0),
@@ -762,6 +1077,9 @@ def get_single_stock_data(code: str) -> Optional[Dict]:
         'revenue': fin.get('revenue', 0),
         'cashflow': fin.get('cashflow', 0),
         'debt_ratio': fin.get('debt_ratio', 0),
-        'dividend_yield': fin.get('dividend_yield', 0),
+        'dividend_yield': dividend_yield,
         'data_quality': fin.get('data_quality', 'low'),
+        'current_ratio': fin.get('current_ratio', 0),
+        'interest_coverage': fin.get('interest_coverage', 0),
+        'deducted_net_profit': fin.get('deducted_net_profit', 0),
     }

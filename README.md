@@ -127,24 +127,61 @@ npm run dev
 | D | 打开数据说明 |
 | ESC | 关闭弹窗 |
 
-## 项目结构
+## 项目结构 (v18 模块化)
 
 ```
 TradeSnake/
 ├── backend/
-│   ├── api/              # API路由
-│   ├── core/             # 战力计算引擎
-│   ├── data/             # 数据获取
-│   ├── models/           # 数据模型
-│   └── tests/            # 单元测试 (107个)
-├── frontend/
-│   ├── src/
-│   │   ├── components/   # 公共组件
-│   │   ├── hooks/        # 自定义Hooks
-│   │   ├── pages/        # 页面组件
-│   │   └── utils/        # 工具函数
-│   └── public/
-└── README.md
+│   ├── data_manager/     # 数据管理模块
+│   │   ├── fetcher.py    # 数据获取（腾讯/新浪/东方财富）
+│   │   └── cache.py      # 缓存管理（冷热分离）
+│   │
+│   ├── engine/          # 分析引擎模块
+│   │   ├── constants.py  # 常量配置
+│   │   ├── cp_engine.py # 战力计算核心
+│   │   ├── risk_analyzer.py # 风险评估
+│   │   └── history.py   # 战力历史
+│   │
+│   ├── recommender/     # 智能推荐模块
+│   │   ├── recommend_engine.py
+│   │   └── swap_calculator.py
+│   │
+│   ├── simulator/       # 模拟炒股模块
+│   │   ├── account.py   # 账户管理
+│   │   ├── portfolio.py # 持仓管理
+│   │   └── trader.py    # 交易执行
+│   │
+│   ├── backtester/      # 回测验证模块
+│   │   ├── backtest.py  # 回测引擎
+│   │   ├── strategies.py # 策略定义
+│   │   └── metrics.py   # 绩效指标
+│   │
+│   ├── api/             # API层
+│   ├── models/          # 数据模型
+│   └── core/            # 旧模块（保留兼容）
+│
+├── frontend/             # React前端
+├── data/                # 数据存储
+└── plan/                # 计划文档
+```
+
+### 模块导入示例
+
+```python
+# 数据管理
+from data_manager import get_stock_data_api, get_single_stock_data
+
+# 分析引擎
+from engine import CPEngine, StockCP, RiskAnalyzer
+
+# 智能推荐
+from recommender import RecommendEngine, SwapCalculator
+
+# 模拟炒股
+from simulator import Account, Portfolio, Trader
+
+# 回测验证
+from backtester import BacktestEngine, TopNStrategy
 ```
 
 ## 用户约束系统

@@ -42,16 +42,30 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg-card);
+  background: #ffffff;
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border-color);
+  background: #000000;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3d3d54;
+  background: #333333;
+}
+
+/* 深色模式滚动条 */
+.dark ::-webkit-scrollbar-track {
+  background: #ffffff;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #000000;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #333333;
 }
 
 /* 战力标签样式 */

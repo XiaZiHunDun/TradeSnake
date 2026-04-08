@@ -40,13 +40,50 @@ class StockCPData(BaseModel):
     board_name: str = '主板'  # 板块显示名称
     can_trade_newbie: bool = True  # 新手是否可以交易
     trade_requirement: str = '新手可交易'  # 交易权限要求
+    # 新增字段
+    sector: str = ''  # 所属行业板块
+    momentum_3d: float = 0  # 3日动量
+    momentum_5d: float = 0  # 5日动量
+    net_benefit_hint: str = ''  # 净收益提示
+    # 安全性指标
+    current_ratio: float = 0  # 流动比率
+    interest_coverage: float = 0  # 利息保障倍数
+    deducted_net_profit: float = 0  # 扣非净利润(亿)
 
 
 class CPListResponse(BaseModel):
     """战力榜单响应"""
     total: int
-    data: List[StockCPData]
+    data: List["SingleStockResponse"]
     updated_at: Optional[str] = None
+    error: Optional[str] = None
+
+
+class SwapSuggestion(BaseModel):
+    """换股建议"""
+    from_code: str
+    from_name: str
+    from_cp: float
+    to_code: str
+    to_name: str
+    to_cp: float
+    cp_improvement: float
+    trade_cost: float
+    net_benefit: float
+    holding_days_equivalent: int
+    action_level: str  # strong_buy/buy/hold/danger
+    action_label: str
+
+
+class RecommendResponse(BaseModel):
+    """增强版推荐响应"""
+    category: str
+    total: int
+    data: List[StockCPData]
+    swap_suggestions: List[SwapSuggestion] = []
+    portfolio_diversity: Dict[str, int] = {}
+    filters_applied: Dict = {}
+    risk_preference: str = 'aggressive'
     error: Optional[str] = None
 
 
@@ -84,6 +121,14 @@ class SingleStockResponse(BaseModel):
     board_name: str = '主板'  # 板块显示名称
     can_trade_newbie: bool = True  # 新手是否可以交易
     trade_requirement: str = '新手可交易'  # 交易权限要求
+    # 新增字段
+    sector: str = ''  # 所属行业板块
+    momentum_3d: float = 0  # 3日动量
+    momentum_5d: float = 0  # 5日动量
+    # 安全性指标
+    current_ratio: float = 0  # 流动比率
+    interest_coverage: float = 0  # 利息保障倍数
+    deducted_net_profit: float = 0  # 扣非净利润(亿)
 
 
 class Holding(BaseModel):
@@ -202,7 +247,7 @@ class HoldingsExportResponse(BaseModel):
 class UserProfile(BaseModel):
     """用户约束配置"""
     capital: float = 20000  # 资金量，默认2万
-    allowed_boards: List[str] = ['main']  # 允许交易的板块: main/gem/star/bge
+    allowed_boards: List[str] = ['main']  # 允许交易的板块（仅支持主板）
     risk_preference: str = 'aggressive'  # 风险偏好: conservative/balanced/aggressive
     consider_dividend: bool = True  # 是否考虑股息
     keep_cash_reserve: bool = False  # 是否预留现金
@@ -215,3 +260,89 @@ class UserProfileResponse(BaseModel):
     profile: UserProfile
     affordable_stocks_count: int = 0  # 当前可买股票数量
     filter_summary: str = ""  # 筛选条件说明
+
+
+# ==================== 模拟交易相关模型 ====================
+
+class AccountResponse(BaseModel):
+    """账户摘要"""
+    cash: float  # 可用资金
+    initial_cash: float  # 初始资金
+    total_market_value: float = 0  # 持仓总市值
+    total_assets: float = 0  # 总资产 = 现金 + 市值
+    total_profit: float = 0  # 总盈亏
+    profit_rate: float = 0  # 盈亏比例
+
+
+class HoldingDetail(BaseModel):
+    """持仓明细（含实时价格和盈亏）"""
+    code: str
+    name: str
+    quantity: int  # 持股数量
+    cost_price: float  # 成本价
+    current_price: float = 0  # 当前价
+    market_value: float = 0  # 市值
+    profit: float = 0  # 盈亏金额
+    profit_rate: float = 0  # 盈亏比例
+    bought_at: str = ""  # 最新买入时间
+    can_sell: int = 0  # 可卖出数量（不含今日买入）
+    on_cooldown: bool = False  # 是否在交易冷却期内
+    cooldown_days_remaining: int = 0  # 冷却期剩余天数
+
+
+class PortfolioResponse(BaseModel):
+    """持仓明细响应"""
+    holdings: List[HoldingDetail]
+    total_market_value: float
+    total_profit: float
+    cash: float
+    total_assets: float
+
+
+class TradeRequest(BaseModel):
+    """交易请求"""
+    code: str
+    quantity: int  # 买卖数量，必须是100的倍数
+
+
+class TradeCostBreakdown(BaseModel):
+    """交易成本明细"""
+    commission: float  # 佣金
+    stamp_tax: float  # 印花税（仅卖出）
+    transfer_fee: float  # 过户费
+    total_cost: float  # 总成本
+
+
+class TradeResponse(BaseModel):
+    """交易响应"""
+    success: bool
+    action: str  # buy/sell
+    code: str
+    name: str
+    quantity: int
+    price: float
+    total_amount: float  # 成交金额
+    cost_detail: TradeCostBreakdown
+    cash_after: float  # 交易后现金
+    message: str = ""
+
+
+class TradeHistoryItem(BaseModel):
+    """交易历史项"""
+    id: int
+    code: str
+    name: str
+    action: str  # buy/sell
+    quantity: int
+    price: float
+    commission: float
+    stamp_tax: float
+    transfer_fee: float
+    total_amount: float
+    recorded_at: str
+
+
+class TradeHistoryResponse(BaseModel):
+    """交易历史响应"""
+    trades: List[TradeHistoryItem]
+    total_count: int

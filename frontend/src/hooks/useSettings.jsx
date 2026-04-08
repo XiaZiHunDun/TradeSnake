@@ -128,24 +128,6 @@ export function SettingsModal({ isOpen, onClose }) {
     await saveProfile(localProfile)
   }
 
-  const handleBoardToggle = (board) => {
-    const boards = localProfile.allowed_boards || []
-    if (boards.includes(board)) {
-      // 不能取消最后一个板块
-      if (boards.length === 1) return
-      setLocalProfile({ ...localProfile, allowed_boards: boards.filter(b => b !== board) })
-    } else {
-      setLocalProfile({ ...localProfile, allowed_boards: [...boards, board] })
-    }
-  }
-
-  const boardLabels = {
-    main: '主板（沪深）',
-    gem: '创业板',
-    star: '科创板',
-    bge: '北交所'
-  }
-
   const riskLabels = {
     conservative: '保守',
     balanced: '平衡',
@@ -200,23 +182,10 @@ export function SettingsModal({ isOpen, onClose }) {
                 {/* 可交易板块 */}
                 <div className="p-3 bg-deep-night rounded-lg">
                   <label className="block text-white font-medium mb-2">可交易板块</label>
-                  <div className="flex flex-wrap gap-2">
-                    {Object.entries(boardLabels).map(([board, label]) => (
-                      <button
-                        key={board}
-                        onClick={() => handleBoardToggle(board)}
-                        disabled={localProfile.allowed_boards?.length === 1 && localProfile.allowed_boards.includes(board)}
-                        className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                          localProfile.allowed_boards?.includes(board)
-                            ? 'bg-accent-blue/20 text-accent-blue border border-accent-blue'
-                            : 'bg-card-bg text-gray-400 border border-border-dark hover:border-accent-blue/50'
-                        } disabled:opacity-50`}
-                      >
-                        {label}
-                      </button>
-                    ))}
+                  <div className="px-3 py-1.5 rounded-lg text-sm bg-accent-blue/20 text-accent-blue border border-accent-blue inline-block">
+                    主板（沪深）
                   </div>
-                  <p className="text-gray-500 text-xs mt-2">选中的板块会在推荐中显示，不选的自动过滤</p>
+                  <p className="text-gray-500 text-xs mt-2">目前仅支持主板交易</p>
                 </div>
 
                 {/* 风险偏好 */}
