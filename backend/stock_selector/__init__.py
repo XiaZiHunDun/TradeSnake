@@ -17,6 +17,7 @@ from .event_trigger import EventTrigger
 from .financial_watcher import FinancialWatcher
 from .stock_selector import StockSelector, SelectorCallback
 from .types import StockInfo, TempStockInfo, StockSnapshot
+from .update_strategy import UpdateStrategyProvider
 
 __all__ = [
     # 枚举类型
@@ -29,6 +30,8 @@ __all__ = [
     "EventTrigger",
     "FinancialWatcher",
     "StockSelector",
+    # 策略组件
+    "UpdateStrategyProvider",
     # 类型定义
     "SelectorCallback",
     "StockInfo",

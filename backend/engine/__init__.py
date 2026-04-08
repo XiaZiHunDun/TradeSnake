@@ -1,5 +1,5 @@
 """
-分析引擎模块 - Engine v19.6
+分析引擎模块 - Engine v19.7
 ============================
 职责：战力计算、风险评估、历史追踪
 
@@ -12,6 +12,11 @@
 - cache: 因子级缓存 v18.2
 - parallel: 并行计算 v18.2
 - trading_time: 交易时间判断
+- refresh_strategy: 刷新策略 v19.7
+
+v19.7新增：
+- refresh_strategy 模块（从stock_selector迁移更新策略逻辑）
+- cp_history 迁移到 data_manager 统一管理
 
 v19.6新增：
 - real_time_score 实时因子（基于1分钟K线）
