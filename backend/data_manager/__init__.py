@@ -1,5 +1,5 @@
 """
-数据管理模块 - Data Manager v18.1.6
+数据管理模块 - Data Manager v18.3
 ====================================
 职责：数据获取、缓存、清洗、持久化
 
@@ -16,6 +16,7 @@
 - monitor: 监控告警系统
 - backup: 数据备份
 - duckdb_store: DuckDB历史K线存储
+- cp_history_store: 战力历史存储（SQLite WAL模式）
 - providers: 数据源提供者（Tushare）
 
 数据分类：
@@ -135,6 +136,12 @@ from .cleanup import (
     CACHE_RETENTION,
 )
 
+# 战力历史存储（统一存储，SQLite WAL模式）
+from .cp_history_store import (
+    CPHistoryStore,
+    get_cp_history_store,
+)
+
 __all__ = [
     # 兼容旧接口
     'StockDataFetcher',
@@ -231,4 +238,7 @@ __all__ = [
     'SQLITE_RETENTION',
     'DUCKDB_RETENTION',
     'CACHE_RETENTION',
+    # 战力历史存储
+    'CPHistoryStore',
+    'get_cp_history_store',
 ]
