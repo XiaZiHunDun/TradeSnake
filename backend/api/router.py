@@ -12,7 +12,9 @@ from models.schemas import (
     SwapSuggestion, RecommendResponse, CPExplanationResponse,
     AccountResponse, HoldingDetail, PortfolioResponse,
     TradeRequest, TradeResponse, TradeHistoryResponse,
-    UserProfile, UserProfileResponse, HealthResponse
+    UserProfile, UserProfileResponse, HealthResponse,
+    GainPredictionResponse, GainPredictionItem,
+    ProbabilityPredictionResponse, ProbabilityPredictionItem,
 )
 
 # 使用新的模块导入
@@ -614,3 +616,259 @@ async def verify_cp_prediction_accuracy(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"验证战力预测失败: {str(e)}")
+
+
+# ==================== 预测引擎API ====================
+
+@router.get("/api/prediction/gain/top", response_model=GainPredictionResponse)
+async def get_gain_predictions_top(
+    limit: int = Query(50, ge=1, le=200, description="返回数量")
+):
+    """获取涨幅预测TOP N
+
+    基于技术指标规则模型预测股票未来N日涨幅
+    """
+    try:
+        from engine.gain_predictor import GainPredictor
+        from data_manager.duckdb_store import get_klines
+
+        # 获取股票列表
+        from data_manager import get_stock_list
+        stock_list = get_stock_list()
+
+        # 构建klines数据
+        klines_dict = {}
+        for stock in stock_list:
+            code = stock.get('code')
+            if not code:
+                continue
+            klines = get_klines(code, days=60)
+            if klines:
+                klines_dict[code] = klines
+
+        # 执行预测
+        predictor = GainPredictor()
+        result = predictor.predict(klines_dict)
+
+        # 取TOP N
+        top_predictions = result.predictions[:limit]
+
+        return GainPredictionResponse(
+            predictions=[
+                GainPredictionItem(
+                    code=p.code,
+                    name=p.name,
+                    predicted_gain_3d=p.predicted_gain_3d,
+                    predicted_gain_5d=p.predicted_gain_5d,
+                    confidence=p.confidence,
+                    confidence_interval_3d=p.confidence_interval_3d,
+                    confidence_interval_5d=p.confidence_interval_5d,
+                    features=p.features,
+                    model_version=p.model_version,
+                )
+                for p in top_predictions
+            ],
+            calculated_at=result.calculated_at,
+            data_timestamp=result.data_timestamp,
+            stock_count=len(top_predictions),
+            distribution=result.distribution,
+            avg_confidence=result.avg_confidence,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"涨幅预测失败: {str(e)}")
+
+
+@router.get("/api/prediction/probability/top", response_model=ProbabilityPredictionResponse)
+async def get_probability_predictions_top(
+    limit: int = Query(50, ge=1, le=200, description="返回数量")
+):
+    """获取上涨概率预测TOP N
+
+    基于技术指标规则模型预测股票未来N日上涨概率
+    """
+    try:
+        from engine.probability_predictor import ProbabilityPredictor
+        from data_manager.duckdb_store import get_klines
+
+        # 获取股票列表
+        from data_manager import get_stock_list
+        stock_list = get_stock_list()
+
+        # 构建klines数据
+        klines_dict = {}
+        for stock in stock_list:
+            code = stock.get('code')
+            if not code:
+                continue
+            klines = get_klines(code, days=60)
+            if klines:
+                klines_dict[code] = klines
+
+        # 执行预测
+        predictor = ProbabilityPredictor()
+        result = predictor.predict(klines_dict)
+
+        # 取TOP N
+        top_predictions = result.predictions[:limit]
+
+        return ProbabilityPredictionResponse(
+            predictions=[
+                ProbabilityPredictionItem(
+                    code=p.code,
+                    name=p.name,
+                    up_probability_3d=p.up_probability_3d,
+                    up_probability_5d=p.up_probability_5d,
+                    confidence=p.confidence,
+                    risk_level=p.risk_level,
+                    features=p.features,
+                    model_version=p.model_version,
+                )
+                for p in top_predictions
+            ],
+            calculated_at=result.calculated_at,
+            data_timestamp=result.data_timestamp,
+            stock_count=len(top_predictions),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"上涨概率预测失败: {str(e)}")
+
+
+@router.get("/api/prediction/gain/{code}")
+async def get_gain_prediction(code: str):
+    """获取单只股票的涨幅预测"""
+    try:
+        from engine.gain_predictor import GainPredictor
+        from data_manager.duckdb_store import get_klines
+
+        klines = get_klines(code, days=60)
+        if not klines:
+            raise HTTPException(status_code=404, detail=f"未找到股票 {code} 的数据")
+
+        predictor = GainPredictor()
+        result = predictor.predict({code: klines})
+
+        if not result.predictions:
+            raise HTTPException(status_code=404, detail=f"无法预测股票 {code}")
+
+        p = result.predictions[0]
+        return {
+            "code": p.code,
+            "name": p.name,
+            "predicted_gain_3d": p.predicted_gain_3d,
+            "predicted_gain_5d": p.predicted_gain_5d,
+            "confidence": p.confidence,
+            "confidence_interval_3d": p.confidence_interval_3d,
+            "confidence_interval_5d": p.confidence_interval_5d,
+            "features": p.features,
+            "model_version": p.model_version,
+            "data_timestamp": result.data_timestamp,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取涨幅预测失败: {str(e)}")
+
+
+@router.get("/api/prediction/probability/{code}")
+async def get_probability_prediction(code: str):
+    """获取单只股票的上涨概率预测"""
+    try:
+        from engine.probability_predictor import ProbabilityPredictor
+        from data_manager.duckdb_store import get_klines
+
+        klines = get_klines(code, days=60)
+        if not klines:
+            raise HTTPException(status_code=404, detail=f"未找到股票 {code} 的数据")
+
+        predictor = ProbabilityPredictor()
+        result = predictor.predict({code: klines})
+
+        if not result.predictions:
+            raise HTTPException(status_code=404, detail=f"无法预测股票 {code}")
+
+        p = result.predictions[0]
+        return {
+            "code": p.code,
+            "name": p.name,
+            "up_probability_3d": p.up_probability_3d,
+            "up_probability_5d": p.up_probability_5d,
+            "confidence": p.confidence,
+            "risk_level": p.risk_level,
+            "features": p.features,
+            "model_version": p.model_version,
+            "data_timestamp": result.data_timestamp,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取上涨概率预测失败: {str(e)}")
+
+
+# ==================== 预测验证API ====================
+
+@router.get("/api/verify/gain_accuracy")
+async def verify_gain_prediction_accuracy(
+    date: str = Query(None, description="基准日期"),
+    holding_days: int = Query(5, ge=1, le=30, description="持有天数"),
+    top_n: int = Query(20, ge=1, le=100, description="验证前N只")
+):
+    """验证涨幅预测准确性
+
+    比较预测涨幅最高的股票组和实际涨幅表现
+    """
+    try:
+        from backtester.verification import verify_gain_prediction_accuracy
+
+        result = verify_gain_prediction_accuracy(
+            db=_db,
+            date=date,
+            holding_days=holding_days,
+            top_n=top_n
+        )
+
+        return {
+            "period": result.period,
+            "total_stocks": result.total_stocks,
+            "avg_predicted_gain": result.avg_predicted_gain,
+            "avg_actual_gain": result.avg_actual_gain,
+            "prediction_error": result.prediction_error,
+            "mean_absolute_error": result.mean_absolute_error,
+            "accuracy_direction": result.accuracy_direction,
+            "top_predicted_avg": result.top_predicted_avg,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"验证涨幅预测失败: {str(e)}")
+
+
+@router.get("/api/verify/probability_accuracy")
+async def verify_probability_prediction_accuracy(
+    date: str = Query(None, description="基准日期"),
+    high_prob_threshold: float = Query(0.6, ge=0.5, le=0.9, description="高概率阈值"),
+    low_prob_threshold: float = Query(0.4, ge=0.1, le=0.5, description="低概率阈值")
+):
+    """验证上涨概率预测准确性
+
+    比较高概率组和低概率组的实际涨跌比例
+    """
+    try:
+        from backtester.verification import verify_probability_prediction_accuracy
+
+        result = verify_probability_prediction_accuracy(
+            db=_db,
+            date=date,
+            high_prob_threshold=high_prob_threshold,
+            low_prob_threshold=low_prob_threshold
+        )
+
+        return {
+            "period": result.period,
+            "total_stocks": result.total_stocks,
+            "high_prob_avg_actual": result.high_prob_avg_actual,
+            "low_prob_avg_actual": result.low_prob_avg_actual,
+            "calibration_error": result.calibration_error,
+            "direction_accuracy": result.direction_accuracy,
+            "high_prob_accuracy": result.high_prob_accuracy,
+            "low_prob_accuracy": result.low_prob_accuracy,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"验证上涨概率预测失败: {str(e)}")

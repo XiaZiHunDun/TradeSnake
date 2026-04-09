@@ -49,6 +49,33 @@ class CPPredictionAccuracy:
     avg_profit_if_hold_low_cp: float  # 持有低战力股票平均收益
 
 
+@dataclass
+class GainPredictionAccuracy:
+    """涨幅预测准确性结果"""
+    period: str  # 验证周期
+    total_stocks: int  # 样本数
+    avg_predicted_gain: float  # 平均预测涨幅
+    avg_actual_gain: float  # 平均实际涨幅
+    prediction_error: float  # 预测误差（实际-预测）
+    mean_absolute_error: float  # 平均绝对误差
+    accuracy_direction: float  # 方向准确率（预测涨跌方向的准确率）
+    top_predicted_avg: float  # 预测涨幅最大的股票组平均实际涨幅
+    top_actual_avg: float  # 实际涨幅最大的股票组平均涨幅
+
+
+@dataclass
+class ProbabilityPredictionAccuracy:
+    """上涨概率预测准确性结果"""
+    period: str  # 验证周期
+    total_stocks: int  # 样本数
+    high_prob_avg_actual: float  # 高概率组平均实际上涨概率
+    low_prob_avg_actual: float  # 低概率组平均实际上涨概率
+    calibration_error: float  # 校准误差
+    direction_accuracy: float  # 方向准确率
+    high_prob_accuracy: float  # 高概率组预测准确率（实际涨的比例）
+    low_prob_accuracy: float  # 低概率组预测准确率（实际跌的比例）
+
+
 class BacktestVerifier:
     """回测验证器 v19.7"""
 
@@ -289,6 +316,220 @@ class BacktestVerifier:
             avg_profit_if_hold_low_cp=round(low_avg, 2)
         )
 
+    def verify_gain_prediction_accuracy(
+        self,
+        date: str = None,
+        holding_days: int = 5,
+        top_n: int = 20
+    ) -> GainPredictionAccuracy:
+        """验证涨幅预测准确性
+
+        Args:
+            date: 基准日期（预测发布日期）
+            holding_days: 持有天数
+            top_n: 验证预测涨幅最大的前N只股票
+
+        Returns:
+            涨幅预测准确性结果
+        """
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
+
+        # 获取预测数据
+        try:
+            from data_manager.prediction_store import get_prediction_store
+            pred_store = get_prediction_store()
+            predictions = pred_store.get_gain_predictions_by_date(date)
+        except Exception:
+            predictions = []
+
+        if not predictions:
+            return GainPredictionAccuracy(
+                period=date,
+                total_stocks=0,
+                avg_predicted_gain=0,
+                avg_actual_gain=0,
+                prediction_error=0,
+                mean_absolute_error=0,
+                accuracy_direction=0,
+                top_predicted_avg=0,
+                top_actual_avg=0
+            )
+
+        # 获取实际涨幅数据
+        actual_gains = []
+        for pred in predictions:
+            code = pred['code']
+            # 从K线获取实际涨幅
+            try:
+                from data_manager.duckdb_store import get_klines
+                klines = get_klines(code, days=holding_days + 5)
+                if klines and len(klines) >= 2:
+                    start_price = klines[0].get('close', 0)
+                    end_price = klines[-1].get('close', 0)
+                    if start_price > 0:
+                        actual_gain = (end_price - start_price) / start_price * 100
+                        actual_gains.append({
+                            'code': code,
+                            'predicted_gain': pred.get('predicted_gain_5d', 0),
+                            'actual_gain': actual_gain
+                        })
+            except Exception:
+                continue
+
+        if not actual_gains:
+            return GainPredictionAccuracy(
+                period=date,
+                total_stocks=0,
+                avg_predicted_gain=0,
+                avg_actual_gain=0,
+                prediction_error=0,
+                mean_absolute_error=0,
+                accuracy_direction=0,
+                top_predicted_avg=0,
+                top_actual_avg=0
+            )
+
+        # 计算统计
+        avg_predicted = sum(g['predicted_gain'] for g in actual_gains) / len(actual_gains)
+        avg_actual = sum(g['actual_gain'] for g in actual_gains) / len(actual_gains)
+        prediction_error = avg_actual - avg_predicted
+        mae = sum(abs(g['actual_gain'] - g['predicted_gain']) for g in actual_gains) / len(actual_gains)
+
+        # 方向准确率
+        correct_direction = sum(
+            1 for g in actual_gains
+            if (g['predicted_gain'] > 0) == (g['actual_gain'] > 0)
+        )
+        direction_accuracy = correct_direction / len(actual_gains) * 100
+
+        # TOP N 预测组实际表现
+        top_predicted = sorted(actual_gains, key=lambda x: x['predicted_gain'], reverse=True)[:top_n]
+        top_predicted_avg = sum(g['actual_gain'] for g in top_predicted) / len(top_predicted) if top_predicted else 0
+
+        return GainPredictionAccuracy(
+            period=f"{date} ~ +{holding_days}d",
+            total_stocks=len(actual_gains),
+            avg_predicted_gain=round(avg_predicted, 2),
+            avg_actual_gain=round(avg_actual, 2),
+            prediction_error=round(prediction_error, 2),
+            mean_absolute_error=round(mae, 2),
+            accuracy_direction=round(direction_accuracy, 2),
+            top_predicted_avg=round(top_predicted_avg, 2),
+            top_actual_avg=round(top_predicted_avg, 2)
+        )
+
+    def verify_probability_prediction_accuracy(
+        self,
+        date: str = None,
+        high_prob_threshold: float = 0.6,
+        low_prob_threshold: float = 0.4
+    ) -> ProbabilityPredictionAccuracy:
+        """验证上涨概率预测准确性
+
+        Args:
+            date: 基准日期（预测发布日期）
+            high_prob_threshold: 高概率阈值
+            low_prob_threshold: 低概率阈值
+
+        Returns:
+            上涨概率预测准确性结果
+        """
+        if date is None:
+            date = datetime.now().strftime("%Y-%m-%d")
+
+        # 获取预测数据
+        try:
+            from data_manager.prediction_store import get_prediction_store
+            pred_store = get_prediction_store()
+            predictions = pred_store.get_probability_predictions_by_date(date)
+        except Exception:
+            predictions = []
+
+        if not predictions:
+            return ProbabilityPredictionAccuracy(
+                period=date,
+                total_stocks=0,
+                high_prob_avg_actual=0,
+                low_prob_avg_actual=0,
+                calibration_error=0,
+                direction_accuracy=0,
+                high_prob_accuracy=0,
+                low_prob_accuracy=0
+            )
+
+        # 分析实际涨跌
+        high_prob_actual_rises = []
+        low_prob_actual_rises = []
+
+        for pred in predictions:
+            code = pred['code']
+            prob = pred.get('up_probability_5d', 0.5)
+            try:
+                from data_manager.duckdb_store import get_klines
+                klines = get_klines(code, days=6)  # 5天+今天
+                if klines and len(klines) >= 2:
+                    start_price = klines[0].get('close', 0)
+                    end_price = klines[-1].get('close', 0)
+                    if start_price > 0:
+                        actual_gain = (end_price - start_price) / start_price * 100
+                        actual_rise = 1 if actual_gain > 0 else 0
+
+                        if prob >= high_prob_threshold:
+                            high_prob_actual_rises.append(actual_rise)
+                        elif prob <= low_prob_threshold:
+                            low_prob_actual_rises.append(actual_rise)
+            except Exception:
+                continue
+
+        # 计算统计
+        high_avg = sum(high_prob_actual_rises) / len(high_prob_actual_rises) * 100 if high_prob_actual_rises else 0
+        low_avg = sum(low_prob_actual_rises) / len(low_prob_actual_rises) * 100 if low_prob_actual_rises else 0
+
+        # 校准误差：实际涨的概率应该接近预测概率
+        all_probs = []
+        all_actuals = []
+        for pred in predictions:
+            code = pred['code']
+            prob = pred.get('up_probability_5d', 0.5)
+            try:
+                from data_manager.duckdb_store import get_klines
+                klines = get_klines(code, days=6)
+                if klines and len(klines) >= 2:
+                    start_price = klines[0].get('close', 0)
+                    end_price = klines[-1].get('close', 0)
+                    if start_price > 0:
+                        actual_gain = (end_price - start_price) / start_price * 100
+                        all_probs.append(prob)
+                        all_actuals.append(1 if actual_gain > 0 else 0)
+            except Exception:
+                continue
+
+        calibration_error = 0
+        if all_probs:
+            # 按概率分组计算期望vs实际
+            high_group = [(p, a) for p, a in zip(all_probs, all_actuals) if p >= 0.5]
+            low_group = [(p, a) for p, a in zip(all_probs, all_actuals) if p < 0.5]
+
+            if high_group:
+                expected_high = sum(p for p, _ in high_group) / len(high_group)
+                actual_high = sum(a for _, a in high_group) / len(high_group)
+                calibration_error = abs(expected_high - actual_high) * 100
+
+        total_samples = len(high_prob_actual_rises) + len(low_prob_actual_rises)
+        direction_accuracy = (len(high_prob_actual_rises) + len(low_prob_actual_rises)) / 2 / total_samples * 100 if total_samples > 0 else 0
+
+        return ProbabilityPredictionAccuracy(
+            period=date,
+            total_stocks=len(predictions),
+            high_prob_avg_actual=round(high_avg, 2),
+            low_prob_avg_actual=round(low_avg, 2),
+            calibration_error=round(calibration_error, 2),
+            direction_accuracy=round(direction_accuracy, 2),
+            high_prob_accuracy=round(high_avg, 2),
+            low_prob_accuracy=round(100 - low_avg, 2)
+        )
+
     def get_verification_report(self, days: int = 30) -> Dict:
         """获取完整的验证报告
 
@@ -365,6 +606,18 @@ def verify_cp_prediction_accuracy(db, date: str = None, holding_days: int = 5) -
     """便捷函数：验证战力预测准确性"""
     verifier = BacktestVerifier(db)
     return verifier.verify_cp_prediction_accuracy(date, holding_days)
+
+
+def verify_gain_prediction_accuracy(db, date: str = None, holding_days: int = 5, top_n: int = 20) -> GainPredictionAccuracy:
+    """便捷函数：验证涨幅预测准确性"""
+    verifier = BacktestVerifier(db)
+    return verifier.verify_gain_prediction_accuracy(date, holding_days, top_n)
+
+
+def verify_probability_prediction_accuracy(db, date: str = None, high_prob_threshold: float = 0.6, low_prob_threshold: float = 0.4) -> ProbabilityPredictionAccuracy:
+    """便捷函数：验证上涨概率预测准确性"""
+    verifier = BacktestVerifier(db)
+    return verifier.verify_probability_prediction_accuracy(date, high_prob_threshold, low_prob_threshold)
 
 
 def get_verification_report(db, days: int = 30) -> Dict:

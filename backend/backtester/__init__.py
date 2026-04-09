@@ -37,8 +37,12 @@ from .verification import (
     BacktestVerifier,
     SwapVerification,
     CPPredictionAccuracy,
+    GainPredictionAccuracy,
+    ProbabilityPredictionAccuracy,
     verify_swap_effectiveness,
     verify_cp_prediction_accuracy,
+    verify_gain_prediction_accuracy,
+    verify_probability_prediction_accuracy,
     get_verification_report,
 )
 
@@ -65,11 +69,15 @@ __all__ = [
     'generate_report',
     'save_report',
 
-    # v19.7 新增：回测验证
+    # 回测验证
     'BacktestVerifier',
     'SwapVerification',
     'CPPredictionAccuracy',
+    'GainPredictionAccuracy',
+    'ProbabilityPredictionAccuracy',
     'verify_swap_effectiveness',
     'verify_cp_prediction_accuracy',
+    'verify_gain_prediction_accuracy',
+    'verify_probability_prediction_accuracy',
     'get_verification_report',
 ]

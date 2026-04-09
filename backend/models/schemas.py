@@ -346,3 +346,48 @@ class TradeHistoryResponse(BaseModel):
     """交易历史响应"""
     trades: List[TradeHistoryItem]
     total_count: int
+
+
+# ==================== 预测引擎Schema ====================
+
+class GainPredictionItem(BaseModel):
+    """涨幅预测项"""
+    code: str
+    name: str
+    predicted_gain_3d: float  # 预测3日涨幅%
+    predicted_gain_5d: float  # 预测5日涨幅%
+    confidence: float  # 置信度 0-1
+    confidence_interval_3d: tuple  # 3日置信区间 (min, max)
+    confidence_interval_5d: tuple  # 5日置信区间 (min, max)
+    features: Dict[str, float]  # 主要特征值
+    model_version: str = "rule_v19.8"
+
+
+class GainPredictionResponse(BaseModel):
+    """涨幅预测响应"""
+    predictions: List[GainPredictionItem]
+    calculated_at: str
+    data_timestamp: str
+    stock_count: int
+    distribution: Dict[str, float]  # 预测分布统计
+    avg_confidence: float
+
+
+class ProbabilityPredictionItem(BaseModel):
+    """上涨概率预测项"""
+    code: str
+    name: str
+    up_probability_3d: float  # 3日上涨概率 0-1
+    up_probability_5d: float  # 5日上涨概率 0-1
+    confidence: float  # 置信度 0-1
+    risk_level: str  # high/medium/low
+    features: Dict[str, float]  # 主要特征值
+    model_version: str = "rule_v19.8"
+
+
+class ProbabilityPredictionResponse(BaseModel):
+    """上涨概率预测响应"""
+    predictions: List[ProbabilityPredictionItem]
+    calculated_at: str
+    data_timestamp: str
+    stock_count: int

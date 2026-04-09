@@ -142,6 +142,12 @@ from .cp_history_store import (
     get_cp_history_store,
 )
 
+# 预测结果存储（SQLite WAL模式，v19.8新增）
+from .prediction_store import (
+    PredictionStore,
+    get_prediction_store,
+)
+
 __all__ = [
     # 兼容旧接口
     'StockDataFetcher',
@@ -241,4 +247,7 @@ __all__ = [
     # 战力历史存储
     'CPHistoryStore',
     'get_cp_history_store',
+    # 预测结果存储
+    'PredictionStore',
+    'get_prediction_store',
 ]
