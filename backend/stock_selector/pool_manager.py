@@ -342,6 +342,7 @@ class PoolManager:
             trigger_reason=reason,
             trigger_time=datetime.now(),
             expire_time=datetime.now() + timedelta(days=config.POOL_SIZE_CONFIG["temp"]["ttl_days"]),
+            original_tier=current_tier if current_tier and current_tier != PoolTier.TEMP else PoolTier.OBSERVE,
         )
 
         self._temp_stocks[code] = temp_info
@@ -390,16 +391,84 @@ class PoolManager:
         logger.info(f"股票 {code} 从临时池移除: {result}")
         return True
 
+    def process_temp(self, code: str, result: str = "hold") -> bool:
+        """
+        处理临时池股票并回归原池或降级
+
+        Args:
+            code: 股票代码
+            result: 处理结果
+                - "hold": 回原池
+                - "not_hold": 降一级
+                - "timeout": 回观察池
+
+        Returns:
+            是否处理成功
+        """
+        if code not in self._temp_stocks:
+            logger.warning(f"股票 {code} 不在临时池中")
+            return False
+
+        temp_info = self._temp_stocks[code]
+        original_tier = temp_info.original_tier
+
+        # 确定目标池
+        tier_order = [PoolTier.OBSERVE, PoolTier.ACTIVE, PoolTier.CORE]
+        result_handling = config.POOL_SIZE_CONFIG["temp"].get("result_handling", {})
+
+        if result == "hold":
+            # 回原池
+            target_tier = original_tier
+        elif result == "not_hold":
+            # 降一级
+            if original_tier in tier_order:
+                current_idx = tier_order.index(original_tier)
+                if current_idx > 0:
+                    target_tier = tier_order[current_idx - 1]
+                else:
+                    target_tier = PoolTier.OBSERVE
+            else:
+                target_tier = PoolTier.OBSERVE
+        elif result == "timeout":
+            # 回观察池
+            target_tier = PoolTier.OBSERVE
+        else:
+            logger.warning(f"未知处理结果: {result}，默认回观察池")
+            target_tier = PoolTier.OBSERVE
+
+        # 从临时池移除
+        temp_info.result = result
+        del self._temp_stocks[code]
+        self._remove_from_pool(code, PoolTier.TEMP, f"临时池处理结果: {result}")
+
+        # 获取股票信息（从历史或重建）
+        stock_info = StockInfo(
+            code=code,
+            name=temp_info.name,
+            tier=target_tier,
+            tier_entry_date=date.today(),
+            tier_reason=f"临时池{result}处理: {temp_info.event_type.value}",
+        )
+
+        # 添加到目标池
+        success = self._pools[target_tier].get(code) is not None or self.add_stock(
+            code, target_tier, stock_info, f"临时池回归: {result}"
+        )
+
+        logger.info(f"股票 {code} 临时池处理完成: {result} -> {target_tier.value}池")
+        return success
+
     def cleanup_expired_temp(self) -> List[str]:
-        """清理过期的临时池股票"""
+        """清理过期的临时池股票（回归观察池）"""
         expired = []
         for code, info in list(self._temp_stocks.items()):
             if info.is_expired():
-                self.remove_from_temp(code, "TTL过期")
+                # TTL过期 -> 回观察池（而非简单移除）
+                self.process_temp(code, "timeout")
                 expired.append(code)
 
         if expired:
-            logger.info(f"临时池清理完成，移除 {len(expired)} 只过期股票")
+            logger.info(f"临时池清理完成，{len(expired)} 只过期股票回归观察池")
         return expired
 
     # -------------------- 白名单/黑名单 --------------------

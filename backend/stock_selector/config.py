@@ -77,6 +77,11 @@ POOL_SIZE_CONFIG = {
     "temp": {
         "max_size": 50,
         "ttl_days": 7,  # 临时池TTL
+        "result_handling": {
+            "hold": "return_original_tier",   # 持有 → 回原池
+            "not_hold": "downgrade_one_tier", # 不持有 → 降一级
+            "timeout": "return_observe",      # 超时 → 回观察池
+        },
     },
 }
 

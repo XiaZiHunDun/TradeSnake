@@ -45,7 +45,7 @@ class UpdateStrategyProvider:
         self._base_intervals = {
             PoolTier.CORE: 300,       # 5分钟
             PoolTier.ACTIVE: 1800,    # 30分钟
-            PoolTier.OBSERVE: 21600,  # 6小时
+            PoolTier.OBSERVE: 0,     # 观察池盘中不更新（仅盘后批处理）
             PoolTier.TEMP: 60,        # 1分钟
         }
 

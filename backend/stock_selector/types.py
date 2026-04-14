@@ -69,7 +69,8 @@ class TempStockInfo:
     trigger_reason: str
     trigger_time: datetime
     expire_time: datetime  # 7天后过期
-    result: Optional[str] = None  # 处理结果：keep/remove
+    original_tier: PoolTier = PoolTier.OBSERVE  # 进入临时池前的原池
+    result: Optional[str] = None  # 处理结果：hold/not_hold/timeout
 
     def is_expired(self) -> bool:
         """是否已过期"""
