@@ -584,6 +584,160 @@ class TushareProvider(BaseDataProvider):
             'budget_remaining': self._budget.get_remaining() if self._budget else 0,
         }
 
+    def get_all_market_data(self, trade_date: str = None) -> List[Dict]:
+        """
+        获取所有股票的每日指标（PE/PB等） v19.8
+
+        通过指定 trade_date 而不指定 ts_code，可以一次性获取所有股票的每日指标，
+        大大提高批量获取效率。
+
+        Args:
+            trade_date: 交易日期 (YYYYMMDD)，默认今日
+
+        Returns:
+            所有股票的每日指标列表
+        """
+        if self.pro is None:
+            return []
+
+        if trade_date is None:
+            trade_date = datetime.now().strftime('%Y%m%d')
+
+        try:
+            # 不指定 ts_code，一次性获取所有股票
+            df = self.pro.daily_basic(
+                trade_date=trade_date,
+                fields='ts_code,close,turnover_rate,pe,pb,ps,mktcap,circ_mktcap'
+            )
+
+            if df is None or len(df) == 0:
+                print(f"Tushare get_all_market_data 无数据: {trade_date}")
+                return []
+
+            import math
+            def _safe_float(val, default=0.0):
+                """安全转换值为浮点数，处理NaN和None"""
+                if val is None:
+                    return default
+                if isinstance(val, float) and math.isnan(val):
+                    return default
+                try:
+                    return float(val)
+                except (ValueError, TypeError):
+                    return default
+
+            results = []
+            for _, row in df.iterrows():
+                ts_code = row['ts_code']
+                # 转换 Tushare 代码为标准代码
+                code = ts_code.replace('.SH', '').replace('.SZ', '')
+                if code.startswith('688'):
+                    code = 'sh' + code
+                elif code.startswith('6'):
+                    code = 'sh' + code
+                else:
+                    code = 'sz' + code
+
+                results.append({
+                    'code': code,
+                    'ts_code': ts_code,
+                    'close': _safe_float(row.get('close')),
+                    'turnover_rate': _safe_float(row.get('turnover_rate')),
+                    'pe': _safe_float(row.get('pe')),
+                    'pb': _safe_float(row.get('pb')),
+                    'ps': _safe_float(row.get('ps')),
+                    'mktcap': _safe_float(row.get('mktcap')),
+                    'circ_mktcap': _safe_float(row.get('circ_mktcap')),
+                })
+
+            print(f"Tushare get_all_market_data 获取 {len(results)} 只股票的每日指标")
+            return results
+
+        except Exception as e:
+            print(f"Tushare get_all_market_data 失败: {e}")
+            return []
+
+    def get_fina_indicator_batch(self, codes: List[str] = None, start_year: int = 2023) -> Dict[str, Dict]:
+        """
+        批量获取财务指标（含ROE） v19.8
+
+        Args:
+            codes: 股票代码列表，默认全部
+            start_year: 起始年份
+
+        Returns:
+            Dict {code: {roe, net_profit_growth, gross_margin, ...}}
+        """
+        if self.pro is None:
+            return {}
+
+        results = {}
+
+        # 如果没有指定代码，获取所有股票列表
+        if codes is None:
+            try:
+                df_list = self.pro.stock_basic(
+                    exchange='', list_status='L',
+                    fields='ts_code'
+                )
+                if df_list is not None and len(df_list) > 0:
+                    codes = [row['ts_code'].replace('.SH', '').replace('.SZ', '') for _, row in df_list.iterrows()]
+                else:
+                    codes = []
+            except Exception as e:
+                print(f"获取股票列表失败: {e}")
+                return {}
+
+        # 分批处理，每批50只
+        import math
+        batch_size = 50
+        for i in range(0, min(len(codes), 500), batch_size):  # 最多500只，避免积分过度消耗
+            batch_codes = codes[i:i+batch_size]
+            ts_codes = [self._to_ts_code(c) for c in batch_codes if self._to_ts_code(c)]
+            ts_codes_str = ','.join(ts_codes)
+
+            try:
+                df = self.pro.fina_indicator(
+                    ts_code=ts_codes_str,
+                    start_date=f'{start_year}0101',
+                    fields='ts_code,ann_date,roe,net_profit_growth,gross_margin,debt_ratio,current_ratio'
+                )
+
+                if df is not None and len(df) > 0:
+                    # 按日期排序，取最新
+                    df = df.sort_values('ann_date', ascending=False)
+                    for ts_code, group in df.groupby('ts_code'):
+                        if len(group) > 0:
+                            latest = group.iloc[0]
+                            code = ts_code.replace('.SH', '').replace('.SZ', '')
+
+                            def _safe_float(val, default=0.0):
+                                if val is None:
+                                    return default
+                                if isinstance(val, float) and math.isnan(val):
+                                    return default
+                                try:
+                                    return float(val)
+                                except (ValueError, TypeError):
+                                    return default
+
+                            results[code] = {
+                                'roe': round(_safe_float(latest.get('roe')), 2),
+                                'net_profit_growth': round(_safe_float(latest.get('net_profit_growth')), 2),
+                                'gross_margin': round(_safe_float(latest.get('gross_margin')), 2),
+                                'debt_ratio': round(_safe_float(latest.get('debt_ratio')), 2),
+                                'current_ratio': round(_safe_float(latest.get('current_ratio')), 2),
+                            }
+
+                time.sleep(0.1)  # 避免超过Tushare限制
+
+            except Exception as e:
+                print(f"获取财务指标批量失败 (batch {i}): {e}")
+                continue
+
+        print(f"Tushare get_fina_indicator_batch 获取 {len(results)} 只股票的财务指标")
+        return results
+
 
 # ==================== 全局单例 ====================
 

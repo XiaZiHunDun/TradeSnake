@@ -586,6 +586,40 @@ async def refresh_data(limit: int = Query(200, ge=1, le=500)):
             raise HTTPException(status_code=500, detail=f"刷新失败: {str(e)}")
 
 
+# ==================== 批量更新财务数据 v19.8 ====================
+
+@router.post("/api/refresh/financials")
+async def refresh_financials():
+    """
+    批量更新所有股票的PE/ROE数据 v19.8
+
+    使用Tushare一次性获取所有股票的每日指标（PE/PB），
+    并获取财务指标（ROE等）来更新stocks表。
+
+    注意：此接口需要较长时间（可能需要几分钟），请耐心等待。
+    """
+    from backend.data_manager.fetcher import batch_update_stocks_pe_roe
+
+    try:
+        result = batch_update_stocks_pe_roe()
+
+        if result.get('error'):
+            raise HTTPException(status_code=500, detail=result['error'])
+
+        return {
+            "success": True,
+            "total": result['total'],
+            "pe_updated": result['pe_updated'],
+            "roe_updated": result['roe_updated'],
+            "message": f"共{result['total']}只股票, PE有效{result['success']}只, ROE有效{result['roe_updated']}只"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"更新失败: {str(e)}")
+
+
 # ==================== 持仓快照 v19.7 ====================
 
 @router.post("/api/snapshot/record")

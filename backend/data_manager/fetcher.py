@@ -998,3 +998,149 @@ def get_klines_from_duckdb(code: str, days: int = 30) -> List[Dict]:
         return result.data.to_dict('records') if hasattr(result.data, 'to_dict') else []
     return []
 
+
+# ==================== 批量更新股票PE/ROE v19.8 ====================
+
+def batch_update_stocks_pe_roe() -> Dict:
+    """
+    批量更新所有股票的PE/ROE数据 v19.8
+
+    使用Tushare一次性获取所有股票的每日指标（PE/PB），
+    并获取财务指标（ROE等）来更新stocks表。
+
+    Returns:
+        Dict: 更新结果统计
+    """
+    from .providers.tushare import get_tushare_provider
+    from ..simulator.database import get_db
+
+    result = {
+        'success': 0,
+        'failed': 0,
+        'total': 0,
+        'pe_updated': 0,
+        'roe_updated': 0,
+        'error': None
+    }
+
+    try:
+        provider = get_tushare_provider()
+        if provider is None or provider.pro is None:
+            result['error'] = 'Tushare不可用'
+            return result
+
+        db = get_db()
+
+        # 1. 获取所有股票的每日指标（PE/PB）
+        # 尝试今日，如果无数据则用昨日
+        print("正在从Tushare获取所有股票的每日指标...")
+        market_data = provider.get_all_market_data()
+        if not market_data:
+            # 尝试用昨日
+            from datetime import timedelta
+            yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
+            print(f"今日数据无，尝试昨日 ({yesterday})...")
+            market_data = provider.get_all_market_data(yesterday)
+        if not market_data:
+            result['error'] = '无法获取每日指标数据'
+            return result
+
+        # 2. 批量更新PE/PB到数据库
+        # 首先建立一个Tushare代码到纯数字代码的映射
+        # Tushare: sh600152 -> 600152, sz000001 -> 000001
+        ts_code_to_plain = {}
+        for mkt in market_data:
+            ts_code = mkt.get('code', '')
+            if ts_code:
+                # 去掉 sh/sz 前缀得到纯数字代码
+                plain_code = ts_code
+                if plain_code.startswith('sh'):
+                    plain_code = plain_code[2:]
+                elif plain_code.startswith('sz'):
+                    plain_code = plain_code[2:]
+                ts_code_to_plain[ts_code] = plain_code
+                ts_code_to_plain[plain_code] = plain_code  # 同时用纯数字做key
+
+        pe_updated = 0
+        for mkt in market_data:
+            ts_code = mkt.get('code', '')
+            if not ts_code:
+                continue
+
+            # 转换为纯数字代码匹配数据库
+            code = ts_code_to_plain.get(ts_code, ts_code)
+            # 进一步标准化：去除任何sh/sz前缀
+            code = code.replace('sh', '').replace('sz', '')
+
+            pe = mkt.get('pe', 0) or 0
+            pb = mkt.get('pb', 0) or 0
+
+            if pe > 0 or pb > 0:
+                try:
+                    cursor = db.conn.cursor()
+                    cursor.execute("""
+                        UPDATE stocks SET pe = ?, pb = ?, updated_at = ?
+                        WHERE code = ? OR code = ? OR code = ?
+                    """, (pe, pb, datetime.now().isoformat(), code, 'sh' + code, 'sz' + code))
+                    if cursor.rowcount > 0:
+                        pe_updated += 1
+                except Exception as e:
+                    pass
+
+        db.conn.commit()
+        result['pe_updated'] = pe_updated
+        print(f"PE/PB更新完成: {pe_updated} 只股票")
+
+        # 3. 获取财务指标（ROE等）- 分批进行
+        print("正在从Tushare获取财务指标...")
+        # 只获取PE>0的股票，这些是有交易数据的活跃股票
+        cursor = db.conn.cursor()
+        cursor.execute("SELECT code FROM stocks WHERE pe > 0")
+        codes_with_pe = [row[0] for row in cursor.fetchall()]
+
+        fina_indicators = provider.get_fina_indicator_batch(codes_with_pe[:500])  # 最多500只
+
+        roe_updated = 0
+        for code, fin in fina_indicators.items():
+            if not code:
+                continue
+
+            roe = fin.get('roe', 0) or 0
+            net_profit_growth = fin.get('net_profit_growth', 0) or 0
+            gross_margin = fin.get('gross_margin', 0) or 0
+            debt_ratio = fin.get('debt_ratio', 0) or 0
+
+            if roe > 0:
+                try:
+                    cursor.execute("""
+                        UPDATE stocks SET roe = ?, net_profit_growth = ?,
+                                gross_margin = ?, debt_ratio = ?, updated_at = ?
+                        WHERE code = ?
+                    """, (roe, net_profit_growth, gross_margin, debt_ratio,
+                          datetime.now().isoformat(), code))
+                    if cursor.rowcount > 0:
+                        roe_updated += 1
+                except Exception:
+                    pass
+
+        db.conn.commit()
+        result['roe_updated'] = roe_updated
+        print(f"ROE更新完成: {roe_updated} 只股票")
+
+        # 4. 统计结果
+        cursor.execute("SELECT COUNT(*) FROM stocks")
+        result['total'] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM stocks WHERE pe > 0")
+        result['success'] = cursor.fetchone()[0]
+
+        result['failed'] = result['total'] - result['success']
+
+        print(f"批量更新完成: 共{result['total']}只, PE有效{result['success']}只, ROE有效{roe_updated}只")
+
+    except Exception as e:
+        result['error'] = str(e)
+        print(f"批量更新PE/ROE失败: {e}")
+
+    return result
+
