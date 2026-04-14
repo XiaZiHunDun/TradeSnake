@@ -60,7 +60,7 @@ class UpdateScheduler:
         priority_codes = self.strategy.get_batch_priority()
 
         # 获取当前交易时段
-        session = self.strategy.get_strategy().get_trading_session()
+        session = self.strategy.get_trading_session()
         market_status = "trading" if session in ("morning", "afternoon") else "closed"
 
         updated = []

@@ -42,7 +42,7 @@ try:
     TUSHARE_AVAILABLE = True
 except ImportError:
     try:
-        from data_manager.providers.tushare import TushareProvider, get_tushare_provider
+        from backend.data_manager.providers.tushare import TushareProvider, get_tushare_provider
         TUSHARE_AVAILABLE = True
     except ImportError:
         TUSHARE_AVAILABLE = False

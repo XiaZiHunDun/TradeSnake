@@ -56,6 +56,7 @@ class CPHistoryStore:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 code TEXT NOT NULL,
                 name TEXT NOT NULL,
+                price REAL DEFAULT 0,
                 total_cp REAL DEFAULT 0,
                 growth_score REAL DEFAULT 0,
                 value_score REAL DEFAULT 0,
@@ -67,6 +68,24 @@ class CPHistoryStore:
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # 迁移：检查并添加缺失的列
+        cursor.execute("PRAGMA table_info(cp_history)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        # 需要添加的列（表结构升级）
+        required_columns = {
+            'price': 'REAL DEFAULT 0',
+            'is_hot': 'INTEGER DEFAULT 1',
+        }
+
+        for col_name, col_type in required_columns.items():
+            if col_name not in existing_columns:
+                try:
+                    cursor.execute(f"ALTER TABLE cp_history ADD COLUMN {col_name} {col_type}")
+                    print(f"Migration: Added column {col_name} to cp_history")
+                except Exception as e:
+                    print(f"Migration warning: Could not add column {col_name}: {e}")
 
         # 创建索引
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_cp_history_date ON cp_history(recorded_at)")
@@ -108,12 +127,13 @@ class CPHistoryStore:
             for rank, stock in enumerate(sorted_stocks, 1):
                 cursor.execute("""
                     INSERT INTO cp_history (
-                        code, name, total_cp, growth_score, value_score,
+                        code, name, price, total_cp, growth_score, value_score,
                         quality_score, momentum_score, risk_score, rank, recorded_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     stock.get('code'),
                     stock.get('name'),
+                    stock.get('price', 0),
                     stock.get('total_cp', 0),
                     stock.get('growth_score', 0),
                     stock.get('value_score', 0),

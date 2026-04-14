@@ -1,0 +1,1368 @@
+# 系统数据填充模块方案 v19.14
+
+> 设计日期：2026-04-09
+> 版本状态：**设计中**
+> **v19.14 更新**：补充预测引擎数据存储说明（gain_predictions、probability_predictions）
+> **v19.13 更新**：确认 price_history 表为历史遗留表，回测器应尽快适配 DuckDB daily_kline
+> **v19.12 更新**：完善完整数据存储清单，增加 ex_right_factor、price_history、财务历史等遗漏项说明
+> **v19.11 更新**：增加战力历史（cp_history）填充策略说明，明确其与外部数据填充的区别
+> **v19.10 更新**：扩展为完整系统数据填充方案，覆盖DuckDB + SQLite所有需要填充的数据存储
+
+## 一、概述
+
+### 1.1 职责定位
+
+系统数据填充模块（SystemFiller）负责将外部数据源的历史数据填充到本地存储（DuckDB + SQLite），与 `cleanup.py` 共同完成数据的完整生命周期管理：
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         系统数据存储架构                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│   DuckDB (historical.duckdb)          SQLite (tradesnake.db)     │
+│   ┌─────────────────────────┐        ┌─────────────────────────┐   │
+│   │ daily_kline (日K线)    │        │ stocks (股票列表)       │   │
+│   │ minute_kline (分钟K线)  │        │ ex_right_factor (除权)  │   │
+│   └─────────────────────────┘        └─────────────────────────┘   │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+
+填充（初始化/补数）          清理（过期删除）
+     │                              │
+     └──────────┴──────────────────┘
+                │
+         本地存储（DuckDB + SQLite）
+```
+
+**与 `update_scheduler.py` 的区别**：
+
+| 组件 | 职责 | 场景 |
+|-----|------|------|
+| `update_scheduler` | 盘中增量更新最新K线 | 每日盘中运行 |
+| `KlineFiller` | 批量填充历史 + 检测缺口补数 | 首次部署 / 定时检测 |
+
+### 1.2 完整数据存储清单
+
+经核查系统所有数据存储，整理完整清单如下：
+
+#### 1.2.1 DuckDB (historical.duckdb)
+
+| 表名 | 行数 | 用途 | 当前状态 | 填充优先级 |
+|-----|------|------|---------|-----------|
+| `daily_kline` | 18,927 | 日K线（战力计算、回测） | 部分填充 | **P0** |
+| `minute_kline` | 0 | 分钟K线（实时战力） | **空** | P1 |
+
+#### 1.2.2 SQLite (tradesnake.db)
+
+| 表名 | 行数 | 用途 | 当前状态 | 填充优先级 |
+|-----|------|------|---------|-----------|
+| `stocks` | 6,552 | 股票列表+财务数据 | 部分填充 | P0（已有） |
+| `ex_right_factor` | **0** | 除权因子 | **空！P0** | **P0** |
+| `cp_history` | 3,162 | 战力历史 | 部分填充 | **P2（引擎计算）** |
+| `price_history` | 11,343 | 价格历史 | 部分填充 | P2（过渡表） |
+| `alerts` | - | 告警记录 | 已有 | 无需填充 |
+| 其他表 | - | account/trades/orders等 | 已有 | 无需填充 |
+
+#### 1.2.3 SQLite (tradesnake_prediction.db)
+
+| 表名 | 行数 | 用途 | 当前状态 | 填充优先级 |
+|-----|------|------|---------|-----------|
+| `gain_predictions` | 0 | 涨幅预测结果 | 空 | P2（计算写入） |
+| `probability_predictions` | 0 | 上涨概率预测 | 空 | P2（计算写入） |
+
+#### 1.2.4 发现的问题与遗漏
+
+| 问题 | 说明 | 影响 |
+|-----|------|------|
+| **ex_right_factor 空** | 除权因子表为0行，战力计算需要 | **P0** |
+| **minute_kline 空** | 实时战力需要分钟K线 | P1 |
+| **财务历史缺失** | 战力计算依赖历史财务数据（季度） | P2 |
+| **price_history 定位** | 可能是从SQLite迁移到DuckDB的过渡表 | 待确认 |
+
+**复权因子设计（用户确认方案A）**：存储在DuckDB的 `daily_kline` 表中
+- 原因：技术指标计算时直接读取同表字段，无需跨库join
+- 字段：`adj_factor`（复权因子）、`adj_close`（复权收盘价）
+
+### 1.3 战力历史（cp_history）填充的特殊性
+
+**cp_history 是计算得出的人口数据，不是从外部数据源获取的**：
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    战力历史数据依赖链                                      │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   外部数据源                    计算引擎                    存储             │
+│   ┌─────────────┐            ┌─────────────┐          ┌─────────────┐   │
+│   │  K线数据    │───────────▶│ CPEngine    │─────────▶│ cp_history  │   │
+│   │ (DuckDB)   │            │ calculate() │          │ (SQLite)   │   │
+│   └─────────────┘            └─────────────┘          └─────────────┘   │
+│          │                          ▲                                    │
+│          │                          │                                    │
+│          ▼                          │                                    │
+│   ┌─────────────┐            ┌─────────────┐                              │
+│   │ 财务数据    │───────────▶│ StockCP     │                              │
+│   │ (SQLite)   │            │ (中间结果)  │                              │
+│   └─────────────┘            └─────────────┘                              │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**战力引擎的数据依赖**：
+
+| 依赖数据 | 来源 | 说明 |
+|---------|------|------|
+| K线数据 | DuckDB `daily_kline` | close, high, low, volume, change_pct |
+| 财务数据 | SQLite `stocks` | pe, roe, net_profit_growth, revenue_growth 等 |
+| 复权因子 | DuckDB `daily_kline` | adj_factor |
+
+**战力历史回填的挑战**：
+
+1. **财务数据是季度披露的**：
+   - 计算2024-01-15的战力，用的是2023-Q3的财务数据
+   - 计算2024-04-15的战力，用的是2023-Q4的财务数据
+   - 2024-07-15的战力，用的是2024-Q1的财务数据
+
+2. **历史战力回填需要**：
+   - 历史K线数据（SystemFiller P0）
+   - 历史财务数据（需额外填充，目前方案未覆盖）
+   - 战力引擎批量计算能力（需单独实现）
+
+**cp_history 填充策略**：
+
+| 阶段 | 工作内容 | 实现方式 |
+|-----|---------|---------|
+| 第一步 | 填充历史K线 | SystemFiller.fill_all() |
+| 第二步 | 填充历史财务数据 | 需扩展SystemFiller或独立脚本 |
+| 第三步 | 战力历史回填 | CPHistoryBackfillScript（单独脚本） |
+| 日常 | 当日战力计算保存 | 现有流程：CPEngine → save_history() |
+
+> **⚠️ 重要提醒**：SystemFiller 不处理 cp_history。战力历史需要战力引擎用历史数据批量计算，这部分由独立的 `CPHistoryBackfillScript` 负责。
+
+### 1.4 预测引擎数据存储
+
+#### 1.4.1 数据概览
+
+| 存储 | 表名 | 行数 | 用途 | 填充方式 |
+|------|------|------|------|---------|
+| SQLite | `gain_predictions` | 0 | 涨幅预测结果 | 计算写入 |
+| SQLite | `probability_predictions` | 0 | 上涨概率预测 | 计算写入 |
+
+#### 1.4.2 数据依赖
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    预测引擎数据依赖链                                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   外部数据源                    计算引擎                    存储             │
+│   ┌─────────────┐            ┌─────────────┐          ┌─────────────┐   │
+│   │  历史K线    │───────────▶│ GainPredictor│─────────▶│gain_predictions│  │
+│   │ (DuckDB)   │            │ (涨幅预测)   │          │ (SQLite)   │   │
+│   └─────────────┘            └─────────────┘          └─────────────┘   │
+│                                                                         │
+│   ┌─────────────┐            ┌─────────────┐          ┌─────────────┐   │
+│   │  历史K线    │───────────▶│Probability  │─────────▶│probability_   │   │
+│   │ (DuckDB)   │            │ (上涨概率)  │          │predictions  │   │
+│   └─────────────┘            └─────────────┘          └─────────────┘   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 1.4.3 特点
+
+| 特性 | 说明 |
+|------|------|
+| **数据来源** | 历史日K线（DuckDB `daily_kline`） |
+| **填充方式** | **不需要外部填充**，预测引擎实时计算并写入 SQLite |
+| **历史回测** | 需要先有历史K线数据，才能产生历史预测数据 |
+| **保留周期** | 预测结果保留90天（可配置） |
+| **数据量** | 200股票 × 90天 × ~1KB ≈ 18MB/年 |
+
+#### 1.4.4 与战力历史的对比
+
+| 类型 | 数据来源 | 填充方式 | 历史回测需要 |
+|------|---------|---------|-------------|
+| cp_history | K线 + 财务数据 | 引擎批量计算 | 需要历史财务数据 |
+| gain_predictions | K线数据 | 引擎实时计算 | 只需历史K线 |
+| probability_predictions | K线数据 | 引擎实时计算 | 只需历史K线 |
+
+#### 1.4.5 预测引擎历史回测流程
+
+```
+第一步：填充历史K线 ───────────────────────────────────────────────▶
+(KlineFiller.fill_all)
+DuckDB daily_kline 扩展
+
+第二步：历史K线就绪后，执行预测引擎历史回测
+GainPredictor.backtest_historical()
+ProbabilityPredictor.backtest_historical()
+
+第三步：历史预测数据存储到 SQLite
+prediction_store (gain_predictions, probability_predictions)
+```
+
+> **注意**：预测引擎的预测结果是**计算得出**的，不需要外部数据填充。历史预测数据通过回测产生，需要先有历史K线数据。
+
+### 1.5 ExRightFactor 填充（P0 - 紧急）
+
+**问题**：`ex_right_factor` 表为 0 行，这是除权因子表，战力引擎计算需要用到。
+
+**数据来源**：Tushare `pro.adj_factor` 接口
+
+```python
+class ExRightFactorFiller:
+    """
+    除权因子填充器
+
+    职责：
+    1. 从 Tushare 获取全市场股票的复权因子
+    2. 存储到 SQLite ex_right_factor 表
+    3. 支持增量更新（只获取最新变化的部分）
+
+    表结构（backend/data_manager/adjuster.py）：
+    CREATE TABLE ex_right_factor (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol TEXT NOT NULL,
+        trade_date TEXT NOT NULL,
+        adj_type TEXT NOT NULL,      -- qfq前复权, hfq后复权
+        factor REAL NOT NULL,
+        created_at TEXT
+    )
+    """
+
+    def fill_all(self, limit: int = None) -> FillResult:
+        """填充所有股票的除权因子"""
+
+    def fill_stock(self, code: str) -> int:
+        """填充单只股票的除权因子"""
+```
+
+**与 KlineFiller 的关系**：
+- KlineFiller 填充 K 线数据到 DuckDB
+- ExRightFactorFiller 填充除权因子到 SQLite
+- 两者独立运行，无依赖关系
+
+### 1.6 price_history 表的定位
+
+**现状**：
+- `price_history` 表有 11,343 行
+- 日期范围：2026-01-05 ~ 2026-04-02
+- 涉及股票：196 只
+- cleanup.py 中有清理逻辑（保留2年）
+
+**对比 DuckDB daily_kline**：
+| 属性 | daily_kline (DuckDB) | price_history (SQLite) |
+|-----|---------------------|------------------------|
+| 日期范围 | 2025-10-13 ~ 2026-04-09 | 2026-01-05 ~ 2026-04-02 |
+| 股票数量 | 158 | 196 |
+
+**分析**：
+1. `duckdb_store.py` 中有 `migrate_price_history()` 方法，说明**有迁移计划**
+2. `backtester/backtest.py` 仍在读取 `price_history`（尚未适配 DuckDB）
+3. `daily_kline` 时间范围更早（2025-10-13开始），覆盖了 `price_history` 的时间段
+
+**结论**：
+- `price_history` 是**历史遗留表**，仍在被回测器使用
+- 结构与 `daily_kline` 相似，但回测器尚未适配使用 DuckDB
+- `daily_kline` 已包含 `price_history` 的时间段数据
+
+**建议（已确认）**：
+1. 回测器应尽快适配使用 DuckDB 的 `daily_kline`
+2. 迁移完成后，从 cleanup.py 中移除 `price_history` 清理逻辑
+3. 后续废弃 `price_history` 表
+
+### 1.7 财务历史数据填充（P2 - 战力回填前置条件）
+
+**问题**：战力计算需要历史财务数据（PE、ROE、净利润增长率等），但当前只有当日实时财务数据。
+
+**挑战**：
+1. 财务数据是**季度披露**的：
+   - 每年4月：披露年报（上一年度）
+   - 每年7-8月：披露中报（上半年）
+   - 每年10月：披露三季报
+   - 每年1-2月：披露年报业绩预告
+
+2. 计算某日战力时，需要使用**该日最新可用的财务数据**：
+   - 2024-01-15 的战力 → 使用 2023-Q3 财务数据
+   - 2024-04-15 的战力 → 使用 2023-Q4 财务数据
+   - 2024-07-15 的战力 → 使用 2024-Q1 财务数据
+
+**解决方案**（待实现）：
+```python
+class FinancialHistoryFiller:
+    """
+    历史财务数据填充器
+
+    数据来源：
+    - Tushare: pro.fina_indicator（财务指标）
+    - 东方财富：财务分析指标
+    - BaoStock：复权因子和财务数据
+
+    存储：SQLite stocks 表（已包含财务字段）
+    """
+
+    def fill_quarterly_financial(self, year: int, quarter: int) -> int:
+        """填充指定季度的财务数据"""
+
+    def backfill_historical(self, years: int = 4) -> FillResult:
+        """回填n年的历史季度财务数据"""
+```
+
+### 1.8 与 `update_scheduler.py` 的区别
+
+| 组件 | 职责 | 场景 |
+|-----|------|------|
+| `update_scheduler` | 盘中增量更新最新数据 | 每日盘中运行 |
+| `SystemFiller` | 批量填充历史 + 检测缺口补数 | 首次部署 / 定时检测 |
+
+### 1.9 设计目标
+
+1. **覆盖所有需要填充的数据存储**：DuckDB（K线）+ SQLite（除权因子）
+2. **支持首次部署批量填充**：一次性填充全市场/核心池历史数据
+3. **支持增量缺口检测**：发现数据缺失区间时自动补数
+4. **支持断点续跑**：中断后可从上次位置继续，不重复填充
+5. **尊重清理策略**：填充范围受保留期限约束（当前2年）
+6. **可配置化**：填充股票数、天数、并发等均可配置
+
+---
+
+## 二、数据流设计
+
+### 2.1 完整数据流
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         KlineFiller                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────────┐    │
+│  │ FillerState  │───▶│ GapDetector  │───▶│ TushareProvider │    │
+│  │  (SQLite)    │    │ 检测缺失区间  │    │   get_daily     │    │
+│  └──────────────┘    └──────────────┘    └──────────────────┘    │
+│         │                                             │          │
+│         │              ┌──────────────┐                │          │
+│         └─────────────▶│ DuckDBStore  │◀───────────────┘          │
+│                        │ insert_*     │                           │
+│                        └──────────────┘                           │
+│                                                                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 2.2 填充类型
+
+| 类型 | 触发条件 | 填充范围 | 优先级 |
+|-----|---------|---------|--------|
+| **批量填充** | 手动触发 / 首次部署 | 指定股票 × 指定天数 | P0 |
+| **增量填充** | 定时任务检测到缺口 | 缺失区间 | P1 |
+| **单股填充** | API调用 / 手动指定 | 单只股票 × 指定天数 | P2 |
+
+---
+
+## 三、数据结构设计
+
+### 3.1 填充状态表 (SQLite)
+
+根据专家评审#3、#5建议，简化状态表设计，每只股票只记录最新填充日期：
+
+```sql
+-- 简化版状态表（专家建议）
+CREATE TABLE kline_fill_status (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code VARCHAR(6) NOT NULL,           -- 股票代码，每只股票一条
+    latest_date DATE,                    -- 最后填充日期（断点续跑用）
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',  -- pending/running/completed/failed
+    filled_count INTEGER DEFAULT 0,      -- 已填充记录数
+    retry_count INTEGER DEFAULT 0,       -- 重试次数
+    error_message TEXT,                  -- 错误信息
+    preferred_source VARCHAR(20),        -- 该股票使用的数据源（专家建议#3）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX idx_fill_status_code ON kline_fill_status(code);
+CREATE INDEX idx_fill_status_status ON kline_fill_status(status);
+```
+
+> **⚠️ 简化原因（专家评审#3）**：单只股票历史数据是连续的，不需要按区间拆分成多条记录。GapDetector直接从DuckDB查缺口，状态表只需记录"最后处理到哪"即可。
+
+**SQLite WAL模式配置（专家评审#1、#4）**：
+```python
+# FillerState 初始化时设置
+def _ensure_table(self):
+    conn = sqlite3.connect(self.db_path, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL;")  # 启用WAL模式，提升并发性能
+    conn.execute("PRAGMA busy_timeout=10000;")  # 10秒超时
+```
+
+**僵尸进程回收机制（专家评审#1）**：
+```sql
+-- 定期清理：状态为running但超过2小时未更新的记录
+UPDATE kline_fill_status
+SET status = 'failed', error_message = '僵尸进程自动回收'
+WHERE status = 'running'
+AND updated_at < datetime('now', '-2 hours');
+```
+
+### 3.2 状态枚举
+
+```python
+class FillStatus(Enum):
+    PENDING = 'pending'      # 待填充
+    RUNNING = 'running'      # 填充中
+    COMPLETED = 'completed'  # 已完成
+    FAILED = 'failed'        # 失败（需重试）
+    GAP_DETECTED = 'gap_detected'  # 检测到缺口（待填充）
+```
+
+### 3.3 交易日历表 (DuckDB)
+
+**P0级需求（专家评审#1、#3、#5）**：GapDetector必须引入交易日历，否则会把周末、法定节假日误判为"数据缺口"。
+
+```sql
+CREATE TABLE IF NOT EXISTS trade_cal (
+    trade_date DATE PRIMARY KEY,          -- 交易日期
+    is_trading_day BOOLEAN DEFAULT TRUE,  -- 是否交易日
+    market VARCHAR(10),                   -- 市场：SSE（上交所）、SZSE（深交所）
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_trade_cal_date ON trade_cal(trade_date DESC);
+CREATE INDEX idx_trade_cal_trading ON trade_cal(is_trading_day);
+```
+
+```python
+class TradeCalendar:
+    """
+    A股交易日历管理器
+
+    职责：
+    1. 维护交易日期列表（从Tushare pro_bar.ts_code='SH'获取）
+    2. 判断某日期是否为交易日
+    3. 获取下一个交易日
+    4. 填充前过滤非交易日，避免无效API请求
+    """
+
+    def is_trading_day(self, date: date) -> bool:
+        """判断是否为交易日"""
+
+    def get_next_trading_day(self, date: date) -> date:
+        """获取下一个交易日"""
+
+    def get_trading_days_between(self, start: date, end: date) -> List[date]:
+        """获取两个日期之间的所有交易日"""
+
+    def sync_from_tushare(self):
+        """从Tushare同步交易日历"""
+```
+
+---
+
+## 四、核心类设计
+
+### 4.1 FillerState（状态管理）
+
+```python
+class FillerState:
+    """
+    填充状态管理器
+
+    职责：
+    1. 记录和查询各股票的填充状态
+    2. 支持断点续跑（记录 last_fill_date）
+    3. 标记填充结果
+    """
+
+    def __init__(self, db_path: str = None):
+        self.db_path = db_path or SQLITE_PATH
+        self._ensure_table()
+
+    def mark_running(self, code: str, start_date: str, end_date: str) -> int:
+        """标记为运行中，返回状态记录ID"""
+
+    def mark_completed(self, code: str, filled_count: int, last_date: str):
+        """标记为已完成"""
+
+    def mark_failed(self, code: str, error: str):
+        """标记为失败"""
+
+    def get_status(self, code: str) -> Optional[Dict]:
+        """获取某股票的填充状态"""
+
+    def get_pending_stocks(self, limit: int = None) -> List[Dict]:
+        """获取待填充的股票列表（用于断点续跑）"""
+
+    def clear_completed_before(self, before_date: str):
+        """清理指定日期之前已完成的状态记录"""
+```
+
+### 4.2 GapDetector（缺口检测）
+
+```python
+class GapDetector:
+    """
+    数据缺口检测器
+
+    检测逻辑：
+    1. 查询 DuckDB 中某股票现有数据的日期范围
+    2. 与目标日期范围对比，找出缺失区间
+    3. 考虑清理策略约束（最多填充到 2 年前）
+    """
+
+    def __init__(self, duckdb_store: DuckDBStore):
+        self.store = duckdb_store
+
+    def get_existing_range(self, code: str) -> Tuple[Optional[date], Optional[date]]:
+        """获取某股票现有数据的日期范围"""
+
+    def detect_gaps(self, code: str, target_days: int = None) -> List[Tuple[date, date]]:
+        """
+        检测缺失区间
+
+        Returns:
+            [(gap_start, gap_end), ...]  # 每个元素是一个缺失区间
+        """
+```
+
+### 4.3 KlineFiller（主填充器）
+
+```python
+@dataclass
+class FillConfig:
+    """填充配置（用户建议调整默认值）"""
+    max_stocks: int = 300              # 最大填充股票数（首次部署建议300只）
+    days_back: int = 30                # 填充天数（首次部署建议30天）
+    batch_size: int = 50               # 每批处理股票数
+    rate_limit_sleep: float = 0.5      # Tushare限速等待（专家建议0.5-1秒）
+    retry_max: int = 3                 # 最大重试次数
+    retry_delay: float = 5.0            # 重试等待秒数
+
+
+class KlineFiller:
+    """
+    K线历史数据填充器
+
+    使用方式：
+    1. 首次部署：filler.fill_all(limit=300, days=30)  # 用户建议：300只×30天，快速验证
+    2. 扩展填充：filler.fill_all(limit=500, days=180)  # 第二阶段：半年数据
+    3. 完整历史：filler.fill_all(limit=200, days=730)  # 第三阶段：2年数据（视数据源情况）
+    2. 增量补数：filler.fill_gaps(days=730)
+    3. 单股填充：filler.fill_stock('000001', days=300)
+    4. 断点续跑：filler.resume()  # 从上次中断处继续
+    """
+
+    def __init__(
+        self,
+        duckdb_store: DuckDBStore = None,
+        tushare_provider: TushareProvider = None,
+        state: FillerState = None,
+        config: FillConfig = None
+    ):
+        self.store = duckdb_store or get_duckdb_store()
+        self.provider = tushare_provider or TushareProvider()
+        self.state = state or FillerState()
+        self.config = config or FillConfig()
+
+    def fill_stock(self, code: str, days: int = None, force: bool = False) -> int:
+        """
+        填充单只股票
+
+        Args:
+            code: 股票代码
+            days: 填充天数（默认取 config.days_back）
+            force: 是否强制重新填充（忽略已有状态）
+
+        Returns:
+            实际填充记录数
+        """
+        days = days or self.config.days_back
+
+        # 1. 检测缺口
+        gaps = self._detector.detect_gaps(code, days)
+        if not gaps:
+            return 0  # 无缺口，无需填充
+
+        # 2. 遍历缺口区间，逐个填充
+        total_filled = 0
+        for start, end in gaps:
+            filled = self._fill_range(code, start, end)
+            total_filled += filled
+
+        # 3. 更新状态
+        self._state.mark_completed(code, total_filled, end)
+        return total_filled
+
+    def fill_all(self, limit: int = None, days: int = None) -> FillResult:
+        """
+        批量填充所有/指定数量股票
+
+        Args:
+            limit: 限制股票数量（None=全部）
+            days: 填充天数
+
+        Returns:
+            FillResult (成功数、失败数、总填充数)
+        """
+        stocks = get_stock_list()[:limit] if limit else get_stock_list()
+
+        results = FillResult()
+        for stock in stocks:
+            code = stock.get('code', '')
+            try:
+                count = self.fill_stock(code, days)
+                results.success += 1
+                results.total_records += count
+            except Exception as e:
+                results.failed += 1
+                results.errors.append(f"{code}: {e}")
+
+            # 限速
+            time.sleep(self.config.rate_limit_sleep)
+
+        return results
+
+    def fill_gaps(self, days: int = None) -> FillResult:
+        """
+        检测并填充所有股票的缺口（专家评审#5修复）
+
+        修复内容：
+        - 原来只处理全新股票（数据库中无任何数据）
+        - 现在遍历所有股票，检测每个股票的缺口
+
+        与 fill_all 的区别：
+        - fill_all: 强制填充指定天数
+        - fill_gaps: 只填充缺失区间，更高效
+        """
+        all_stocks = get_stock_list()
+        results = FillResult()
+
+        for stock in all_stocks:
+            code = stock.get('code', '')
+            try:
+                # 1. 先用 GapDetector 检测该股票的缺口
+                gaps = self._detector.detect_gaps(code, days)
+                if not gaps:
+                    continue  # 无缺口
+
+                # 2. 遍历所有缺口区间，逐个填充
+                for gap_start, gap_end in gaps:
+                    count = self._fill_range(code, gap_start, gap_end)
+                    results.total_records += count
+
+                results.success += 1
+
+            except Exception as e:
+                results.failed += 1
+                results.errors.append(f"{code}: {e}")
+
+            # 限速
+            time.sleep(self.config.rate_limit_sleep)
+
+        return results
+
+    def resume(self) -> FillResult:
+        """
+        断点续跑
+
+        从上次中断的股票继续填充
+        """
+        pending = self.state.get_pending_stocks()
+        results = FillResult()
+
+        for item in pending:
+            code = item['code']
+            try:
+                # 从 last_fill_date 继续
+                count = self.fill_stock(code, force=True)
+                results.success += 1
+                results.total_records += count
+            except Exception as e:
+                results.failed += 1
+                results.errors.append(f"{code}: {e}")
+
+        return results
+```
+
+### 4.4 辅助函数
+
+```python
+def convert_tushare_to_kline(df: pd.DataFrame, calendar: TradeCalendar = None) -> pd.DataFrame:
+    """
+    将Tushare数据转换为 DuckDB KlineRecord 格式
+
+    专家评审#1 P0级修复：补充 adj_factor 字段
+    专家评审#5：处理Tushare停牌日不返回数据的问题
+    """
+    if df.empty:
+        return pd.DataFrame()
+
+    result = pd.DataFrame()
+    result['code'] = df['ts_code'].str.split('.').str[0]  # '000001.SZ' → '000001'
+    result['trade_date'] = pd.to_datetime(df['trade_date'], format='%Y%m%d').dt.date
+    result['open'] = df['open'].astype(float)
+    result['high'] = df['high'].astype(float)
+    result['low'] = df['low'].astype(float)
+    result['close'] = df['close'].astype(float)
+    result['volume'] = df['vol'].astype(float).astype(int)  # 注意：Tushare是vol，DuckDB是volume
+    result['amount'] = df['amount'].astype(float)
+    result['change_pct'] = df['change_pct'].astype(float)
+    result['adj_factor'] = df.get('adj_factor', 1.0).astype(float)  # 专家建议：复权因子
+
+    # 停牌日标记（专家评审#5）
+    # Tushare有时不返回停牌日数据，需要主动补齐
+    if calendar:
+        existing_dates = set(result['trade_date'].tolist())
+        all_trading_dates = set(calendar.get_trading_days_between(
+            result['trade_date'].min(), result['trade_date'].max()
+        ))
+        missing_dates = all_trading_dates - existing_dates
+
+        if missing_dates:
+            # 补齐停牌日数据
+            suspended_records = []
+            for missing_date in missing_dates:
+                suspended_records.append({
+                    'code': result['code'].iloc[0],
+                    'trade_date': missing_date,
+                    'open': None, 'high': None, 'low': None, 'close': None,
+                    'volume': 0, 'amount': 0, 'change_pct': 0,
+                    'adj_factor': result['adj_factor'].iloc[-1] if len(result) > 0 else 1.0,
+                    'is_suspended': True
+                })
+            result = pd.concat([result, pd.DataFrame(suspended_records)], ignore_index=True)
+
+    return result
+```
+
+### 4.5 数据质量校验器（DataValidator）
+
+根据专家建议，数据质量是核心环节：
+
+```python
+class DataValidator:
+    """
+    数据质量校验器
+
+    校验规则（专家方案）：
+    1. OHLCV完整性：所有字段非空（严重错误）
+    2. 逻辑关系：high >= max(open, close, low), low <= min(open, close, high)（严重错误）
+    3. 成交量：volume >= 0（严重错误）
+    4. 价格合理性：price > 0（严重错误）
+    5. 涨跌幅超限：改为告警而非阻断（专家评审#1）
+       - 科创板/创业板 ±20%，北交所 ±30%，ST ±5%，新股前5天无限制
+    6. 停牌标记：volume=0 时应标记为停牌日
+    """
+
+    def validate(self, df: pd.DataFrame) -> Tuple[bool, List[str], List[str]]:
+        """
+        校验数据质量
+
+        Returns:
+            (is_valid, fatal_errors, warnings)
+        """
+        fatal_errors = []
+        warnings = []
+
+        # 1. 空值检查（仅针对非停牌日）
+        non_suspended = df[df.get('is_suspended', False) == False]
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col in non_suspended.columns and non_suspended[col].isna().any():
+                fatal_errors.append(f"存在空值: {col}")
+
+        # 2. OHLC逻辑关系（严重错误）
+        invalid_ohlc = df[
+            (df['high'] < df['open']) | (df['high'] < df['close']) |
+            (df['high'] < df['low']) | (df['low'] > df['open']) |
+            (df['low'] > df['close'])
+        ]
+        if not invalid_ohlc.empty:
+            fatal_errors.append(f"OHLC逻辑关系错误: {len(invalid_ohlc)} 条")
+
+        # 3. 成交量非负（严重错误）
+        if (df['volume'] < 0).any():
+            fatal_errors.append("存在负成交量")
+
+        # 4. 价格非正（严重错误）
+        for col in ['open', 'high', 'low', 'close']:
+            if (df[col] <= 0).any():
+                fatal_errors.append(f"{col}存在非正值")
+
+        # 5. 涨跌幅超限（改为告警，而非阻断 - 专家评审#1）
+        abnormal_change = df[
+            (df['change_pct'] > 20) | (df['change_pct'] < -20)
+        ]
+        if not abnormal_change.empty:
+            warnings.append(f"涨跌幅超限(±20%): {len(abnormal_change)} 条，建议检查是否为新股/ST/科创板")
+
+        return len(fatal_errors) == 0, fatal_errors, warnings
+
+    def validate_suspended(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        标记停牌日
+
+        停牌日特征：成交量=0 且 涨跌停价
+        """
+        df = df.copy()
+        df['is_suspended'] = (df['volume'] == 0) & (df['change_pct'] == 0)
+        return df
+```
+
+> **⚠️ 退市股处理（专家建议）**：历史回测必须包含退市股，否则会产生严重的"幸存者偏差"。数据源需要提供退市股的代码映射表。建议在 `stock_list` 中同时记录已退市股票，填充时不应跳过。
+
+### 4.6 Tushare分页处理（专家评审#5）
+
+Tushare `pro.daily` 接口每次最多返回5000条（约20年交易日），超量需要分页：
+
+```python
+class TushareProvider:
+    """Tushare数据获取器（带分页处理）"""
+
+    def get_daily_kline(self, code: str, start_date: str, end_date: str) -> List[Dict]:
+        """
+        获取日K线数据（自动分页）
+
+        Tushare pro.daily 每次最多返回5000条
+        """
+        all_data = []
+        page = 1
+        page_size = 5000  # Tushare限制
+
+        while True:
+            df = self.pro.daily(
+                ts_code=f"{code}.SH" if code.startswith(('6', '5')) else f"{code}.SZ",
+                start_date=start_date,
+                end_date=end_date,
+                page=page,
+                limit=page_size
+            )
+
+            if df is None or df.empty:
+                break
+
+            all_data.extend(df.to_dict('records'))
+
+            if len(df) < page_size:
+                break  # 最后一页
+
+            page += 1
+            time.sleep(self.rate_limit_sleep)  # 分页也要限速
+
+        return all_data
+```
+
+### 4.7 重试机制与指数退避（专家评审#4、#5）
+
+```python
+import time
+from functools import wraps
+
+class RetryHandler:
+    """
+    智能重试处理器
+
+    专家评审#4、#5：
+    1. 区分可重试异常（网络超时、限流429）和不可重试异常（参数错误、无权限）
+    2. 使用指数退避避免对API造成瞬时压力
+    """
+
+    # 可重试的HTTP状态码
+    RETRYABLE_CODES = {429, 500, 502, 503, 504}
+    # 超时等网络异常
+    RETRYABLE_EXCEPTIONS = (TimeoutError, ConnectionError, HTTPError)
+
+    def with_retry(self, func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(self.config.retry_max):
+                try:
+                    return func(*args, **kwargs)
+                except self.RETRYABLE_EXCEPTIONS as e:
+                    last_exception = e
+                    wait_time = self.config.retry_delay * (2 ** attempt)  # 指数退避
+                    logger.warning(f"网络错误，{wait_time}秒后重试... (attempt {attempt + 1})")
+                    time.sleep(wait_time)
+                except HTTPError as e:
+                    if e.response.status_code in self.RETRYABLE_CODES:
+                        last_exception = e
+                        wait_time = self.config.retry_delay * (2 ** attempt)
+                        logger.warning(f"HTTP {e.response.status_code}，{wait_time}秒后重试...")
+                        time.sleep(wait_time)
+                    else:
+                        raise  # 不可重试
+
+            # 所有重试都失败
+            raise last_exception
+
+        return wrapper
+```
+
+### 4.8 多源备份策略
+
+专家建议采用"主数据源 + 备用数据源"策略：
+
+```python
+class MultiSourceProvider:
+    """
+    多源数据获取器
+
+    主数据源：Tushare Pro（稳定可靠）
+    备用数据源1：BaoStock（纯净免费、专注A股）
+    备用数据源2：AkShare（数据覆盖广）
+
+    策略：主数据源失败时自动切换到备用源
+    """
+
+    def __init__(self):
+        self.providers = {
+            'primary': TushareProvider(),      # 主源
+            'backup1': BaoStockProvider(),      # 备用1
+            'backup2': AkShareProvider(),        # 备用2
+        }
+        self.current = 'primary'
+
+    def get_daily_kline(self, code: str, start_date: str, end_date: str) -> Optional[List[Dict]]:
+        """带自动切换的K线获取"""
+
+        for source in ['primary', 'backup1', 'backup2']:
+            try:
+                provider = self.providers[source]
+                data = provider.get_daily_kline(code, start_date, end_date)
+                if data and len(data) > 0:
+                    logger.info(f"从 {source} 获取 {code} 成功")
+                    return data
+            except Exception as e:
+                logger.warning(f"{source} 获取失败: {e}，切换备用源")
+                continue
+
+        logger.error(f"所有数据源获取 {code} 均失败")
+        return None
+```
+
+### 4.7 增量填充的精细化逻辑
+
+专家建议的增量逻辑：
+
+```python
+def get_fill_range(code: str, duckdb_store: DuckDBStore, days_back: int) -> Tuple[Optional[date], Optional[date]]:
+    """
+    确定填充日期范围（专家评审#4 SQL注入防护 + #5 边界条件修复）
+
+    1. 查询数据库中该股票的最新日期（使用参数化查询）
+    2. start_date = db_latest_date + 1（只拉取增量）
+    3. 如果latest_date >= today，返回None（无需填充）
+    """
+    today = datetime.today().date()
+    retention_start = today - timedelta(days=days_back)
+
+    # 使用参数化查询防止SQL注入（专家评审#4 P0修复）
+    result = duckdb_store.execute_query(
+        "SELECT MAX(trade_date) FROM daily_kline WHERE code = ?",
+        parameters=[code]
+    )
+
+    if result.success and result.data is not None:
+        latest_date = result.data.iloc[0, 0]
+        if latest_date:
+            if latest_date >= today:
+                # 已是最新，无需填充
+                return None, None
+
+            # 增量：从最新日期的下一天开始
+            fill_start = latest_date + timedelta(days=1)
+
+            # 但如果最新日期早于保留期限，需要补中间缺失的
+            if latest_date < retention_start:
+                fill_start = retention_start
+
+            return fill_start, today
+
+    # 无数据：按 days_back 计算起始日期
+    return retention_start, today
+```
+
+### 4.8 复权因子与除权除息处理（专家补充）
+
+专家多次强调复权处理的重要性：
+
+```python
+# DuckDB daily_kline 表结构需增加 adj_factor 字段
+"""
+CREATE TABLE IF NOT EXISTS daily_kline (
+    id BIGINT DEFAULT nextval('kline_id'),
+    code VARCHAR(6) NOT NULL,
+    trade_date DATE NOT NULL,
+    open DECIMAL(10, 2) NOT NULL,
+    high DECIMAL(10, 2) NOT NULL,
+    low DECIMAL(10, 2) NOT NULL,
+    close DECIMAL(10, 2) NOT NULL,
+    volume BIGINT NOT NULL,
+    amount DECIMAL(20, 2) DEFAULT 0,
+    change_pct DECIMAL(10, 2) DEFAULT 0,
+    adj_factor DECIMAL(10, 6) DEFAULT 1.0,    -- 前复权因子
+    adj_close DECIMAL(10, 2) DEFAULT 0,        -- 前复权收盘价
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (code, trade_date)
+)
+"""
+
+class AdjFactorHandler:
+    """
+    复权因子处理器
+
+    专家建议（#3 四、#4 三）：
+    1. 同时存储：原始未复权数据、前复权数据、后复权数据
+    2. 分析软件展示用"前复权"，计算真实收益率用"未复权+分红数据"
+    3. 除权除息日附近数据获取容易出错，需特别校验
+    """
+
+    def get_adj_factor(self, code: str, trade_date: str) -> float:
+        """获取指定日期的复权因子"""
+
+    def calculate_adj_price(self, price: float, adj_factor: float) -> float:
+        """根据复权因子计算复权价格"""
+
+    def detect_ex_dividend_dates(self, code: str) -> List[date]:
+        """
+        检测除权除息日期
+
+        在除权除息日附近，复权数据的获取容易出现错误
+        建议在这些日期附近增加校验
+        """
+```
+
+### 4.9 数据对齐校验（专家补充）
+
+专家建议确保所有股票在同一交易日的日期完全一致：
+
+```python
+class DataAlignmentValidator:
+    """
+    数据对齐校验器
+
+    专家建议（#4 三）：
+    确保所有股票在同一交易日的日期完全一致（剔除某些股票单独的额外交易日）
+    """
+
+    def get_trading_dates(self, target_date: date) -> List[str]:
+        """
+        获取某日期附近所有股票的交易日列表
+
+        用于检查是否存在"个别股票单独的额外交易日"
+        """
+
+    def detect_misaligned(self, code: str) -> List[date]:
+        """
+        检测某股票是否存在与其他股票不一致的交易日
+
+        Returns:
+            异常日期列表
+        """
+
+    def validate_all_stocks(self) -> Dict[str, List[date]]:
+        """
+        校验所有股票的数据对齐情况
+
+        Returns:
+            {code: [异常日期列表], ...}
+        """
+```
+
+---
+
+## 五、与现有模块集成
+
+### 5.1 与 data_manager/manager.py 集成
+
+在 `DataManager` 类中新增方法：
+
+```python
+class DataManager:
+    # ... 现有方法 ...
+
+    def fill_klines(self, **kwargs) -> FillResult:
+        """填充K线历史数据（对外统一接口）"""
+        filler = KlineFiller()
+        return filler.fill_stock(**kwargs) if 'code' in kwargs else filler.fill_all(**kwargs)
+
+    def fill_gaps(self, **kwargs) -> FillResult:
+        """检测并填充缺口"""
+        filler = KlineFiller()
+        return filler.fill_gaps(**kwargs)
+```
+
+### 5.2 与 update_scheduler.py 配合
+
+定时任务中，填充可作为调度的补充：
+
+```python
+# update_scheduler.py 新增
+def scheduled_gap_fill():
+    """每日盘后执行：检测并填充缺口"""
+    filler = KlineFiller()
+    return filler.fill_gaps(days=config.days_back)
+```
+
+### 5.3 与 cleanup.py 的约束关系
+
+填充范围受清理策略约束：
+
+```python
+# 在 GapDetector.detect_gaps() 中
+def detect_gaps(self, code: str, target_days: int = None) -> List[Tuple[date, date]]:
+    # 1. 确定目标日期范围（不早于保留期限）
+    retention_days = DUCKDB_RETENTION['daily_kline']  # 当前 730 天
+    earliest_date = today - timedelta(days=retention_days)
+
+    # 2. 获取现有数据范围
+    existing_start, existing_end = self.get_existing_range(code)
+
+    # 3. 计算缺失区间（不早于 earliest_date）
+    # ...
+```
+
+---
+
+## 六、API 接口设计
+
+### 6.1 后端 API（异步任务模式 - 专家评审#1）
+
+**问题**：200只股票按0.5秒/只计算需100秒，会导致HTTP超时
+
+**解决方案**：API改为异步任务模式，接口只创建任务返回task_id，后台执行
+
+```python
+import uuid
+import threading
+from datetime import datetime
+
+# 任务存储（生产环境建议用Redis）
+fill_tasks: Dict[str, dict] = {}
+
+@router.post("/data/fill")
+async def fill_klines(
+    code: Optional[str] = None,
+    limit: Optional[int] = None,
+    days: int = 730,
+    fill_gaps: bool = False
+):
+    """
+    触发K线数据填充（异步任务模式 - 专家评审#1 P0修复）
+
+    - POST /data/fill?code=000001&days=300  # 单股填充
+    - POST /data/fill?limit=50&days=730       # 批量填充前50只
+    - POST /data/fill?fill_gaps=true          # 检测缺口并填充
+    """
+    # 参数校验（专家评审#4 SQL注入防护）
+    if days is not None and (days < 1 or days > 3650):
+        raise HTTPException(status_code=400, detail="days必须在1-3650之间")
+    if limit is not None and (limit < 1 or limit > 5000):
+        raise HTTPException(status_code=400, detail="limit必须在1-5000之间")
+    if code and not re.match(r'^\d{6}$', code):
+        raise HTTPException(status_code=400, detail="code必须是6位数字")
+
+    # 创建任务
+    task_id = str(uuid.uuid4())
+    fill_tasks[task_id] = {
+        "status": "pending",
+        "created_at": datetime.now().isoformat(),
+        "progress": 0,
+        "result": None
+    }
+
+    # 后台线程执行（避免HTTP超时）
+    def background_fill():
+        filler = KlineFiller()
+        try:
+            if fill_gaps:
+                result = filler.fill_gaps(days=days)
+            elif code:
+                result = filler.fill_stock(code, days)
+            else:
+                result = filler.fill_all(limit=limit, days=days)
+            fill_tasks[task_id]["status"] = "completed"
+            fill_tasks[task_id]["result"] = {
+                "success": result.success,
+                "failed": result.failed,
+                "total": result.total_records
+            }
+        except Exception as e:
+            fill_tasks[task_id]["status"] = "failed"
+            fill_tasks[task_id]["error"] = str(e)
+
+    thread = threading.Thread(target=background_fill)
+    thread.start()
+
+    return {"task_id": task_id, "message": "填充任务已创建"}
+
+
+@router.get("/data/fill/status/{task_id}")
+async def get_fill_status(task_id: str):
+    """获取填充任务状态"""
+    if task_id not in fill_tasks:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return fill_tasks[task_id]
+
+
+@router.get("/data/fill/status")
+async def get_fill_status_by_code(code: str = None):
+    """获取填充状态（轮询模式）"""
+    # 使用参数化查询防止SQL注入（专家评审#4）
+    state = FillerState()
+    if code:
+        return state.get_status(code)  # 内部使用参数化查询
+    return state.get_pending_stocks()
+```
+
+---
+
+## 七、使用示例
+
+### 7.1 首次部署填充（用户建议：300只×30天）
+
+```bash
+# 第一阶段：快速验证（300只×30天，约10-15分钟）
+python -c "
+from backend.data_manager.filler import KlineFiller
+filler = KlineFiller()
+result = filler.fill_all(limit=300, days=30)
+print(f'成功: {result.success}, 失败: {result.failed}, 总记录: {result.total_records}')
+"
+
+# 第二阶段：扩展到半年数据
+python -c "
+from backend.data_manager.filler import KlineFiller
+filler = KlineFiller()
+result = filler.fill_all(limit=500, days=180)
+print(f'成功: {result.success}, 总记录: {result.total_records}')
+"
+
+# 第三阶段：完整2年历史（视数据源情况，需较长时间）
+python -c "
+from backend.data_manager.filler import KlineFiller
+filler = KlineFiller()
+result = filler.fill_all(limit=200, days=730)
+print(f'成功: {result.success}, 总记录: {result.total_records}')
+"
+```
+
+### 7.2 日常增量检测
+
+```bash
+# 检测缺口并填充（每日盘后运行）
+python -c "
+from backend.data_manager.filler import KlineFiller
+filler = KlineFiller()
+result = filler.fill_gaps(days=30)
+print(f'成功: {result.success}, 总记录: {result.total_records}')
+"
+```
+
+### 7.3 单股补充
+
+```python
+# 补充单只股票数据
+from backend.data_manager import KlineFiller
+filler = KlineFiller()
+count = filler.fill_stock('000001', days=300)
+print(f'填充了 {count} 条记录')
+```
+
+### 7.4 断点续跑
+
+```python
+# 中断后继续
+from backend.data_manager import KlineFiller
+filler = KlineFiller()
+result = filler.resume()
+print(f'成功: {result.success}, 失败: {result.failed}')
+```
+
+### 7.5 除权因子填充
+
+```bash
+# 填充全市场除权因子（首次部署必须）
+python -c "
+from backend.data_manager.filler import ExRightFactorFiller
+filler = ExRightFactorFiller()
+result = filler.fill_all()
+print(f'成功: {result.success}, 失败: {result.failed}, 总记录: {result.total_records}')
+"
+```
+
+### 7.6 分钟K线填充
+
+```bash
+# 填充核心池分钟K线（用于实时战力计算）
+python -c "
+from backend.data_manager.filler import MinuteKlineFiller
+filler = MinuteKlineFiller()
+result = filler.fill_all(limit=100, days=14)
+print(f'成功: {result.success}, 总记录: {result.total_records}')
+"
+```
+
+---
+
+## 八、实现清单（基于专家评审优先级调整）
+
+| 序号 | 任务 | 优先级 | 评审来源 |
+|-----|------|--------|---------|
+| 1 | 创建交易日历表 `trade_cal` 和 `TradeCalendar` 类 | **P0** | #1, #3, #5 |
+| 2 | SQL注入防护：所有查询改用参数化查询 | **P0** | #4, #5 |
+| 3 | `convert_tushare_to_kline` 补充 `adj_factor` 字段 | **P0** | #1 |
+| 4 | API改为异步任务模式（防HTTP超时） | **P0** | #1 |
+| 5 | Tushare分页处理（5000条/次循环获取） | **P0** | #5 |
+| 6 | `DataValidator` 涨跌幅改为告警而非阻断 | **P0** | #1 |
+| 7 | SQLite状态表简化 + WAL模式 + 僵尸进程回收 | **P0** | #1, #3 |
+| 8 | `KlineFiller.fill_stock()` 单股填充 | P0 | |
+| 9 | `KlineFiller.fill_all()` 批量填充 | P1 | |
+| 10 | `KlineFiller.fill_gaps()` 修复（遍历所有股票缺口） | **P1** | #5 |
+| 11 | `KlineFiller.resume()` 断点续跑 | P1 | |
+| 12 | `DataValidator` 数据校验器（OHLCV + 停牌校验） | **P1** | #3 |
+| 13 | DuckDB表增加 `adj_factor` 字段 | P1 | |
+| 14 | 重试机制实现（指数退避 + 异常分类） | P1 | #4, #5 |
+| 15 | `TradeCalendar` 集成到 GapDetector | P1 | |
+| 16 | 停牌日补齐逻辑（Tushare有时不返回） | P1 | #1, #5 |
+| 17 | `AdjFactorHandler` 复权因子处理器 | P2 | #3 |
+| 18 | `MultiSourceProvider` 多源备份（单股票全程同源） | P2 | #3 |
+| 19 | 并发控制配置（`concurrent_limit`） | P2 | #2, #4 |
+| 20 | API参数校验（days/limit/code格式） | P2 | #4 |
+| 21 | DuckDB批量插入优化（每1000条提交） | P2 | |
+| 22 | 内存优化（每100只GC一次） | P2 | #4 |
+| 23 | 集成到 `DataManager` | P2 | |
+| 24 | 单元测试覆盖 | P2 | |
+| 25 | ~~`DataAlignmentValidator`~~ | **删除** | 用交易日历替代 #3 |
+| 26 | 添加定期校验任务（每月/季度） | P3 | #2 |
+| 27 | **战力历史回填不通过SystemFiller** | 明确 | 本文档 |
+| 28 | `CPHistoryBackfillScript` 脚本设计 | P2 | 独立实现 |
+| 29 | 历史财务数据填充需求分析 | P2 | 战力回填前置条件 |
+| 30 | `ExRightFactorFiller` 除权因子填充器 | **P0** | 本文档 |
+| 31 | MinuteKlineFiller 分钟K线填充器 | P1 | 本文档 |
+| 32 | `FinancialHistoryFiller` 历史财务数据填充器 | P2 | 战力回填前置条件 |
+| 33 | 回测器适配 DuckDB daily_kline（替代 price_history） | P1 | 本文档 |
+| 34 | 预测引擎历史回测（GainPredictor + ProbabilityPredictor） | P2 | 历史K线就绪后 |
+
+---
+
+## 九、已知约束
+
+| 约束 | 说明 | 来源 |
+|-----|------|------|
+| **Tushare限速** | 120次/分钟，建议 `rate_limit_sleep = 0.5` | 专家建议 |
+| **保留期限** | 填充数据不超过2年（`DUCKDB_RETENTION['daily_kline']`） | |
+| **存储顺序** | `INSERT OR REPLACE`，自动覆盖已有数据 | |
+| **唯一键** | `daily_kline(code, trade_date)` 防止重复 | |
+| **复权规范** | 统一前复权，支持切换后复权/不复权 | |
+| **退市股/ST股** | **不填充**。交易系统不需要ST、退市股数据。Fillers自动跳过（名称含 `*`/`ST`/`退市` 的股票）。股池过滤发生在 `/api/refresh` 阶段（`get_batch_market_data` 过滤），Filler 只负责填充股池内股票的数据。 | 用户确认 |
+| **分页限制** | Tushare每次最多返回5000条 | #5 |
+| **停牌日处理** | Tushare有时不返回停牌日，需主动补齐 | #1, #5 |
+| **科创板/创业板** | **不纳入股池**。`get_batch_market_data` 过滤掉 `688xxx`（科创板）和 `300xxx`（创业板），只保留主板（`6xxxxx` 排除688、`0xxxxx` 排除30）。涨跌幅±20%，北交所±30%，ST±5%。 | |
+| **数据源限制** | 外部数据源不一定能提供完整730天历史，建议分阶段填充 | 用户建议 |
+| **首次部署建议** | 300只×30天（快速验证）→ 500只×180天 → 200只×730天 | 用户建议 |
+| **cp_history填充** | 战力历史由引擎计算写入，非外部数据填充 | 本文档 |
+| **cp_history前置** | 需要先有K线数据+财务数据，财务数据是季度披露 | 本文档 |
+| **ex_right_factor** | 除权因子表当前为空，K线填充时同步填充 | 本文档 |
+| **price_history** | 历史遗留表，回测器仍在使用，计划迁移到DuckDB | 本文档 |
+| **预测引擎数据** | gain_predictions 和 probability_predictions 由引擎计算写入，无需外部填充 | 本文档 |
+| **预测历史回测** | 需要先有历史K线数据，再执行预测引擎历史回测 | 本文档 |

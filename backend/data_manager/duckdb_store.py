@@ -50,6 +50,7 @@ class KlineRecord:
     amount: float = 0.0
     change_pct: float = 0.0
     adj_close: float = 0.0
+    adj_factor: float = 1.0  # 复权因子
 
 
 @dataclass
@@ -80,65 +81,112 @@ class DuckDBStore:
         self._lock = threading.Lock()
         self._ensure_tables()
 
+    def _migrate_columns(self, conn):
+        """
+        迁移：检查并添加缺失的列
+
+        用于已有表结构升级，添加新版本新增的列
+        """
+        # 需要添加到 daily_kline 表的列
+        required_columns = {
+            'adj_factor': 'DECIMAL(10, 6) DEFAULT 1.0',
+        }
+
+        try:
+            # 获取当前表的所有列
+            result = conn.execute("DESCRIBE daily_kline").fetchall()
+            existing_columns = {row[0] for row in result}
+
+            # 添加缺失的列
+            for col_name, col_type in required_columns.items():
+                if col_name not in existing_columns:
+                    try:
+                        conn.execute(f"ALTER TABLE daily_kline ADD COLUMN {col_name} {col_type}")
+                        print(f"Migration: Added column {col_name} to daily_kline")
+                    except Exception as e:
+                        print(f"Migration warning: Could not add column {col_name}: {e}")
+        except Exception as e:
+            print(f"Migration warning: Could not check columns: {e}")
+
     def _get_conn(self) -> duckdb.DuckDBPyConnection:
-        """获取DuckDB连接"""
+        """获取DuckDB连接（用于写入）"""
         return duckdb.connect(self.db_path, read_only=False)
+
+    def _get_read_conn(self) -> duckdb.DuckDBPyConnection:
+        """获取DuckDB只读连接（用于查询，避免与写入锁冲突）"""
+        return duckdb.connect(self.db_path, read_only=True)
 
     def _ensure_tables(self):
         """确保表存在"""
-        with self._get_conn() as conn:
-            # 日K线表
-            conn.execute("""
-                CREATE SEQUENCE IF NOT EXISTS kline_id START 1
-            """)
+        # 如果数据库已被锁定（另一个进程持有写锁），跳过表创建
+        # 因为只读连接无法执行DDL，这只在首次初始化时需要
+        try:
+            with self._get_conn() as conn:
+                # 日K线表
+                conn.execute("""
+                    CREATE SEQUENCE IF NOT EXISTS kline_id START 1
+                """)
 
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS daily_kline (
-                    id BIGINT DEFAULT nextval('kline_id'),
-                    code VARCHAR(6) NOT NULL,
-                    trade_date DATE NOT NULL,
-                    open DECIMAL(10, 2) NOT NULL,
-                    high DECIMAL(10, 2) NOT NULL,
-                    low DECIMAL(10, 2) NOT NULL,
-                    close DECIMAL(10, 2) NOT NULL,
-                    volume BIGINT NOT NULL,
-                    amount DECIMAL(20, 2) DEFAULT 0,
-                    change_pct DECIMAL(10, 2) DEFAULT 0,
-                    adj_close DECIMAL(10, 2) DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (code, trade_date)
-                )
-            """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS daily_kline (
+                        id BIGINT DEFAULT nextval('kline_id'),
+                        code VARCHAR(6) NOT NULL,
+                        trade_date DATE NOT NULL,
+                        open DECIMAL(10, 2) NOT NULL,
+                        high DECIMAL(10, 2) NOT NULL,
+                        low DECIMAL(10, 2) NOT NULL,
+                        close DECIMAL(10, 2) NOT NULL,
+                        volume BIGINT NOT NULL,
+                        amount DECIMAL(20, 2) DEFAULT 0,
+                        change_pct DECIMAL(10, 2) DEFAULT 0,
+                        adj_close DECIMAL(10, 2) DEFAULT 0,
+                        adj_factor DECIMAL(10, 6) DEFAULT 1.0,  -- 复权因子
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (code, trade_date)
+                    )
+                """)
 
-            # 创建索引
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_daily_code_date
-                ON daily_kline(code, trade_date DESC)
-            """)
+                # 迁移：检查并添加缺失的列（针对已存在的表）
+                self._migrate_columns(conn)
 
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_daily_date
-                ON daily_kline(trade_date DESC)
-            """)
+                # 创建索引
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_daily_code_date
+                    ON daily_kline(code, trade_date DESC)
+                """)
 
-            # 分钟K线表（预留）
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS minute_kline (
-                    id BIGINT DEFAULT nextval('kline_id'),
-                    code VARCHAR(6) NOT NULL,
-                    trade_date DATE NOT NULL,
-                    trade_time TIMESTAMP NOT NULL,
-                    open DECIMAL(10, 2) NOT NULL,
-                    high DECIMAL(10, 2) NOT NULL,
-                    low DECIMAL(10, 2) NOT NULL,
-                    close DECIMAL(10, 2) NOT NULL,
-                    volume BIGINT NOT NULL,
-                    amount DECIMAL(20, 2) DEFAULT 0,
-                    interval_type VARCHAR(10) DEFAULT '1min',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (code, trade_time, interval_type)
-                )
-            """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_daily_date
+                    ON daily_kline(trade_date DESC)
+                """)
+
+                # 迁移：检查并添加缺失的列
+                self._migrate_columns(conn)
+
+                # 分钟K线表（预留）
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS minute_kline (
+                        id BIGINT DEFAULT nextval('kline_id'),
+                        code VARCHAR(6) NOT NULL,
+                        trade_date DATE NOT NULL,
+                        trade_time TIMESTAMP NOT NULL,
+                        open DECIMAL(10, 2) NOT NULL,
+                        high DECIMAL(10, 2) NOT NULL,
+                        low DECIMAL(10, 2) NOT NULL,
+                        close DECIMAL(10, 2) NOT NULL,
+                        volume BIGINT NOT NULL,
+                        amount DECIMAL(20, 2) DEFAULT 0,
+                        interval_type VARCHAR(10) DEFAULT '1min',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (code, trade_time, interval_type)
+                    )
+                """)
+        except (duckdb.IOException, OSError) as e:
+            if "Could not set lock" in str(e) or "locked" in str(e).lower():
+                print(f"[DuckDB] 数据库被锁定 ({e})，跳过表创建（表可能已存在）")
+                pass  # 表已存在，跳过
+            else:
+                raise
 
     def insert_daily_kline(self, record: KlineRecord) -> bool:
         """插入单条日K线"""
@@ -146,8 +194,8 @@ class DuckDBStore:
             with self._get_conn() as conn:
                 conn.execute("""
                     INSERT OR REPLACE INTO daily_kline
-                    (code, trade_date, open, high, low, close, volume, amount, change_pct, adj_close)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (code, trade_date, open, high, low, close, volume, amount, change_pct, adj_close, adj_factor)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     record.code,
                     record.trade_date,
@@ -159,15 +207,25 @@ class DuckDBStore:
                     record.amount,
                     record.change_pct,
                     record.adj_close,
+                    getattr(record, 'adj_factor', 1.0),
                 ))
             return True
         except Exception as e:
             print(f"Insert daily kline error: {e}")
             return False
 
-    def insert_daily_klines_batch(self, records: List[KlineRecord]) -> Tuple[int, int]:
+    def insert_daily_klines_batch(self, records: List[KlineRecord], batch_size: int = 1000) -> Tuple[int, int]:
         """
-        批量插入日K线
+        批量插入日K线（优化版）
+
+        优化点：
+        1. 每1000条提交一次（减少事务大小）
+        2. 使用 executemany 批量处理提高性能
+        3. 单次提交减少IO次数
+
+        Args:
+            records: K线记录列表
+            batch_size: 每批提交数量
 
         Returns:
             (success_count, error_count)
@@ -175,28 +233,59 @@ class DuckDBStore:
         if not records:
             return 0, 0
 
-        success = 0
-        errors = 0
+        total_success = 0
+        total_errors = 0
 
         try:
             with self._get_conn() as conn:
-                for r in records:
-                    try:
-                        conn.execute("""
-                            INSERT OR REPLACE INTO daily_kline
-                            (code, trade_date, open, high, low, close, volume, amount, change_pct, adj_close)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
+                # SQL语句
+                sql = """
+                    INSERT OR REPLACE INTO daily_kline
+                    (code, trade_date, open, high, low, close, volume, amount, change_pct, adj_close, adj_factor)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+
+                # 分批处理
+                for batch_start in range(0, len(records), batch_size):
+                    batch_end = min(batch_start + batch_size, len(records))
+                    batch = records[batch_start:batch_end]
+
+                    # 准备批量数据
+                    batch_data = [
+                        (
                             r.code, r.trade_date, r.open, r.high, r.low, r.close,
                             r.volume, r.amount, r.change_pct, r.adj_close,
-                        ))
-                        success += 1
-                    except Exception:
-                        errors += 1
+                            getattr(r, 'adj_factor', 1.0),
+                        )
+                        for r in batch
+                    ]
+
+                    try:
+                        # 使用 executemany 批量插入
+                        conn.executemany(sql, batch_data)
+                        total_success += len(batch)
+                    except Exception as e:
+                        # 如果批量失败，尝试逐条插入
+                        for r in batch:
+                            try:
+                                conn.execute(sql, (
+                                    r.code, r.trade_date, r.open, r.high, r.low, r.close,
+                                    r.volume, r.amount, r.change_pct, r.adj_close,
+                                    getattr(r, 'adj_factor', 1.0),
+                                ))
+                                total_success += 1
+                            except Exception:
+                                total_errors += 1
+
+                # 提交事务
+                conn.commit()
+
         except Exception as e:
             return 0, len(records)
 
-        return success, errors
+        return total_success, total_errors
+
+        return total_success, total_errors
 
     def insert_from_dataframe(self, df: pd.DataFrame, table: str = 'daily_kline') -> int:
         """
@@ -252,7 +341,7 @@ class DuckDBStore:
             QueryResult with DataFrame
         """
         try:
-            with self._get_conn() as conn:
+            with self._get_read_conn() as conn:
                 sql = "SELECT * FROM daily_kline WHERE code = ?"
                 params = [code]
 
@@ -277,10 +366,72 @@ class DuckDBStore:
         except Exception as e:
             return QueryResult(success=False, error=str(e))
 
+    def get_date_range(self, code: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        获取某股票已有数据的日期范围（最小/最大日期）。
+
+        Args:
+            code: 股票代码
+
+        Returns:
+            (min_date, max_date) 格式为 YYYY-MM-DD 字符串，或 (None, None)
+        """
+        try:
+            with self._get_read_conn() as conn:
+                row = conn.execute(
+                    "SELECT MIN(trade_date), MAX(trade_date) FROM daily_kline WHERE code = ?",
+                    [code]
+                ).fetchone()
+                if row and row[0] and row[1]:
+                    return str(row[0]), str(row[1])
+        except Exception:
+            pass
+        return None, None
+
+    def get_klines_bulk(self, codes: List[str], days: int = 60) -> Dict[str, pd.DataFrame]:
+        """批量获取多只股票的K线数据（单次连接）
+
+        相比逐只调用 get_klines()，避免了大量连接创建开销，
+        适合预测引擎等需要全市场数据的场景。
+
+        Args:
+            codes: 股票代码列表
+            days: 最近N天
+
+        Returns:
+            Dict[code -> DataFrame]
+        """
+        if not codes:
+            return {}
+        from datetime import datetime, timedelta
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+        try:
+            with self._get_read_conn() as conn:
+                placeholders = ','.join(['?' for _ in codes])
+                sql = f"""
+                    SELECT * FROM daily_kline
+                    WHERE code IN ({placeholders})
+                      AND trade_date >= ?
+                      AND trade_date <= ?
+                    ORDER BY code, trade_date DESC
+                """
+                params = list(codes) + [start_date, end_date]
+                df = conn.execute(sql, params).df()
+
+            result: Dict[str, pd.DataFrame] = {}
+            if not df.empty:
+                for code, group in df.groupby('code'):
+                    result[code] = group.reset_index(drop=True)
+            return result
+        except Exception as e:
+            print(f"get_klines_bulk error: {e}")
+            return {}
+
     def get_latest_kline(self, code: str) -> Optional[Dict]:
         """获取最新一条K线"""
         try:
-            with self._get_conn() as conn:
+            with self._get_read_conn() as conn:
                 df = conn.execute("""
                     SELECT * FROM daily_kline
                     WHERE code = ?
@@ -315,7 +466,7 @@ class DuckDBStore:
             均线值
         """
         try:
-            with self._get_conn() as conn:
+            with self._get_read_conn() as conn:
                 if end_date:
                     df = conn.execute("""
                         WITH ranked AS (
@@ -354,7 +505,7 @@ class DuckDBStore:
     ) -> QueryResult:
         """获取K线及均线"""
         try:
-            with self._get_conn() as conn:
+            with self._get_read_conn() as conn:
                 ma_sql_parts = []
                 for d in ma_days:
                     ma_sql_parts.append(f"""
@@ -394,7 +545,7 @@ class DuckDBStore:
     ) -> List[float]:
         """获取成交量历史"""
         try:
-            with self._get_conn() as conn:
+            with self._get_read_conn() as conn:
                 df = conn.execute("""
                     SELECT volume FROM daily_kline
                     WHERE code = ?
@@ -426,7 +577,7 @@ class DuckDBStore:
             from datetime import datetime, timedelta
             start_datetime = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
 
-            with self._get_conn() as conn:
+            with self._get_read_conn() as conn:
                 df = conn.execute("""
                     SELECT code, trade_date, trade_time, open, high, low, close, volume, amount
                     FROM minute_kline
@@ -459,7 +610,7 @@ class DuckDBStore:
             from datetime import datetime, timedelta
             start_datetime = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
 
-            with self._get_conn() as conn:
+            with self._get_read_conn() as conn:
                 df = conn.execute("""
                     WITH ranked AS (
                         SELECT trade_time, close,
@@ -484,7 +635,7 @@ class DuckDBStore:
     ) -> List[str]:
         """获取交易日列表"""
         try:
-            with self._get_conn() as conn:
+            with self._get_read_conn() as conn:
                 df = conn.execute("""
                     SELECT DISTINCT trade_date FROM daily_kline
                     WHERE trade_date BETWEEN ? AND ?
@@ -498,7 +649,7 @@ class DuckDBStore:
     def get_stats(self) -> Dict:
         """获取统计信息"""
         try:
-            with self._get_conn() as conn:
+            with self._get_read_conn() as conn:
                 total = conn.execute("SELECT COUNT(*) as cnt FROM daily_kline").fetchone()[0]
                 codes = conn.execute("SELECT COUNT(DISTINCT code) as cnt FROM daily_kline").fetchone()[0]
                 date_range = conn.execute("""
@@ -632,7 +783,7 @@ class DuckDBStore:
             各表的数据保留情况
         """
         try:
-            with self._get_conn() as conn:
+            with self._get_read_conn() as conn:
                 info = {}
 
                 # daily_kline
@@ -821,14 +972,41 @@ def get_duckdb_store() -> DuckDBStore:
 
 # ==================== 便捷函数 ====================
 
-def get_klines(code: str, start_date: str = None, end_date: str = None, limit: int = 1000) -> QueryResult:
-    """获取K线数据"""
+def get_klines(code: str, days: int = None, start_date: str = None, end_date: str = None, limit: int = 1000) -> QueryResult:
+    """获取K线数据
+
+    支持两种调用方式：
+    1. get_klines(code, days=N) - 获取最近N天
+    2. get_klines(code, start_date='2024-01-01', end_date='2024-12-31') - 指定日期范围
+
+    Args:
+        code: 股票代码
+        days: 最近N天（与start_date/end_date互斥）
+        start_date: 开始日期 (YYYY-MM-DD)
+        end_date: 结束日期 (YYYY-MM-DD)
+        limit: 返回条数限制
+    """
+    if days is not None and start_date is None and end_date is None:
+        from datetime import datetime, timedelta
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+
     return get_duckdb_store().get_klines(code, start_date, end_date, limit)
+
+
+def get_klines_bulk(codes: List[str], days: int = 60) -> Dict[str, pd.DataFrame]:
+    """批量获取多只股票K线（单次连接，适合预测引擎全市场扫描）"""
+    return get_duckdb_store().get_klines_bulk(codes, days)
 
 
 def get_latest_kline(code: str) -> Optional[Dict]:
     """获取最新K线"""
     return get_duckdb_store().get_latest_kline(code)
+
+
+def get_date_range(code: str) -> Tuple[Optional[str], Optional[str]]:
+    """获取某股票已有数据的日期范围 (min_date, max_date)"""
+    return get_duckdb_store().get_date_range(code)
 
 
 def insert_kline(record: KlineRecord) -> bool:

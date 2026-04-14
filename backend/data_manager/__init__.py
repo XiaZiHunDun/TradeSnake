@@ -1,5 +1,5 @@
 """
-数据管理模块 - Data Manager v18.3
+数据管理模块 - Data Manager v18.5
 ====================================
 职责：数据获取、缓存、清洗、持久化
 
@@ -17,6 +17,8 @@
 - backup: 数据备份
 - duckdb_store: DuckDB历史K线存储
 - cp_history_store: 战力历史存储（SQLite WAL模式）
+- prediction_store: 预测结果存储（SQLite WAL模式）
+- filler: 数据填充模块（ExRightFactorFiller + KlineFiller）
 - providers: 数据源提供者（Tushare）
 
 数据分类：
@@ -45,7 +47,7 @@ from .manager import (
 )
 
 # 新增模块
-from .cleaner import DataCleaner, get_cleaner, clean_data
+from .cleaner import DataCleaner, DataValidator, get_cleaner, clean_data
 from .circuit_breaker import (
     CircuitBreaker,
     RateLimiter,
@@ -148,6 +150,34 @@ from .prediction_store import (
     get_prediction_store,
 )
 
+# 数据填充模块（ExRightFactorFiller + KlineFiller + MinuteKlineFiller + CPHistoryBatchCalculator + FinancialHistoryFiller + TradeCalendar，v19.14新增）
+from .filler import (
+    ExRightFactorFiller,
+    KlineFiller,
+    MinuteKlineFiller,
+    CPHistoryBatchCalculator,
+    FinancialHistoryFiller,
+    TradeCalendar,
+    FillResult,
+    FillStatus,
+    get_ex_right_factor_filler,
+    get_kline_filler,
+    get_minute_kline_filler,
+    get_cp_history_calculator,
+    get_financial_history_filler,
+    get_trade_calendar,
+    fill_ex_right_factors,
+    fill_klines,
+    fill_minute_klines,
+    fill_financial_history,
+    calculate_cp_history,
+    resume_ex_right_factors,
+    resume_klines,
+    resume_minute_klines,
+    resume_financial_history,
+    is_trading_day,
+)
+
 __all__ = [
     # 兼容旧接口
     'StockDataFetcher',
@@ -165,6 +195,7 @@ __all__ = [
     'UnifiedCache',
     # 数据清洗
     'DataCleaner',
+    'DataValidator',
     'get_cleaner',
     'clean_data',
     # 熔断限流
@@ -223,6 +254,31 @@ __all__ = [
     'get_ma',
     'get_minute_klines',
     'get_minute_ma',
+    # 数据填充
+    'ExRightFactorFiller',
+    'KlineFiller',
+    'MinuteKlineFiller',
+    'CPHistoryBatchCalculator',
+    'FinancialHistoryFiller',
+    'TradeCalendar',
+    'FillResult',
+    'FillStatus',
+    'get_ex_right_factor_filler',
+    'get_kline_filler',
+    'get_minute_kline_filler',
+    'get_cp_history_calculator',
+    'get_financial_history_filler',
+    'get_trade_calendar',
+    'fill_ex_right_factors',
+    'fill_klines',
+    'fill_minute_klines',
+    'fill_financial_history',
+    'calculate_cp_history',
+    'resume_ex_right_factors',
+    'resume_klines',
+    'resume_minute_klines',
+    'resume_financial_history',
+    'is_trading_day',
     # 数据源提供者
     'BaseDataProvider',
     'ProviderConfig',

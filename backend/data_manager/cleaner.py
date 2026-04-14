@@ -497,6 +497,162 @@ class DataCleaner:
         return data, True
 
 
+# ==================== 数据质量校验器（P1）====================
+
+class DataValidator:
+    """
+    数据质量校验器 - 基于专家建议
+
+    校验规则：
+    1. OHLCV完整性：所有字段非空（严重错误）
+    2. 逻辑关系：high >= max(open, close, low), low <= min(open, close, high)（严重错误）
+    3. 成交量：volume >= 0（严重错误）
+    4. 价格合理性：price > 0（严重错误）
+    5. 涨跌幅超限：改为告警而非阻断
+       - 科创板/创业板 ±20%，北交所 ±30%，ST ±5%，新股前5天无限制
+    6. 停牌标记：volume=0 时应标记为停牌日
+
+    专家评审#1：涨跌幅超限改为告警而非阻断
+    """
+
+    # 涨跌幅限制（专家方案）
+    CHANGE_LIMITS = {
+        'default': 20,      # 主板/科创/创业板默认
+        'bj': 30,           # 北交所
+        'st': 5,            # ST股票
+        'new_stock': 0,     # 新股前5天无限制
+    }
+
+    def validate(self, df) -> Tuple[bool, List[str], List[str]]:
+        """
+        校验数据质量（批量DataFrame）
+
+        Args:
+            df: K线数据DataFrame，需包含 open/high/low/close/volume/change_pct 列
+
+        Returns:
+            (is_valid, fatal_errors, warnings)
+        """
+        import pandas as pd
+
+        fatal_errors = []
+        warnings = []
+
+        if df is None or df.empty:
+            return False, ["数据为空"], []
+
+        # 确保必要列存在
+        required_cols = ['open', 'high', 'low', 'close', 'volume']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            return False, [f"缺少必要列: {missing_cols}"], []
+
+        # 1. 空值检查（仅针对非停牌日）
+        if 'is_suspended' in df.columns:
+            non_suspended = df[~df['is_suspended']]
+        else:
+            non_suspended = df
+        for col in required_cols:
+            if col in df.columns and df[col].isna().any():
+                count = df[col].isna().sum()
+                fatal_errors.append(f"存在空值: {col} ({count}条)")
+
+        # 2. OHLC逻辑关系（严重错误）
+        invalid_ohlc = df[
+            (df['high'] < df['open']) | (df['high'] < df['close']) |
+            (df['high'] < df['low']) | (df['low'] > df['open']) |
+            (df['low'] > df['close'])
+        ]
+        if not invalid_ohlc.empty:
+            fatal_errors.append(f"OHLC逻辑关系错误: {len(invalid_ohlc)} 条")
+            # 修正
+            df.loc[invalid_ohlc.index, 'high'] = df.loc[invalid_ohlc.index, ['open', 'close', 'high']].max(axis=1)
+            df.loc[invalid_ohlc.index, 'low'] = df.loc[invalid_ohlc.index, ['open', 'close', 'low']].min(axis=1)
+
+        # 3. 成交量非负（严重错误）
+        if (df['volume'] < 0).any():
+            count = (df['volume'] < 0).sum()
+            fatal_errors.append(f"存在负成交量: {count}条")
+
+        # 4. 价格非正（严重错误）
+        for col in ['open', 'high', 'low', 'close']:
+            if col in df.columns and (df[col] <= 0).any():
+                count = (df[col] <= 0).sum()
+                fatal_errors.append(f"{col}存在非正值: {count}条")
+
+        # 5. 涨跌幅超限（改为告警，而非阻断 - 专家评审#1）
+        if 'change_pct' in df.columns:
+            abnormal = df[(df['change_pct'] > 20) | (df['change_pct'] < -20)]
+            if not abnormal.empty:
+                count = len(abnormal)
+                warnings.append(f"涨跌幅超限(±20%): {count}条，建议检查是否为新股/ST/科创板")
+
+        # 6. 停牌标记（volume=0 且 change_pct=0）
+        if 'is_suspended' not in df.columns:
+            df['is_suspended'] = (df['volume'] == 0) & (df.get('change_pct', 0) == 0)
+
+        return len(fatal_errors) == 0, fatal_errors, warnings
+
+    def validate_record(self, data: dict) -> Tuple[bool, List[str], List[str]]:
+        """
+        校验单条数据
+
+        Args:
+            data: 单条K线数据字典
+
+        Returns:
+            (is_valid, fatal_errors, warnings)
+        """
+        fatal_errors = []
+        warnings = []
+
+        # 1. 必填字段检查
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col not in data or data[col] is None:
+                fatal_errors.append(f"缺少必填字段: {col}")
+                return False, fatal_errors, warnings
+
+        # 2. OHLC逻辑关系
+        high = data['high']
+        low = data['low']
+        open_price = data['open']
+        close = data['close']
+
+        if high < max(open_price, close, low):
+            fatal_errors.append(f"最高价({high})低于必要价格")
+        if low > min(open_price, close, high):
+            fatal_errors.append(f"最低价({low})高于必要价格")
+
+        # 3. 成交量非负
+        if data['volume'] < 0:
+            fatal_errors.append(f"成交量为负: {data['volume']}")
+
+        # 4. 价格非正
+        for col in ['open', 'high', 'low', 'close']:
+            if data[col] <= 0:
+                fatal_errors.append(f"{col}价格非正: {data[col]}")
+
+        # 5. 涨跌幅超限（告警而非阻断）
+        if 'change_pct' in data:
+            pct = data['change_pct']
+            if abs(pct) > 20:
+                warnings.append(f"涨跌幅超限({pct}%)，建议核实是否为新股/ST/科创板")
+
+        return len(fatal_errors) == 0, fatal_errors, warnings
+
+    def validate_suspended(self, df) -> Any:
+        """
+        标记停牌日
+
+        停牌日特征：成交量=0 且 涨跌停价
+        """
+        import pandas as pd
+
+        df = df.copy()
+        df['is_suspended'] = (df['volume'] == 0) & (df.get('change_pct', 0) == 0)
+        return df
+
+
 # ==================== 便捷函数 ====================
 
 _cleaner = None

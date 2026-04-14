@@ -13,9 +13,26 @@
 import sqlite3
 import threading
 import json
+import ast
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from pathlib import Path
+
+
+def _tuple_to_str(tup: Tuple) -> str:
+    """将tuple转换为字符串，用于数据库存储"""
+    if tup is None:
+        return None
+    return '(' + ', '.join(str(float(x)) for x in tup) + ')'
+
+def _str_to_tuple(s: str) -> Tuple:
+    """将字符串转换回tuple"""
+    if s is None or s == '':
+        return None
+    try:
+        return ast.literal_eval(s)
+    except:
+        return None
 
 
 class PredictionStore:
@@ -141,8 +158,8 @@ class PredictionStore:
                     pred.get('predicted_gain_3d', 0),
                     pred.get('predicted_gain_5d', 0),
                     pred.get('confidence', 0),
-                    str(pred.get('confidence_interval_3d', ())) if pred.get('confidence_interval_3d') else None,
-                    str(pred.get('confidence_interval_5d', ())) if pred.get('confidence_interval_5d') else None,
+                    _tuple_to_str(pred.get('confidence_interval_3d')) if pred.get('confidence_interval_3d') else None,
+                    _tuple_to_str(pred.get('confidence_interval_5d')) if pred.get('confidence_interval_5d') else None,
                     features_json,
                     pred.get('model_version', 'rule_v19.8'),
                     date
@@ -218,9 +235,9 @@ class PredictionStore:
             if record.get('features'):
                 record['features'] = json.loads(record['features'])
             if record.get('confidence_interval_3d'):
-                record['confidence_interval_3d'] = eval(record['confidence_interval_3d'])
+                record['confidence_interval_3d'] = _str_to_tuple(record['confidence_interval_3d'])
             if record.get('confidence_interval_5d'):
-                record['confidence_interval_5d'] = eval(record['confidence_interval_5d'])
+                record['confidence_interval_5d'] = _str_to_tuple(record['confidence_interval_5d'])
             result.append(record)
 
         conn.close()

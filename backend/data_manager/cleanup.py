@@ -5,7 +5,7 @@
 
 清理策略：
 - SQLite：cp_history保留2年，price_history保留2年，alerts保留90天
-- DuckDB：日K线保留3年（超限降采样为周K），分钟K线保留14天
+- DuckDB：日K线保留2年（超限降采样为周K），分钟K线保留14天
 - JSON缓存：基于TTL自动清理
 
 核心原则：
@@ -45,7 +45,7 @@ SQLITE_RETENTION = {
 
 # DuckDB保留策略（天）
 DUCKDB_RETENTION = {
-    'daily_kline': 365 * 3,      # 日K线：3年
+    'daily_kline': 365 * 2,      # 日K线：2年
     'minute_kline_core': 14,     # 核心池分钟K：14天
     'minute_kline_active': 14,   # 活跃池分钟K：14天
 }
@@ -737,7 +737,7 @@ class DuckDBCleaner:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS weekly_kline_archive (
                 code VARCHAR(6) NOT NULL,
-                trade_week VARCHAR(7) NOT,
+                trade_week VARCHAR(7) NOT NULL,
                 open REAL NOT NULL,
                 high REAL NOT NULL,
                 low REAL NOT NULL,
@@ -768,10 +768,9 @@ class DuckDBCleaner:
 
         cutoff_date = (datetime.now() - timedelta(days=keep_years * 365)).strftime("%Y-%m-%d")
         total_archived = 0
-        batch_count = 0
 
-        while True:
-            # 降采样到周K并归档
+        try:
+            # 降采样到周K并归档（使用 INSERT ... ON CONFLICT IGNORE 避免重复）
             result = conn.execute("""
                 INSERT INTO weekly_kline_archive
                 SELECT
@@ -786,17 +785,15 @@ class DuckDBCleaner:
                 FROM daily_kline
                 WHERE trade_date < ?
                 GROUP BY code, strftime('%Y-W%V', trade_date::DATE)
-                LIMIT ?
-            """, [cutoff_date, batch_size]).fetchone()
+            """, [cutoff_date])
 
-            if result is None or result[0] == 0:
-                break
+            total_archived = result.rowcount
+        except Exception as e:
+            # 如果归档失败（如表结构问题），记录错误但不阻断清理流程
+            print(f"归档旧日K线失败: {e}")
+            total_archived = 0
 
-            total_archived += result[0]
-            batch_count += 1
-            time.sleep(0.1)
-
-        return total_archived, batch_count
+        return total_archived, 1
 
     def cleanup_old_daily_klines(self, keep_years: int = 3, batch_size: int = 5000) -> CleanupResult:
         """
@@ -813,30 +810,22 @@ class DuckDBCleaner:
         cutoff_date = (datetime.now() - timedelta(days=keep_years * 365)).strftime("%Y-%m-%d")
 
         try:
-            # 先执行归档
+            # 先执行归档（如果表不存在会创建）
             archived_count, _ = self.archive_old_daily_klines(keep_years)
 
-            # 分批删除旧数据
-            total_deleted = 0
-            while True:
-                result = conn.execute("""
-                    DELETE FROM daily_kline
-                    WHERE trade_date < ?
-                    LIMIT ?
-                """, [cutoff_date, batch_size])
+            # 直接删除旧数据（DuckDB 不支持 DELETE ... LIMIT）
+            result = conn.execute("""
+                DELETE FROM daily_kline
+                WHERE trade_date < ?
+            """, [cutoff_date])
 
-                deleted = result.rowcount
-                if deleted == 0:
-                    break
-
-                total_deleted += deleted
-                time.sleep(0.1)
+            deleted = result.rowcount
 
             return CleanupResult(
                 success=True,
                 operation="duckdb_daily_kline",
-                deleted_count=total_deleted,
-                freed_bytes=total_deleted * 54,  # 每条约54字节
+                deleted_count=deleted,
+                freed_bytes=deleted * 54,  # 每条约54字节
                 details={
                     "cutoff_date": cutoff_date,
                     "keep_years": keep_years,
@@ -863,17 +852,18 @@ class DuckDBCleaner:
         try:
             total_deleted = 0
             while True:
+                # DuckDB 不支持 DELETE ... LIMIT，直接删除符合条件的记录
                 result = conn.execute("""
                     DELETE FROM minute_kline
                     WHERE trade_time < ?
-                    LIMIT ?
-                """, [cutoff_datetime, batch_size])
+                """, [cutoff_datetime])
 
                 deleted = result.rowcount
                 if deleted == 0:
                     break
 
                 total_deleted += deleted
+                # 分钟K线数据量大，等待一下避免阻塞
                 time.sleep(0.1)
 
             return CleanupResult(

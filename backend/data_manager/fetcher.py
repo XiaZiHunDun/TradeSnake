@@ -661,8 +661,13 @@ class StockDataFetcher:
     def get_batch_market_data(self, limit: int = 300, prefer_top: bool = True, page: int = 0) -> List[Dict]:
         stock_df = self.stock_list_fetcher.get_stock_list()
 
+        # 主板股票筛选（排除科创板688、创业板300、北交所4/8）
+        # 注意：沪深300/中证500/中证1000本身不含这些板块，但成交额路径可能纳入
         main_stocks = stock_df[
-            stock_df['code'].str.startswith(('6', '0')) &
+            (
+                (stock_df['code'].str.startswith('6') & ~stock_df['code'].str.startswith('688')) |
+                (stock_df['code'].str.startswith('0') & ~stock_df['code'].str.startswith('30'))
+            ) &
             ~stock_df['name'].str.contains('ST', na=False)
         ]
 
@@ -820,17 +825,39 @@ def get_single_stock_data(code: str) -> Optional[Dict]:
     fin = financial_fetcher.get_financial_data(clean_code, use_cache=False)
 
     price = mkt.get('price', 0)
+    yesterday = mkt.get('yesterday', 0)
     dividend_per_share = fin.get('dividend_per_share', 0)
     dividend_yield = 0
     if price > 0 and dividend_per_share > 0:
         dividend_yield = round(dividend_per_share / price * 100, 2)
+
+    # 计算涨跌停状态
+    limit_ratio = 0.10  # 默认10%
+    if clean_code.startswith('688'):  # 科创板
+        limit_ratio = 0.20
+    elif clean_code.startswith('30'):  # 创业板
+        limit_ratio = 0.20
+
+    is_limit_up = False
+    is_limit_down = False
+    if yesterday > 0 and price > 0:
+        limit_up_price = yesterday * (1 + limit_ratio)
+        limit_down_price = yesterday * (1 - limit_ratio)
+        is_limit_up = price >= limit_up_price
+        is_limit_down = price <= limit_down_price
+
+    # 计算20日平均成交额
+    avg_daily_amount_20d = mkt.get('avg_daily_amount_20d', 0)
+    if avg_daily_amount_20d == 0:
+        # 尝试从DuckDB计算
+        avg_daily_amount_20d = _calculate_avg_daily_amount_20d(clean_code)
 
     return {
         'code': tencent_code,
         'name': mkt.get('name', ''),
         'price': price,
         'open': mkt.get('open', 0),
-        'yesterday': mkt.get('yesterday', 0),
+        'yesterday': yesterday,
         'high': mkt.get('high', 0),
         'low': mkt.get('low', 0),
         'volume': mkt.get('volume', 0),
@@ -852,7 +879,27 @@ def get_single_stock_data(code: str) -> Optional[Dict]:
         'interest_coverage': fin.get('interest_coverage', 0),
         'deducted_net_profit': fin.get('deducted_net_profit', 0),
         'sector': fetcher._get_sector(clean_code),  # 行业 v18.2
+        # 涨跌停状态 v18.5
+        'is_limit_up': is_limit_up,
+        'is_limit_down': is_limit_down,
+        # 20日平均成交额 v18.5
+        'avg_daily_amount_20d': avg_daily_amount_20d,
     }
+
+
+def _calculate_avg_daily_amount_20d(code: str) -> float:
+    """从DuckDB计算20日平均成交额"""
+    try:
+        from .duckdb_store import get_klines
+        result = get_klines(code, days=25)  # 多取几天以防休市
+        if result.success and not result.data.empty:
+            df = result.data
+            if len(df) >= 20:
+                amounts = df['amount'].head(20)
+                return float(amounts.mean())
+    except Exception:
+        pass
+    return 0
 
 
 # ==================== Tushare K线同步 ====================

@@ -78,14 +78,19 @@ class BlacklistFilter:
         code = stock.get("code", "")
         name = stock.get("name", "")
 
-        # 1. ST股票
-        if self._exclude_st and stock.get("is_st", False):
-            return f"ST/*ST/SST股票"
+        # 1. ST股票（双重检查：is_st字段 + 名称模式）
+        # is_st 字段可能未填充，名称检查作为兜底
+        if self._exclude_st:
+            is_st_flag = stock.get("is_st", False)
+            name_has_st = '*' in name or 'ST' in name or '退市' in name
+            if is_st_flag or name_has_st:
+                return f"ST/*ST/SST股票（is_st={is_st_flag}, name={name}）"
 
-        # 2. 次新股（上市不足60个交易日）
+        # 2. 次新股（板块差异化保护期）
         listing_days = stock.get("listing_days", 0)
-        if listing_days < self._new_stock_days:
-            return f"次新股（上市{listing_days}日<{self._new_stock_days}日门槛）"
+        min_days = self._get_min_listing_days(code)
+        if listing_days < min_days:
+            return f"次新股（上市{listing_days}日<{min_days}日门槛）"
 
         # 3. 僵尸股（连续成交额低迷）
         volume_below_days = stock.get("volume_below_threshold_days", 0)
@@ -98,6 +103,24 @@ class BlacklistFilter:
             return f"长期停牌（停牌{suspended_days}日>{self._suspended_days}日）"
 
         return ""  # 通过
+
+    def _get_min_listing_days(self, code: str) -> int:
+        """获取股票对应的次新股保护期（按板块）"""
+        # 如果配置是整数（旧格式兼容）
+        if isinstance(self._new_stock_days, int):
+            return self._new_stock_days
+
+        # 科创板（688开头）
+        if code.startswith("688"):
+            return self._new_stock_days.get("star", 120)
+        # 创业板（300开头）
+        if code.startswith("300"):
+            return self._new_stock_days.get("chinext", 120)
+        # 北交所（4或8开头）
+        if code.startswith("4") or code.startswith("8"):
+            return self._new_stock_days.get("bj", 180)
+        # 主板默认
+        return self._new_stock_days.get("main", 90)
 
     def check_single(self, stock: Dict) -> Tuple[bool, str]:
         """
