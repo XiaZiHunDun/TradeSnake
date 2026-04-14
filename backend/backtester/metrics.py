@@ -147,8 +147,9 @@ class Metrics:
         total_return = (final_value - initial_capital) / initial_capital * 100
 
         # 年化收益率
-        days_count = len(dates)
-        annual_return = ((1 + total_return / 100) ** (cls.TRADING_DAYS / days_count) - 1) * 100 if days_count > 0 else 0
+        # 注意：return_periods = len(dates) - 1，因为有N个日期就有N-1个收益率
+        return_periods = len(dates) - 1
+        annual_return = ((1 + total_return / 100) ** (cls.TRADING_DAYS / return_periods) - 1) * 100 if return_periods > 0 else 0
 
         # 基准收益
         benchmark_return = 0
@@ -227,9 +228,19 @@ class Metrics:
 
     @classmethod
     def _calculate_sharpe(cls, annual_return: float, volatility: float) -> float:
-        """计算夏普比率"""
+        """计算夏普比率
+
+        Args:
+            annual_return: 年化收益率（百分比形式，如 25.0 表示 25%）
+            volatility: 年化波动率（百分比形式，如 15.0 表示 15%）
+
+        Returns:
+            夏普比率
+        """
         if volatility == 0:
             return 0
+        # annual_return 和 volatility 都是百分比形式（如 25.0 表示 25%）
+        # 无风险利率也是百分比形式（如 3.0 表示 3%）
         return (annual_return - cls.RISK_FREE_RATE * 100) / volatility
 
     @staticmethod

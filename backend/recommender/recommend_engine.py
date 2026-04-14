@@ -4,15 +4,97 @@
 支持三大场景：换股、纯买入、纯卖出
 """
 
-from typing import List, Dict, Optional
-from backend.engine.cp_engine import CPEngine, StockCP, TradeDecision
-from backend.engine.risk_analyzer import RiskAnalyzer, KellyCalculator
+from typing import List, Dict, Optional, Set
+from backend.engine import CPEngine, StockCP, TradeDecision
 
 from .filters import StockFilter
 from .swap_calculator import SwapCalculator
 from .buy_analyzer import BuyAnalyzer
 from .sell_analyzer import SellAnalyzer
+from .fusion import PredictionFusion, FusionResult
 from .prompts import generate_stock_prompt
+
+
+class RecommenderCallback:
+    """接收 stock_selector 的池状态变化通知 v18.5
+
+    用于 RecommenderEngine 与 StockSelector 的联动：
+    - 池变化时更新推荐候选池
+    - 股票晋级到核心池时优先推荐
+    - 财务预警时从推荐移除，加入监控
+    """
+
+    def __init__(self, engine: 'RecommendEngine'):
+        self._engine = engine
+        # 推荐候选池
+        self.candidate_pool: List[str] = []
+        # 优先候选集
+        self.priority_candidates: Set[str] = set()
+        # 监控列表 {code: [warnings]}
+        self.watchlist: Dict[str, List[str]] = {}
+
+    def on_pool_changed(self, tier: 'PoolTier', added: List[str], removed: List[str]) -> None:
+        """池变化时更新推荐候选池
+
+        Args:
+            tier: 池层级
+            added: 新加入的股票代码列表
+            removed: 移除的股票代码列表
+        """
+        from backend.stock_selector.enums import PoolTier
+
+        # 只处理核心池和活跃池
+        if tier not in [PoolTier.CORE, PoolTier.ACTIVE]:
+            return
+
+        # 新纳入的加入推荐候选池
+        for code in added:
+            if code not in self.candidate_pool:
+                self.candidate_pool.append(code)
+
+        # 移除的从推荐候选池移除
+        self.candidate_pool = [c for c in self.candidate_pool if c not in removed]
+
+        # 从优先候选集中移除
+        for code in removed:
+            self.priority_candidates.discard(code)
+
+    def on_stock_upgraded_to_core(self, code: str) -> None:
+        """股票晋级到核心池 → 优先推荐
+
+        Args:
+            code: 股票代码
+        """
+        self.priority_candidates.add(code)
+        # 如果不在候选池中，添加进去
+        if code not in self.candidate_pool:
+            self.candidate_pool.append(code)
+
+    def on_financial_warning(self, code: str, warnings: List[str]) -> None:
+        """财务预警时 → 从推荐移除，加入监控
+
+        Args:
+            code: 股票代码
+            warnings: 预警信息列表
+        """
+        # 从候选池移除
+        self.candidate_pool = [c for c in self.candidate_pool if c != code]
+        # 从优先候选集移除
+        self.priority_candidates.discard(code)
+        # 加入监控列表
+        self.watchlist[code] = warnings
+
+    def get_candidate_pool(self) -> List[str]:
+        """获取当前候选池"""
+        return self.candidate_pool.copy()
+
+    def get_priority_candidates(self) -> Set[str]:
+        """获取优先候选集"""
+        return self.priority_candidates.copy()
+
+    def get_watchlist(self) -> Dict[str, List[str]]:
+        """获取监控列表"""
+        return self.watchlist.copy()
 
 
 class RecommendEngine:
@@ -123,7 +205,8 @@ class RecommendEngine:
         stocks: List[StockCP],
         principal: float,
         risk_preference: str = 'balanced',
-        limit: int = 10
+        limit: int = 10,
+        use_fusion: bool = True
     ) -> List[Dict]:
         """获取买入信号列表（空仓/轻仓入场）
 
@@ -132,16 +215,93 @@ class RecommendEngine:
             principal: 本金
             risk_preference: 风险偏好 (conservative/balanced/aggressive)
             limit: 返回数量
+            use_fusion: 是否使用预测融合（v19.8）
 
         Returns:
             买入信号列表
         """
-        return BuyAnalyzer.get_buy_signals(
+        if not use_fusion:
+            return BuyAnalyzer.get_buy_signals(
+                stocks=stocks,
+                principal=principal,
+                risk_preference=risk_preference,
+                limit=limit
+            )
+
+        # v19.8: 使用预测融合
+        return self._get_buy_signals_with_fusion(
             stocks=stocks,
             principal=principal,
             risk_preference=risk_preference,
             limit=limit
         )
+
+    def _get_buy_signals_with_fusion(
+        self,
+        stocks: List[StockCP],
+        principal: float,
+        risk_preference: str = 'balanced',
+        limit: int = 10
+    ) -> List[Dict]:
+        """获取买入信号列表（使用预测融合） v19.8
+
+        Args:
+            stocks: 候选股票列表
+            principal: 本金
+            risk_preference: 风险偏好
+            limit: 返回数量
+
+        Returns:
+            融合后的买入信号列表
+        """
+        # 1. 获取最新预测数据
+        codes = [s.code for s in stocks]
+        gain_preds, prob_preds = PredictionFusion.get_latest_predictions(codes)
+
+        # 2. 批量融合
+        fusion_results = PredictionFusion.fuse_batch(
+            stocks=stocks,
+            gain_predictions=gain_preds,
+            prob_predictions=prob_preds,
+            risk_preference=risk_preference
+        )
+
+        # 3. 取Top N进行买入分析
+        top_stocks = [s for s in stocks if s.code in {r.code for r in fusion_results[:limit * 2]}]
+
+        signals = []
+        for stock in top_stocks:
+            # 获取该股票的融合结果
+            fusion_result = next((r for r in fusion_results if r.code == stock.code), None)
+
+            signal = BuyAnalyzer.analyze_buy_opportunity(stock, principal)
+
+            # 添加预测融合字段
+            if fusion_result:
+                signal.predicted_gain_5d = fusion_result.predicted_gain_5d
+                signal.up_probability_5d = fusion_result.up_probability_5d
+                signal.prediction_confidence = fusion_result.confidence
+                signal.fused_score = fusion_result.fused_score
+
+            # 根据风险偏好过滤
+            if risk_preference == 'conservative' and signal.risk_level == 'risk':
+                continue
+            elif risk_preference == 'balanced' and signal.risk_level in ('risk', 'warning'):
+                pass
+
+            signals.append(BuyAnalyzer._to_dict(signal))
+
+        # 4. 如果有融合结果，按融合得分排序；否则按买入强度
+        if fusion_results:
+            # 建立code到信号的映射
+            signal_map = {s['code']: s for s in signals}
+            # 按融合排名重新排序
+            fusion_rank_map = {r.code: r.fused_rank for r in fusion_results}
+            signals.sort(key=lambda x: (fusion_rank_map.get(x['code'], 999), -x['buy_strength']))
+        else:
+            signals.sort(key=lambda x: x['buy_strength'], reverse=True)
+
+        return signals[:limit]
 
     def analyze_buy_opportunity(
         self,

@@ -3,8 +3,7 @@
 """
 
 from typing import List, Dict, Tuple
-from backend.engine.cp_engine import TradeDecision
-from backend.engine.constants import TRADE_COST
+from backend.engine import TradeDecision, TRADE_COST
 
 
 class SwapCalculator:

@@ -6,7 +6,7 @@
 
 from dataclasses import dataclass
 from typing import List, Dict, Optional
-from backend.engine.cp_engine import StockCP
+from backend.engine import StockCP
 
 
 @dataclass

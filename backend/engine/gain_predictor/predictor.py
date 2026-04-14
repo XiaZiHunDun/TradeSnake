@@ -264,7 +264,7 @@ class GainPredictor:
         Returns:
             保存的股票数量
         """
-        from data_manager.prediction_store import get_prediction_store
+        from backend.data_manager.prediction_store import get_prediction_store
 
         if date is None:
             from datetime import datetime
@@ -287,6 +287,148 @@ class GainPredictor:
 
         store = get_prediction_store()
         return store.record_gain_predictions(predictions, date)
+
+    def backtest_historical(
+        self,
+        codes: List[str],
+        start_date: str,
+        end_date: str,
+        save_to_store: bool = True
+    ) -> Dict:
+        """历史回测：基于历史K线数据验证预测准确性
+
+        Args:
+            codes: 股票代码列表
+            start_date: 回测开始日期 (YYYY-MM-DD)
+            end_date: 回测结束日期 (YYYY-MM-DD)
+            save_to_store: 是否保存到 prediction_store
+
+        Returns:
+            回测结果统计
+        """
+        from backend.data_manager.duckdb_store import get_duckdb_store
+        from datetime import datetime, timedelta
+
+        duckdb = get_duckdb_store()
+        results = []
+        errors = []
+
+        # 遍历每一天
+        current_date = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+
+        while current_date <= end:
+            date_str = current_date.strftime("%Y-%m-%d")
+            date_klines = {}
+
+            for code in codes:
+                try:
+                    # 获取该日期之前的历史K线（用于计算特征）
+                    klines = duckdb.get_klines(
+                        code,
+                        start_date=start_date,
+                        end_date=date_str,
+                        limit=60  # 至少60天数据
+                    )
+                    if klines and len(klines) >= 20:
+                        date_klines[code] = klines
+                except Exception as e:
+                    errors.append(f"{code}@{date_str}: {e}")
+
+            if date_klines:
+                # 执行预测
+                prediction_result = self.predict(date_klines)
+
+                # 计算实际涨幅（用预测后的N日实际涨幅）
+                for pred in prediction_result.predictions:
+                    actual_result = self._get_actual_gain(
+                        duckdb, pred.code, date_str, 5
+                    )
+                    if actual_result is not None:
+                        results.append({
+                            'date': date_str,
+                            'code': pred.code,
+                            'predicted_gain_5d': pred.predicted_gain_5d,
+                            'actual_gain_5d': actual_result,
+                            'error': pred.predicted_gain_5d - actual_result,
+                            'abs_error': abs(pred.predicted_gain_5d - actual_result),
+                        })
+
+                # 保存到 store
+                if save_to_store:
+                    self.save_to_store(prediction_result, date_str)
+
+            # 下一天
+            current_date += timedelta(days=1)
+
+        # 计算统计
+        if not results:
+            return {'error': 'No valid results', 'details': errors}
+
+        df_len = len(results)
+        mean_error = sum(r['error'] for r in results) / df_len
+        mean_abs_error = sum(r['abs_error'] for r in results) / df_len
+        accuracy_5pct = sum(1 for r in results if r['abs_error'] <= 5) / df_len * 100
+        accuracy_10pct = sum(1 for r in results if r['abs_error'] <= 10) / df_len * 100
+
+        # ===== 新增评估指标 =====
+
+        # 1. TopK准确率：预测涨幅前10%的股票，实际上涨的比例
+        sorted_by_pred = sorted(results, key=lambda x: x['predicted_gain_5d'], reverse=True)
+        top_k_count = max(1, int(df_len * 0.1))  # 前10%
+        top_k_actual_winners = sum(1 for r in sorted_by_pred[:top_k_count] if r['actual_gain_5d'] > 0)
+        top_k_accuracy = top_k_actual_winners / top_k_count * 100 if top_k_count > 0 else 0
+
+        # 2. 累计收益：假设每天按预测排序买入前10只，持有5天
+        daily_returns = []
+        for r in results:
+            if r['actual_gain_5d'] > 0:
+                daily_returns.append(r['actual_gain_5d'] / 100)  # 转为小数
+            else:
+                daily_returns.append(r['actual_gain_5d'] / 100)
+        cumulative_return = (1 + sum(daily_returns) / len(daily_returns)) ** len(daily_returns) - 1 if daily_returns else 0
+
+        # 3. 夏普比率：(平均收益 - 无风险利率) / 收益标准差
+        if daily_returns:
+            import statistics
+            mean_ret = statistics.mean(daily_returns)
+            std_ret = statistics.stdev(daily_returns) if len(daily_returns) > 1 else 0
+            risk_free_rate = 0.03 / 252  # 年化3%，日化
+            sharpe_ratio = (mean_ret - risk_free_rate) / std_ret * (252 ** 0.5) if std_ret > 0 else 0
+        else:
+            sharpe_ratio = 0
+
+        return {
+            'total_predictions': df_len,
+            'mean_error': round(mean_error, 2),
+            'mean_abs_error': round(mean_abs_error, 2),
+            'accuracy_within_5pct': round(accuracy_5pct, 1),
+            'accuracy_within_10pct': round(accuracy_10pct, 1),
+            # 新增指标
+            'top_k_accuracy': round(top_k_accuracy, 1),  # Top10%预测准确率
+            'cumulative_return': round(cumulative_return * 100, 2),  # 累计收益率%
+            'sharpe_ratio': round(sharpe_ratio, 2),  # 夏普比率
+            'errors': errors[:10]  # 最多10个错误
+        }
+
+    def _get_actual_gain(
+        self,
+        duckdb,
+        code: str,
+        date_str: str,
+        days: int
+    ) -> Optional[float]:
+        """获取指定日期后N日的实际涨幅"""
+        try:
+            klines = duckdb.get_klines(code, start_date=date_str, limit=days + 1)
+            if klines and len(klines) >= 2:
+                start_price = klines[0].get('close', 0)
+                end_price = klines[-1].get('close', 0)
+                if start_price > 0:
+                    return (end_price - start_price) / start_price * 100
+        except:
+            pass
+        return None
 
 
 # 全局实例

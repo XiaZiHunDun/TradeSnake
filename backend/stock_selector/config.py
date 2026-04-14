@@ -15,8 +15,13 @@ EXCLUDE_CONFIG = {
     # ST股票排除
     "exclude_st": True,
 
-    # 次新股排除：上市不足60个交易日
-    "new_stock_days": 60,
+    # 次新股排除：板块差异化保护期（v19.5.3专家建议）
+    "new_stock_days": {
+        "main": 90,       # 主板
+        "chinext": 120,   # 创业板（注册制）
+        "star": 120,      # 科创板
+        "bj": 180,        # 北交所
+    },
 
     # 僵尸股排除：连续20日成交额 < 500万
     "zombie_volume_threshold": 500,  # 万元
@@ -95,8 +100,8 @@ REBALANCE_CONFIG = {
     # 降级宽限期（天）
     "probation_days": 15,
 
-    # 升级宽限期（天）
-    "upgrade_probation_days": 3,
+    # 升级宽限期（天）- v19.5.3专家建议10日
+    "upgrade_probation_days": 10,
 }
 
 

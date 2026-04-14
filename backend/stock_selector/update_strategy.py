@@ -116,6 +116,18 @@ class UpdateStrategyProvider:
             codes = codes[:limit]
         return codes
 
+    def get_stock_tier(self, code: str) -> Optional[PoolTier]:
+        """
+        获取股票所在池
+
+        Args:
+            code: 股票代码
+
+        Returns:
+            股票池层级，如果不存在则返回 None
+        """
+        return self._pm.get_stock_tier(code)
+
     def get_update_plan(self, market_status: str = "trading") -> Dict[str, List[str]]:
         """
         获取完整的更新计划

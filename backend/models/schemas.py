@@ -155,6 +155,19 @@ class HealthResponse(BaseModel):
     stocks_count: int = 0
 
 
+class MarketStatsResponse(BaseModel):
+    """市场统计响应"""
+    total_stocks: int
+    avg_cp: float
+    high_cp_count: int
+    mid_cp_count: int
+    low_cp_count: int
+    avg_change: float
+    rising_stocks: int
+    falling_stocks: int
+    unchanged_stocks: int
+
+
 class TradeCostDetail(BaseModel):
     """交易成本明细"""
     principal: float

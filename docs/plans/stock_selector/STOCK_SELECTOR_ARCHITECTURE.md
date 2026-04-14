@@ -1,4 +1,4 @@
-# 股票筛选模块架构方案 v19.5.2
+# 股票筛选模块架构方案 v19.5.3
 
 > 本文档描述 `stock_selector/` 模块的设计方案
 
@@ -19,7 +19,7 @@
 | 池状态变化通知 | engine/recommender（刷新缓存） |
 >
 > **版本历史**：
-> - v19.5.3: 新增数据更新频率策略联动（双向数据流）
+> - v19.5.3: 新增数据更新频率策略联动（双向数据流）+ RecommenderCallback 集成
 > - v19.5.2: 专家评审完善：准入门槛递进、挤出机制、冲突处理、TTL清理、动态容量
 > - v19.5.1: 补充白名单/黑名单、财务预警、历史保留、指数同步兜底
 > - v19.5: 初始版本
@@ -988,7 +988,7 @@ MONITOR_METRICS = {
 backend/stock_selector/
 ├── __init__.py
 ├── config.py               # 含动态调整配置+更新频率策略
-├── selector.py             # 主筛选器 (Facade)
+├── stock_selector.py       # 主筛选器 (Facade)
 ├── pool_manager.py         # 股票池管理器（含挤出）
 ├── update_strategy.py      # ⚠️ 数据更新频率策略 🆕
 ├── filters/

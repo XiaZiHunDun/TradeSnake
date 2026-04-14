@@ -50,7 +50,7 @@ class RiskControl:
             return False, f"交易数量必须是{cls.MIN_TRADE_UNIT}的整数倍"
 
         # 2. 涨跌停检查
-        from data_manager.fetcher import get_single_stock_data
+        from backend.data_manager.fetcher import get_single_stock_data
         stock = get_single_stock_data(code)
         if stock:
             if action == 'buy' and stock.get('is_limit_up'):
@@ -174,7 +174,7 @@ class RiskControl:
     @classmethod
     def check_liquidity(cls, code: str, quantity: int, price: float) -> Tuple[bool, str]:
         """检查流动性是否充足（警告级别）"""
-        from data_manager.fetcher import get_single_stock_data
+        from backend.data_manager.fetcher import get_single_stock_data
 
         stock = get_single_stock_data(code)
         if not stock:

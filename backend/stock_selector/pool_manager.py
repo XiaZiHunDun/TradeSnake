@@ -111,11 +111,15 @@ class PoolManager:
             # 已在其他池，先移除
             self._remove_from_pool(code, current_tier)
 
-        # 检查池容量
+        # 检查池容量（容量满时执行挤出机制）
         if tier != PoolTier.TEMP:
             max_size = config.POOL_SIZE_CONFIG.get(tier.value, {}).get("max_size", float("inf"))
             if len(self._pools[tier]) >= max_size:
-                logger.warning(f"{tier.value} 池已满 ({max_size})，考虑挤出机制")
+                # 尝试挤出最差股票
+                evicted = self.evict_worst(tier, f"容量满，为 {code} 腾出位置")
+                if evicted is None:
+                    logger.warning(f"{tier.value} 池已满 ({max_size})，无法挤出更多股票")
+                    return False
 
         # 添加到池
         info.tier = tier

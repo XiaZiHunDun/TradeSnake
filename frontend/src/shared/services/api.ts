@@ -10,6 +10,14 @@ import type {
   BacktestParams,
   BacktestResult,
   WatchlistGroup,
+  // v19.8 Prediction Types
+  GainPrediction,
+  GainPredictionResponse,
+  ProbabilityPrediction,
+  ProbabilityPredictionResponse,
+  VerifyReport,
+  UserProfileResponse,
+  HealthResponse,
 } from '../types'
 
 export const queryClient = new QueryClient({
@@ -100,5 +108,39 @@ export const watchlistApi = {
 
 // 版本检查
 export const systemApi = {
-  health: (): Promise<{ version: string }> => request<{ version: string }>('/health'),
+  health: (): Promise<HealthResponse> => request<HealthResponse>('/health'),
+}
+
+// 预测分析 API (v19.8)
+export const predictionApi = {
+  getGainTop: (limit = 50): Promise<GainPredictionResponse> =>
+    request<GainPredictionResponse>(`/prediction/gain/top?limit=${limit}`),
+
+  getGainStock: (code: string): Promise<GainPrediction> =>
+    request<GainPrediction>(`/prediction/gain/${code}`),
+
+  getProbabilityTop: (limit = 50): Promise<ProbabilityPredictionResponse> =>
+    request<ProbabilityPredictionResponse>(`/prediction/probability/top?limit=${limit}`),
+
+  getProbabilityStock: (code: string): Promise<ProbabilityPrediction> =>
+    request<ProbabilityPrediction>(`/prediction/probability/${code}`),
+}
+
+// 验证报告 API (v19.8)
+export const verifyApi = {
+  getReport: (): Promise<VerifyReport> => request<VerifyReport>('/verify/report'),
+  getSwapEffectiveness: (): Promise<unknown> => request<unknown>('/verify/swap'),
+  getCPAccuracy: (): Promise<unknown> => request<unknown>('/verify/cp_accuracy'),
+  getGainAccuracy: (): Promise<unknown> => request<unknown>('/verify/gain_accuracy'),
+  getProbabilityAccuracy: (): Promise<unknown> => request<unknown>('/verify/probability_accuracy'),
+}
+
+// 用户配置 API
+export const userApi = {
+  getProfile: (): Promise<UserProfileResponse> => request<UserProfileResponse>('/user/profile'),
+  updateProfile: (profile: unknown): Promise<{ success: boolean }> =>
+    request<{ success: boolean }>('/user/profile', {
+      method: 'PUT',
+      body: JSON.stringify(profile),
+    }),
 }

@@ -924,7 +924,7 @@ class CPEngine:
             if not is_trading_time():
                 return 0.0  # 非交易时间返回0
 
-            from data_manager import get_minute_ma, get_minute_klines
+            from backend.data_manager import get_minute_ma, get_minute_klines
 
             # 获取分钟级均线
             ma5 = get_minute_ma(code, minutes=5, days=1)

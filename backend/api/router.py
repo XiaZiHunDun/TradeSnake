@@ -7,32 +7,37 @@ from typing import List, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from datetime import datetime
 
-from models.schemas import (
+from backend.models.schemas import (
     CPListResponse, SingleStockResponse, StockCPData,
     SwapSuggestion, RecommendResponse, CPExplanationResponse,
     AccountResponse, HoldingDetail, PortfolioResponse,
     TradeRequest, TradeResponse, TradeHistoryResponse,
     UserProfile, UserProfileResponse, HealthResponse,
+    MarketStatsResponse,
     GainPredictionResponse, GainPredictionItem,
     ProbabilityPredictionResponse, ProbabilityPredictionItem,
 )
 
+# 线程池用于CPU密集型任务（如预测计算）
+from concurrent.futures import ThreadPoolExecutor
+_executor = ThreadPoolExecutor(max_workers=2)
+
 # 使用新的模块导入
 from backend.engine.cp_engine import CPEngine, StockCP, create_stock_from_raw, CashCP, TradeDecision
-from backend.engine.history import (
+from backend.engine.cp_engine.history import (
     save_history, get_cp_changes, get_stock_history,
     get_historical_rankings, get_ranking_changes,
     get_momentum_3d, get_momentum_5d
 )
-from backend.engine.risk_analyzer import RiskAnalyzer
+from backend.engine.cp_engine.risk_analyzer import RiskAnalyzer
 from backend.simulator.database import get_db
 from backend.simulator.account import Account
 from backend.simulator.portfolio import Portfolio
 from backend.simulator.trader import Trader
 from backend.recommender.recommend_engine import RecommendEngine
-from backtester.backtest import BacktestEngine
-from data_manager.fetcher import get_stock_data_api, get_single_stock_data
-from data_manager.cache import get_cache_manager
+from backend.backtester.backtest import BacktestEngine
+from backend.data_manager.fetcher import get_stock_data_api, get_single_stock_data
+from backend.data_manager.cache import get_cache_manager
 
 router = APIRouter()
 
@@ -99,6 +104,53 @@ async def get_cp_top(limit: int = Query(50, ge=1, le=200)):
         data=[_build_stock_response(s) for s in stocks],
         total=len(cp_engine.stocks),
         updated_at=last_update_time or datetime.now().isoformat()
+    )
+
+
+@router.get("/api/cp/bottom", response_model=CPListResponse)
+async def get_cp_bottom(limit: int = Query(10, ge=1, le=50)):
+    """获取避雷榜（战力最弱）BOTTOM N"""
+    global last_update_time
+    if not cp_engine.stocks:
+        return CPListResponse(data=[], total=0, updated_at="")
+    stocks = cp_engine.get_bottom(limit)
+    return CPListResponse(
+        data=[_build_stock_response(s) for s in stocks],
+        total=len(cp_engine.stocks),
+        updated_at=last_update_time or datetime.now().isoformat()
+    )
+
+
+@router.get("/api/stats/market", response_model=MarketStatsResponse)
+async def get_market_stats():
+    """获取市场统计信息"""
+    if not cp_engine.stocks:
+        return MarketStatsResponse(
+            total_stocks=0, avg_cp=0, high_cp_count=0, mid_cp_count=0,
+            low_cp_count=0, avg_change=0, rising_stocks=0, falling_stocks=0,
+            unchanged_stocks=0
+        )
+    stocks = cp_engine.stocks  # list of StockCP
+    total = len(stocks)
+    avg_cp = sum(s.total_cp for s in stocks) / total
+    high_cp = sum(1 for s in stocks if s.total_cp >= 70)
+    mid_cp = sum(1 for s in stocks if 40 <= s.total_cp < 70)
+    low_cp = sum(1 for s in stocks if s.total_cp < 40)
+    changes = [s.change_pct for s in stocks if hasattr(s, 'change_pct') and s.change_pct != 0]
+    avg_change = sum(changes) / len(changes) if changes else 0
+    rising = sum(1 for s in stocks if hasattr(s, 'change_pct') and s.change_pct > 0)
+    falling = sum(1 for s in stocks if hasattr(s, 'change_pct') and s.change_pct < 0)
+    unchanged = total - rising - falling
+    return MarketStatsResponse(
+        total_stocks=total,
+        avg_cp=round(avg_cp, 1),
+        high_cp_count=high_cp,
+        mid_cp_count=mid_cp,
+        low_cp_count=low_cp,
+        avg_change=round(avg_change, 2),
+        rising_stocks=rising,
+        falling_stocks=falling,
+        unchanged_stocks=unchanged,
     )
 
 
@@ -228,47 +280,93 @@ async def get_historical_rankings_endpoint(days: int = Query(30, ge=1, le=90), l
 
 @router.get("/api/account", response_model=AccountResponse)
 async def get_account():
-    """获取账户信息"""
-    return AccountResponse(**_account.get_summary())
+    """获取账户信息（使用本地SQLite价格，快速响应）"""
+    from backend.simulator.database import get_db
+
+    db = get_db()
+    acct = db.get_account()
+    cash = acct.get('cash', 0)
+
+    # 使用SQLite stocks表的价格计算市值（避免网络请求）
+    holdings = db.get_holdings()
+    total_market_value = 0.0
+    for h in holdings:
+        code = h.get('code', '')
+        qty = h.get('total_quantity', 0)
+        # holdings用sh/sz前缀，stocks表不用
+        lookup_code = code.replace('sh', '').replace('sz', '')
+        stock = db.get_stock(lookup_code)
+        if stock and stock.get('price', 0) > 0:
+            total_market_value += stock.get('price', 0) * qty
+
+    total_assets = cash + total_market_value
+    initial_cash = acct.get('initial_cash', 20000)
+    total_profit = total_assets - initial_cash
+    profit_rate = (total_profit / initial_cash * 100) if initial_cash > 0 else 0
+
+    return AccountResponse(
+        cash=round(cash, 2),
+        initial_cash=round(initial_cash, 2),
+        total_market_value=round(total_market_value, 2),
+        total_assets=round(total_assets, 2),
+        total_profit=round(total_profit, 2),
+        profit_rate=round(profit_rate, 2)
+    )
 
 
 @router.get("/api/portfolio", response_model=PortfolioResponse)
 async def get_portfolio():
-    """获取持仓明细"""
-    holdings = _portfolio.get_holdings()
+    """获取持仓明细（使用本地SQLite价格，快速响应）"""
+    from backend.simulator.database import get_db
+
+    db = get_db()
+    holdings = db.get_holdings()
     holding_details = []
     total_market_value = 0.0
     total_profit = 0.0
 
     for h in holdings:
-        position = _trader.get_position(h.get('code'))
-        if position:
-            # 映射字段名以匹配 HoldingDetail schema
-            mapped = {
-                'code': position.get('code', ''),
-                'name': position.get('name', ''),
-                'quantity': position.get('quantity', 0),
-                'cost_price': position.get('avg_cost_price', 0),
-                'current_price': position.get('current_price', 0),
-                'market_value': position.get('value_total', 0),
-                'profit': position.get('profit', 0),
-                'profit_rate': position.get('profit_rate', 0),
-                'bought_at': position.get('latest_bought_at', ''),
-                'can_sell': position.get('quantity', 0),  # 简化处理
-                'on_cooldown': False,
-                'cooldown_days_remaining': 0,
-            }
-            detail = HoldingDetail(**mapped)
-            holding_details.append(detail)
-            total_market_value += detail.market_value
-            total_profit += detail.profit
+        code = h.get('code', '')
+        name = h.get('name', '')
+        qty = h.get('total_quantity', 0)
+        cost_price = h.get('avg_cost_price', 0)
+
+        # 使用SQLite stocks表的价格（避免网络请求）
+        lookup_code = code.replace('sh', '').replace('sz', '')
+        stock = db.get_stock(lookup_code)
+        current_price = stock.get('price', 0) if stock else 0
+
+        market_value = current_price * qty
+        cost_total = cost_price * qty
+        profit = market_value - cost_total
+        profit_rate = (profit / cost_total * 100) if cost_total > 0 else 0
+
+        detail = HoldingDetail(
+            code=code,
+            name=name,
+            quantity=qty,
+            cost_price=round(cost_price, 2),
+            current_price=round(current_price, 2),
+            market_value=round(market_value, 2),
+            profit=round(profit, 2),
+            profit_rate=round(profit_rate, 2),
+            bought_at=h.get('latest_bought_at', ''),
+            can_sell=qty,
+            on_cooldown=False,
+            cooldown_days_remaining=0,
+        )
+        holding_details.append(detail)
+        total_market_value += market_value
+        total_profit += profit
+
+    cash = db.get_account().get('cash', 0)
 
     return PortfolioResponse(
         holdings=holding_details,
-        total_market_value=total_market_value,
-        total_profit=total_profit,
-        cash=_account.cash,
-        total_assets=_account.cash + total_market_value
+        total_market_value=round(total_market_value, 2),
+        total_profit=round(total_profit, 2),
+        cash=round(cash, 2),
+        total_assets=round(cash + total_market_value, 2)
     )
 
 
@@ -337,7 +435,7 @@ async def get_trades(limit: int = Query(50, ge=1, le=200)):
 async def get_user_profile():
     """获取用户配置"""
     profile = _db.get_user_profile()
-    return UserProfileResponse(**profile)
+    return UserProfileResponse(profile=profile)
 
 
 @router.put("/api/user/profile")
@@ -497,7 +595,7 @@ async def record_holding_snapshot(date: str = Query(None, description="快照日
     用于回测验证，记录持仓的收盘市值和盈亏
     """
     try:
-        from backtester.verification import BacktestVerifier
+        from backend.backtester.verification import BacktestVerifier
 
         if date is None:
             date = datetime.now().strftime("%Y-%m-%d")
@@ -531,7 +629,7 @@ async def get_verification_report(days: int = Query(30, ge=7, le=365, descriptio
     - 战力预测准确性（高战力组是否跑赢市场）
     """
     try:
-        from backtester.verification import BacktestVerifier
+        from backend.backtester.verification import BacktestVerifier
 
         verifier = BacktestVerifier(_db)
         report = verifier.get_verification_report(days=days)
@@ -552,7 +650,7 @@ async def verify_swap_effectiveness(
     分析所有卖出交易，计算持有到现在是否盈利
     """
     try:
-        from backtester.verification import BacktestVerifier
+        from backend.backtester.verification import BacktestVerifier
 
         verifier = BacktestVerifier(_db)
         verifications = verifier.verify_swap_effectiveness(
@@ -595,7 +693,7 @@ async def verify_cp_prediction_accuracy(
     比较战力高的股票组和战力低的股票组在未来N天的表现差异
     """
     try:
-        from backtester.verification import BacktestVerifier
+        from backend.backtester.verification import BacktestVerifier
 
         verifier = BacktestVerifier(_db)
         result = verifier.verify_cp_prediction_accuracy(
@@ -629,26 +727,27 @@ async def get_gain_predictions_top(
     基于技术指标规则模型预测股票未来N日涨幅
     """
     try:
-        from engine.gain_predictor import GainPredictor
-        from data_manager.duckdb_store import get_klines
+        def _run_prediction():
+            from backend.engine.gain_predictor import GainPredictor
+            from backend.data_manager.duckdb_store import get_klines_bulk
+            from backend.data_manager import get_stock_list
 
-        # 获取股票列表
-        from data_manager import get_stock_list
-        stock_list = get_stock_list()
+            stock_list = get_stock_list()
+            codes = [s.get('code') for s in stock_list if s.get('code')]
 
-        # 构建klines数据
-        klines_dict = {}
-        for stock in stock_list:
-            code = stock.get('code')
-            if not code:
-                continue
-            klines = get_klines(code, days=60)
-            if klines:
-                klines_dict[code] = klines
+            # 单次连接批量拉取所有股票K线，避免 5000+ 次连接开销
+            bulk = get_klines_bulk(codes, days=60)
 
-        # 执行预测
-        predictor = GainPredictor()
-        result = predictor.predict(klines_dict)
+            klines_dict = {}
+            for code, df in bulk.items():
+                if not df.empty:
+                    records = df.to_dict('records')
+                    klines_dict[code] = list(reversed(records))
+
+            predictor = GainPredictor()
+            return predictor.predict(klines_dict)
+
+        result = await asyncio.get_event_loop().run_in_executor(None, _run_prediction)
 
         # 取TOP N
         top_predictions = result.predictions[:limit]
@@ -687,26 +786,27 @@ async def get_probability_predictions_top(
     基于技术指标规则模型预测股票未来N日上涨概率
     """
     try:
-        from engine.probability_predictor import ProbabilityPredictor
-        from data_manager.duckdb_store import get_klines
+        def _run_prediction():
+            from backend.engine.probability_predictor import ProbabilityPredictor
+            from backend.data_manager.duckdb_store import get_klines_bulk
+            from backend.data_manager import get_stock_list
 
-        # 获取股票列表
-        from data_manager import get_stock_list
-        stock_list = get_stock_list()
+            stock_list = get_stock_list()
+            codes = [s.get('code') for s in stock_list if s.get('code')]
 
-        # 构建klines数据
-        klines_dict = {}
-        for stock in stock_list:
-            code = stock.get('code')
-            if not code:
-                continue
-            klines = get_klines(code, days=60)
-            if klines:
-                klines_dict[code] = klines
+            # 单次连接批量拉取所有股票K线，避免 5000+ 次连接开销
+            bulk = get_klines_bulk(codes, days=60)
 
-        # 执行预测
-        predictor = ProbabilityPredictor()
-        result = predictor.predict(klines_dict)
+            klines_dict = {}
+            for code, df in bulk.items():
+                if not df.empty:
+                    records = df.to_dict('records')
+                    klines_dict[code] = list(reversed(records))
+
+            predictor = ProbabilityPredictor()
+            return predictor.predict(klines_dict)
+
+        result = await asyncio.get_event_loop().run_in_executor(None, _run_prediction)
 
         # 取TOP N
         top_predictions = result.predictions[:limit]
@@ -737,13 +837,15 @@ async def get_probability_predictions_top(
 async def get_gain_prediction(code: str):
     """获取单只股票的涨幅预测"""
     try:
-        from engine.gain_predictor import GainPredictor
-        from data_manager.duckdb_store import get_klines
+        from backend.engine.gain_predictor import GainPredictor
+        from backend.data_manager.duckdb_store import get_klines
 
-        klines = get_klines(code, days=60)
-        if not klines:
+        klines_result = get_klines(code, days=60)
+        if not klines_result.success or klines_result.data.empty:
             raise HTTPException(status_code=404, detail=f"未找到股票 {code} 的数据")
 
+        # DuckDB返回按日期降序，需要反转成升序以匹配predictor期望
+        klines = list(reversed(klines_result.data.to_dict('records')))
         predictor = GainPredictor()
         result = predictor.predict({code: klines})
 
@@ -773,13 +875,15 @@ async def get_gain_prediction(code: str):
 async def get_probability_prediction(code: str):
     """获取单只股票的上涨概率预测"""
     try:
-        from engine.probability_predictor import ProbabilityPredictor
-        from data_manager.duckdb_store import get_klines
+        from backend.engine.probability_predictor import ProbabilityPredictor
+        from backend.data_manager.duckdb_store import get_klines
 
-        klines = get_klines(code, days=60)
-        if not klines:
+        klines_result = get_klines(code, days=60)
+        if not klines_result.success or klines_result.data.empty:
             raise HTTPException(status_code=404, detail=f"未找到股票 {code} 的数据")
 
+        # DuckDB返回按日期降序，需要反转成升序以匹配predictor期望
+        klines = list(reversed(klines_result.data.to_dict('records')))
         predictor = ProbabilityPredictor()
         result = predictor.predict({code: klines})
 
@@ -817,7 +921,7 @@ async def verify_gain_prediction_accuracy(
     比较预测涨幅最高的股票组和实际涨幅表现
     """
     try:
-        from backtester.verification import verify_gain_prediction_accuracy
+        from backend.backtester.verification import verify_gain_prediction_accuracy
 
         result = verify_gain_prediction_accuracy(
             db=_db,
@@ -851,7 +955,7 @@ async def verify_probability_prediction_accuracy(
     比较高概率组和低概率组的实际涨跌比例
     """
     try:
-        from backtester.verification import verify_probability_prediction_accuracy
+        from backend.backtester.verification import verify_probability_prediction_accuracy
 
         result = verify_probability_prediction_accuracy(
             db=_db,

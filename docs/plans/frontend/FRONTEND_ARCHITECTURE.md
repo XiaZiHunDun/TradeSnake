@@ -1,10 +1,12 @@
-# 前端模块方案 v2.2
+# 前端模块方案 v2.2.1
 
 ## 概述
 
 前端模块是 TradeSnake 系统的用户界面层，负责数据展示、用户交互和操作执行。
 
-**版本**: v2.2 | **状态**: 待实现 | **基于**: 专家设计方案 1-5 号文档
+**版本**: v2.2.1 | **状态**: 部分实现 | **基于**: 专家设计方案 1-5 号文档
+
+> **v19.8 更新**: 2026-04-09 完成预测分析模块API集成（涨幅预测、上涨概率、验证报告）
 
 ---
 
@@ -698,32 +700,61 @@ export { useUIStore } from './uiStore'
 
 ## 八、API端点对应
 
-| 前端功能 | API端点 | 方法 |
-|---------|---------|------|
-| 战力榜 | `/api/cp/top` | GET |
-| 单股详情 | `/api/cp/stock/{code}` | GET |
-| 战力解读 | `/api/cp/explain/{code}` | GET |
-| 推荐股票 | `/api/cp/recommend` | GET |
-| 换股建议 | `/api/cp/swap` | GET |
-| 账户信息 | `/api/account` | GET |
-| 持仓明细 | `/api/portfolio` | GET |
-| 买入 | `/api/trade/buy` | POST |
-| 卖出 | `/api/trade/sell` | POST |
-| 交易历史 | `/api/trades` | GET |
-| 回测-简单 | `/api/backtest/simple` | GET |
-| 回测-对比 | `/api/backtest/compare` | GET |
-| 回测-基准 | `/api/backtest/benchmark` | GET |
-| 验证-综合报告 | `/api/verify/report` | GET |
-| 验证-换股效果 | `/api/verify/swap` | GET |
-| 验证-战力预测 | `/api/verify/cp_accuracy` | GET |
-| 风险报告 | `/api/risk/report` | GET |
-| 解套计算 | `/api/risk/break-even/{code}` | GET |
-| 战力历史 | `/api/history/{code}` | GET |
-| 战力变化 | `/api/history/changes` | GET |
-| 历史榜单 | `/api/history/rankings` | GET |
-| 健康检查 | `/api/health` | GET |
-| 数据刷新 | `/api/refresh` | POST |
-| 快照记录 | `/api/snapshot/record` | POST |
+### 8.1 核心API（战力、推荐、交易）
+
+| 前端功能 | API端点 | 方法 | 状态 |
+|---------|---------|------|------|
+| 战力榜 | `/api/cp/top` | GET | ✅ |
+| 单股详情 | `/api/cp/stock/{code}` | GET | ✅ |
+| 战力解读 | `/api/cp/explain/{code}` | GET | ✅ |
+| 推荐股票 | `/api/cp/recommend` | GET | ✅ |
+| 换股建议 | `/api/cp/swap` | GET | ✅ |
+| 账户信息 | `/api/account` | GET | ✅ |
+| 持仓明细 | `/api/portfolio` | GET | ✅ |
+| 买入 | `/api/trade/buy` | POST | ✅ |
+| 卖出 | `/api/trade/sell` | POST | ✅ |
+| 交易历史 | `/api/trades` | GET | ✅ |
+| 用户配置 | `/api/user/profile` | GET/PUT | ✅ |
+
+### 8.2 预测分析API（v19.8 新增）
+
+| 前端功能 | API端点 | 方法 | 状态 |
+|---------|---------|------|------|
+| 涨幅预测TOP N | `/api/prediction/gain/top` | GET | ✅ 已集成 |
+| 单股涨幅预测 | `/api/prediction/gain/{code}` | GET | ✅ 已集成 |
+| 上涨概率TOP N | `/api/prediction/probability/top` | GET | ✅ 已集成 |
+| 单股上涨概率 | `/api/prediction/probability/{code}` | GET | ✅ 已集成 |
+
+### 8.3 验证报告API（v19.8 新增）
+
+| 前端功能 | API端点 | 方法 | 状态 |
+|---------|---------|------|------|
+| 综合验证报告 | `/api/verify/report` | GET | ✅ |
+| 涨幅预测验证 | `/api/verify/gain_accuracy` | GET | ✅ 已集成 |
+| 概率预测验证 | `/api/verify/probability_accuracy` | GET | ✅ 已集成 |
+| 换股效果验证 | `/api/verify/swap` | GET | ✅ |
+| 战力预测验证 | `/api/verify/cp_accuracy` | GET | ✅ |
+
+### 8.4 回测与风险API
+
+| 前端功能 | API端点 | 方法 | 状态 |
+|---------|---------|------|------|
+| 回测-简单 | `/api/backtest/simple` | GET | ✅ |
+| 回测-对比 | `/api/backtest/compare` | GET | ✅ |
+| 回测-基准 | `/api/backtest/benchmark` | GET | ✅ |
+| 风险报告 | `/api/risk/report` | GET | ✅ |
+| 解套计算 | `/api/risk/break-even/{code}` | GET | ✅ |
+
+### 8.5 历史与系统API
+
+| 前端功能 | API端点 | 方法 | 状态 |
+|---------|---------|------|------|
+| 战力历史 | `/api/history/{code}` | GET | ✅ |
+| 战力变化 | `/api/history/changes` | GET | ✅ |
+| 历史榜单 | `/api/history/rankings` | GET | ✅ |
+| 健康检查 | `/api/health` | GET | ✅ |
+| 数据刷新 | `/api/refresh` | POST | ✅ |
+| 快照记录 | `/api/snapshot/record` | POST | ✅ |
 
 ## 九、版本管理
 
@@ -812,6 +843,8 @@ module/
 
 | 版本 | 日期 | 更新 |
 |------|------|------|
+| v2.2.1 | 2026-04-09 | 集成 v19.8 预测分析模块API（涨幅预测、上涨概率、验证报告） |
+| v2.2 | 2026-04-08 | 补充预测模块文档框架，状态改为"部分实现" |
 | v2.1 | 2026-04-07 | 补充预警系统、画线工具、资金流向可视化、选股器、涨跌色方案、可访问性 |
 | v2.0 | 2026-04-07 | 全面升级：TypeScript、WebSocket、K线图、虚拟滚动、Zustand、组件层级体系 |
 | v1.0 | 2026-04-07 | 初始方案设计 |

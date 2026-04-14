@@ -259,3 +259,147 @@ export interface QuoteUpdate {
   volume: number
   timestamp: number
 }
+
+// ==================== 预测分析模块 (v19.8) ====================
+
+export interface GainPrediction {
+  code: string
+  name: string
+  predicted_gain_3d: number
+  predicted_gain_5d: number
+  confidence: number
+  confidence_interval_3d: [number, number]
+  confidence_interval_5d: [number, number]
+  features: Record<string, number>
+  model_version: string
+}
+
+export interface ProbabilityPrediction {
+  code: string
+  name: string
+  up_probability_3d: number
+  up_probability_5d: number
+  confidence: number
+  risk_level: 'low' | 'medium' | 'high'
+  features: Record<string, number>
+  model_version: string
+}
+
+export interface GainPredictionItem extends GainPrediction {
+  rank?: number
+}
+
+export interface ProbabilityPredictionItem extends ProbabilityPrediction {
+  rank?: number
+}
+
+export interface GainPredictionResponse {
+  predictions: GainPrediction[]
+  calculated_at: string
+  data_timestamp: string
+  stock_count: number
+  distribution: Record<string, number>
+  avg_confidence: number
+}
+
+export interface ProbabilityPredictionResponse {
+  predictions: ProbabilityPrediction[]
+  calculated_at: string
+  data_timestamp: string
+  stock_count: number
+}
+
+// ==================== 验证报告模块 (v19.8) ====================
+
+export interface SwapVerification {
+  total_swaps: number
+  profitable_count: number
+  avg_profit_pct: number
+  total_profit: number
+  win_rate: number
+}
+
+export interface CPPredictionAccuracy {
+  period: string
+  total_stocks: number
+  high_cp_group_avg_profit: number
+  low_cp_group_avg_profit: number
+  high_cp_beats_market_rate: number
+  high_cp_vs_market: number
+  low_cp_vs_market: number
+}
+
+export interface GainPredictionAccuracy {
+  period: string
+  total_stocks: number
+  avg_predicted_gain: number
+  avg_actual_gain: number
+  prediction_error: number
+  mean_absolute_error: number
+  accuracy_direction: number
+  top_predicted_avg: number
+}
+
+export interface ProbabilityPredictionAccuracy {
+  period: string
+  total_stocks: number
+  high_prob_avg_actual: number
+  low_prob_avg_actual: number
+  calibration_error: number
+  direction_accuracy: number
+  high_prob_accuracy: number
+  low_prob_accuracy: number
+}
+
+export interface VerifyReport {
+  report_date: string
+  swap_verification: SwapVerification
+  cp_prediction_accuracy: CPPredictionAccuracy
+  gain_prediction_accuracy?: GainPredictionAccuracy
+  probability_prediction_accuracy?: ProbabilityPredictionAccuracy
+  conclusion: string
+}
+
+// ==================== 用户配置 ====================
+
+export interface UserProfile {
+  capital: number
+  allowed_boards: string[]
+  risk_preference: string
+  consider_dividend: boolean
+  keep_cash_reserve: boolean
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface UserProfileResponse {
+  profile: UserProfile
+  affordable_stocks_count: number
+  filter_summary: string
+}
+
+// ==================== 健康检查 ====================
+
+export interface HealthResponse {
+  status: 'ok' | 'error'
+  timestamp: string
+  data_fresh: boolean
+  last_update: string
+  stocks_count: number
+}
+
+// ==================== 风险报告 ====================
+
+export interface RiskReport {
+  report_date: string
+  total_exposed: number
+  avg_risk_score: number
+  high_risk_count: number
+  positions_at_risk: Array<{
+    code: string
+    name: string
+    risk_score: number
+    potential_loss: number
+  }>
+  recommendations: string[]
+}

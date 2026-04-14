@@ -224,7 +224,7 @@ class FinancialWatcher:
             warnings.append(FinancialWarning(
                 code=code,
                 name=name,
-                level=FinancialWarningLevel.LIGH,
+                level=FinancialWarningLevel.LOW,
                 indicators={"gross_margin_change": gross_margin_change},
                 description=f"毛利率下降 {-gross_margin_change:.1f}%",
             ))

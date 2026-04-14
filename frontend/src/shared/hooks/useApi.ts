@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { cpApi, recommendApi, tradeApi, backtestApi, watchlistApi } from '../services/api'
+import { cpApi, recommendApi, tradeApi, backtestApi, watchlistApi, predictionApi, verifyApi, userApi, systemApi } from '../services/api'
 import type { BacktestParams, WatchlistGroup } from '../types'
 
 // 战力相关 Hooks
@@ -94,5 +94,96 @@ export function useSaveWatchlistGroups() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['watchlist', 'groups'] })
     },
+  })
+}
+
+// ==================== 预测分析 Hooks (v19.8) ====================
+
+export function useGainPredictionTop(limit = 50) {
+  return useQuery({
+    queryKey: ['prediction', 'gain', 'top', limit],
+    queryFn: () => predictionApi.getGainTop(limit),
+  })
+}
+
+export function useGainPredictionStock(code: string) {
+  return useQuery({
+    queryKey: ['prediction', 'gain', code],
+    queryFn: () => predictionApi.getGainStock(code),
+    enabled: !!code,
+  })
+}
+
+export function useProbabilityPredictionTop(limit = 50) {
+  return useQuery({
+    queryKey: ['prediction', 'probability', 'top', limit],
+    queryFn: () => predictionApi.getProbabilityTop(limit),
+  })
+}
+
+export function useProbabilityPredictionStock(code: string) {
+  return useQuery({
+    queryKey: ['prediction', 'probability', code],
+    queryFn: () => predictionApi.getProbabilityStock(code),
+    enabled: !!code,
+  })
+}
+
+// ==================== 验证报告 Hooks (v19.8) ====================
+
+export function useVerifyReport() {
+  return useQuery({
+    queryKey: ['verify', 'report'],
+    queryFn: () => verifyApi.getReport(),
+  })
+}
+
+export function useSwapEffectiveness() {
+  return useQuery({
+    queryKey: ['verify', 'swap'],
+    queryFn: () => verifyApi.getSwapEffectiveness(),
+  })
+}
+
+export function useGainAccuracy() {
+  return useQuery({
+    queryKey: ['verify', 'gain_accuracy'],
+    queryFn: () => verifyApi.getGainAccuracy(),
+  })
+}
+
+export function useProbabilityAccuracy() {
+  return useQuery({
+    queryKey: ['verify', 'probability_accuracy'],
+    queryFn: () => verifyApi.getProbabilityAccuracy(),
+  })
+}
+
+// ==================== 用户配置 Hooks ====================
+
+export function useUserProfile() {
+  return useQuery({
+    queryKey: ['user', 'profile'],
+    queryFn: () => userApi.getProfile(),
+  })
+}
+
+export function useUpdateUserProfile() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (profile: unknown) => userApi.updateProfile(profile),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['user', 'profile'] })
+    },
+  })
+}
+
+// ==================== 系统 Hooks ====================
+
+export function useHealth() {
+  return useQuery({
+    queryKey: ['system', 'health'],
+    queryFn: () => systemApi.health(),
+    refetchInterval: 60 * 1000, // 每分钟检查
   })
 }

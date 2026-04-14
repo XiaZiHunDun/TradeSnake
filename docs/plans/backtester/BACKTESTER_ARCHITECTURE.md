@@ -1,4 +1,6 @@
-# 回测验证模块方案 v19.7
+# 回测验证模块方案 v19.9
+
+> **v19.9更新**：明确回测器数据来源，price_history为历史遗留表，计划迁移到DuckDB
 
 ## 概述
 
@@ -9,7 +11,7 @@
 | **回测引擎** | `backtest.py` | 基于历史数据模拟交易，评估策略绩效 |
 | **策略验证** | `verification.py` | 基于simulator真实持仓验证换股效果、战力预测准确性 |
 
-**版本**: v19.7 | **状态**: ✅ 方案确定
+**版本**: v19.9 | **状态**: ✅ 方案确定
 
 ---
 
@@ -19,9 +21,19 @@
 | 来源 | 数据内容 |
 |------|----------|
 | data_manager | cp_history（历史战力数据，用于历史战力评分） |
+| data_manager | prediction_store（历史预测结果，用于验证预测准确性） |
 | data_manager | 历史行情数据（收盘价、成交量、涨跌幅） |
 | simulator | holding_snapshots（每日持仓快照，用于验证） |
 | simulator | trades（交易记录，用于换股效果验证） |
+
+**历史行情数据来源说明**：
+
+| 存储 | 表名 | 用途 | 状态 |
+|------|------|------|------|
+| DuckDB | `daily_kline` | **主要数据源** | ✅ 推荐使用 |
+| SQLite | `price_history` | 回测器当前使用 | ⚠️ **历史遗留表，计划迁移到DuckDB** |
+
+> 注意：`price_history` 是历史遗留表，回测器当前仍使用它。DuckDB `daily_kline` 已覆盖相同时间段，**计划迁移回测器到DuckDB**。
 
 ### 输出
 | 输出内容 | 使用者 |
@@ -29,7 +41,9 @@
 | BacktestResult（总收益率、夏普比率、最大回撤等） | 用户/前端展示 |
 | 换股验证报告（换股胜率、平均收益） | 用户/前端展示 |
 | CP预测准确性报告（高战力组跑赢市场概率） | 用户/前端展示 |
-| 回测报告存档 | backtester自管理（backtest_reports.db，1年/100条） |
+| 涨幅预测准确性报告（预测偏差、TopK准确率） | 用户/前端展示 |
+| 概率预测准确性报告（概率校准度） | 用户/前端展示 |
+| 回测报告存档 | 文件系统存储（data/backtest_reports.db，1年/100条） |
 
 ---
 
@@ -72,7 +86,9 @@
 backtester/
 ├── __init__.py           # 模块导出
 ├── backtest.py           # 回测引擎核心（基于历史数据的回测模拟）
-├── verification.py       # 策略验证（换股效果验证、战力预测准确性）🆕
+│                        # 包含 PositionManager (v19.8新增)
+├── verification.py       # 策略验证（换股效果验证、战力预测准确性）
+│                        # 包含 BacktestReportStore (v19.8新增)
 ├── strategies.py          # 策略定义
 ├── metrics.py           # 绩效指标计算
 └── reports.py           # 回测报告生成
@@ -326,6 +342,7 @@ def save_report(result: BacktestResult, path: str):
 |------|------|
 | `verify_swap_effectiveness()` | 验证换股效果：卖出后持有到现在是否盈利 |
 | `verify_cp_prediction_accuracy()` | 验证战力预测：高战力股票是否跑赢市场 |
+| `verify_prediction_accuracy()` | 验证涨幅/概率预测准确性（v19.8新增） |
 | `get_verification_report()` | 生成综合验证报告 |
 | `get_swap_summary()` | 获取换股验证汇总统计 |
 
@@ -338,21 +355,35 @@ holding_snapshots = db.get_holding_snapshots()  # 每日持仓快照
 # 从data_manager获取cp_history
 cp_store = get_cp_history_store()
 cp_history = cp_store.get_cp_history(code, days=30)  # 卖出时的战力
+
+# 从data_manager获取prediction_store（v19.8新增）
+prediction_store = get_prediction_store()
+predictions = prediction_store.get_predictions(code, days=30)  # 卖出时的预测
 ```
 
 **验证指标**:
-| 指标 | 说明 |
-|------|------|
-| 换股胜率 | 卖出后盈利的比例 |
-| 换股平均收益 | 卖出价 vs 当前价的变化 |
-| 高战力组跑赢概率 | 高战力股票跑赢市场的比例 |
+| 指标 | 说明 | 数据来源 |
+|------|------|----------|
+| 换股胜率 | 卖出后盈利的比例 | simulator/trades |
+| 换股平均收益 | 卖出价 vs 当前价的变化 | simulator/trades |
+| 高战力组跑赢概率 | 高战力股票跑赢市场的比例 | cp_history |
+| 涨幅预测偏差 | predicted_gain vs 实际涨幅 | prediction_store |
+| 概率预测校准度 | up_probability vs 实际上涨比例 | prediction_store |
 
 **输出到 backtest_reports.db**:
 ```python
-def save_verification_report(report: Dict) -> str:
-    """保存验证报告到SQLite（backtest_reports.db）"""
-    db_path = "data/backtest_reports.db"
-    # 超限自动删除最旧记录
+def save_verification_report(report: Dict, report_type: str = 'general') -> str:
+    """保存验证报告到SQLite（backtest_reports.db）
+
+    保留策略: 1年或100条，超限自动删除最旧记录
+    """
+    store = get_report_store()
+    return store.save_verification_report(report, report_type)
+
+def save_backtest_report(result: BacktestResult, content: str = None) -> str:
+    """保存回测报告到SQLite"""
+    store = get_report_store()
+    return store.save_backtest_report(result, content)
 ```
 
 ---
@@ -467,6 +498,7 @@ def rebalance(signal_date: str, current_positions: Dict[str, Position],
 
 ```python
 class Position:
+    """持仓"""
     code: str
     name: str
     quantity: int              # 持仓数量
@@ -475,17 +507,40 @@ class Position:
     holding_days: int         # 持仓天数（按交易日计算）
 
 class PositionManager:
-    def update(self, date: str, trades: List[Trade]):
+    """持仓管理器 v19.8
+
+    负责持仓的日常管理：
+    - 更新持仓状态
+    - 检查最大持仓天数
+    - T+1 限制判断
+    """
+    def __init__(self):
+        self.positions: Dict[str, Position] = {}
+        self.pending_bought: Set[str] = set()  # 今日买入的股票
+
+    def add(self, code: str, name: str, quantity: int, price: float, buy_date: str):
+        """添加持仓（支持加仓）"""
+
+    def remove(self, code: str) -> Optional[Position]:
+        """移除持仓"""
+
+    def update(self, date: str):
         """每日收盘后更新持仓状态"""
-        pass
 
     def check_max_holding_days(self, max_days: int) -> List[str]:
         """检查超过最大持仓天数的股票，返回应卖出的列表"""
-        pass
 
     def was_bought_today(self, code: str, date: str) -> bool:
         """检查是否今日买入（T+1判断用）"""
-        pass
+
+    def is_pending(self, code: str) -> bool:
+        """检查是否在pending中（T+1限制）"""
+
+    def get_position(self, code: str) -> Optional[Position]:
+        """获取持仓"""
+
+    def total_value(self, price_func) -> float:
+        """计算持仓总市值"""
 ```
 
 **持仓天数计算**：
@@ -654,6 +709,8 @@ async def new_backtest(...):
 
 | 版本 | 日期 | 更新 |
 |------|------|------|
+| v19.9 | 2026-04-09 | ✅ 明确回测器数据来源，price_history为历史遗留表，计划迁移到DuckDB |
+| v19.8 | 2026-04-09 | ✅ 实现 PositionManager 类、BacktestReportStore、回测报告存档功能 |
 | v19.7 | 2026-04-08 | ✅ cp_history迁移到data_manager统一管理（SQLite WAL模式） |
 | v19.4 | 2026-04-08 | ✅ 回测报告存档（backtest_reports）方案完成：SQLite存储、1年保留、100条上限 |
 | v19.3.1 | 2026-04-07 | ✅ 清理整个 core/ 目录，迁移有用模块到对应位置 |

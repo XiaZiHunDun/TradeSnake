@@ -5,7 +5,7 @@
 """
 
 from typing import List, Dict
-from backend.engine.cp_engine import StockCP
+from backend.engine import StockCP
 
 
 class PromptsGenerator:

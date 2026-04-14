@@ -5,7 +5,7 @@
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from .database import get_db
-from backend.engine.constants import TRADE_COST
+from backend.engine import TRADE_COST
 
 # 交易费用（统一从 engine.constants 导入）
 COMMISSION_RATE = TRADE_COST['commission']
@@ -63,7 +63,7 @@ class Account:
             code = h.get('code', '')
             quantity = h.get('total_quantity', 0)
             try:
-                from data_manager.fetcher import get_single_stock_data
+                from backend.data_manager.fetcher import get_single_stock_data
                 stock = get_single_stock_data(code)
                 if stock:
                     total += stock.get('price', 0) * quantity

@@ -1,4 +1,4 @@
-# 智能推荐模块方案 v18.4
+# 智能推荐模块方案 v18.5
 
 ## 概述
 
@@ -11,10 +11,12 @@
 ### 输入
 | 来源 | 数据内容 |
 |------|----------|
-| engine | StockCP 战力数据（总分、成长分、价值分、动量分、质量分） |
-| engine | 风险评估报告（集中度/流动性/市场模式） |
-| engine | Kelly仓位计算结果 |
-| engine | 技术指标计算值（MA/MACD/RSI等） |
+| engine/cp_engine | StockCP 战力数据（总分、成长分、价值分、动量分、质量分） |
+| engine/cp_engine | 风险评估报告（集中度/流动性/市场模式） |
+| engine/cp_engine | Kelly仓位计算结果 |
+| engine/cp_engine | 技术指标计算值（MA/MACD/RSI等） |
+| **engine/gain_predictor** | GainPrediction 涨幅预测（predicted_gain_3d/5d, confidence） |
+| **engine/probability_predictor** | ProbabilityPrediction 上涨概率（up_probability_3d/5d, confidence, risk_level） |
 | stock_selector | 候选股票池（核心池+活跃池） |
 | simulator | 持仓数据（持仓成本、买入日期、盈亏状态） |
 | data_manager | cp_history 历史（用于多日动量计算） |
@@ -26,7 +28,7 @@
 | 买入信号（Kelly仓位、止损止盈、风险等级） | 用户/前端展示、simulator（执行交易） |
 | 卖出信号（盈亏状态、行动建议、紧急程度） | 用户/前端展示、simulator（执行交易） |
 
-**版本**: v18.4 | **状态**: ✅ 完整（P0全部完成）
+**版本**: v18.5 | **状态**: ✅ 完整（P0全部完成）
 
 **核心定位**：私人工具，直接输出操作建议（推荐、买入、卖出、换股），无需使用委婉表述。
 
@@ -44,6 +46,39 @@
 战力数据 → 风险过滤 → 排序筛选 → 换股/买入/卖出 分析 → 建议输出
 ```
 
+### 1.4 预测融合逻辑（v19.8新增）
+
+推荐引擎融合战力评分与预测引擎结果，优先推荐"战力高+预测好"的股票。
+
+#### 融合策略
+
+| 预测维度 | 融合方式 | 说明 |
+|----------|----------|------|
+| **涨幅预测** | predicted_gain_5d × confidence 加权 | 预测涨幅高+置信度高 → 排名靠前 |
+| **上涨概率** | up_probability_5d × confidence 加权 | 上涨概率高+置信度高 → 排名靠前 |
+
+#### 融合公式
+
+```
+综合得分 = 战力权重 × total_cp + 涨幅预测权重 × predicted_gain_5d + 上涨概率权重 × up_probability_5d
+```
+
+**权重配置**（可调整）：
+| 配置项 | 保守 | 平衡 | 激进 |
+|--------|------|------|------|
+| 战力权重 | 0.5 | 0.4 | 0.3 |
+| 涨幅预测权重 | 0.3 | 0.35 | 0.4 |
+| 上涨概率权重 | 0.2 | 0.25 | 0.3 |
+
+#### 过滤条件
+
+| 条件 | 说明 |
+|------|------|
+| predicted_gain_5d < 0 | 过滤预测下跌股票 |
+| up_probability_5d < 0.5 | 过滤上涨概率低于50% |
+| risk_level = high | 过滤高风险股票 |
+| volatility_20d > 40 | 过滤高波动股票 |
+
 ---
 
 ## 二、模块结构
@@ -54,10 +89,10 @@ backend/recommender/
 ├── recommend_engine.py      # 推荐引擎主类
 ├── filters.py               # 股票过滤器
 ├── swap_calculator.py        # 换股计算器
-├── buy_analyzer.py          # 买入分析器 ⭐新增
-├── sell_analyzer.py         # 卖出分析器 ⭐新增
-├── prompts.py               # 推荐理由生成
-└── position_calculator.py    # 仓位计算器（Kelly公式）
+├── buy_analyzer.py          # 买入分析器
+├── sell_analyzer.py         # 卖出分析器
+├── fusion.py                # 预测融合器 v19.8 ⭐新增
+└── prompts.py               # 推荐理由生成
 ```
 
 ---
@@ -343,48 +378,7 @@ def analyze_sell_opportunity(
 
 ---
 
-### 3.5 PositionCalculator（仓位计算器）
-
-**文件**: `position_calculator.py`
-
-**核心公式**: `f* = p - (1-p)/b`
-- f* = 最佳仓位比例
-- p = 胜率
-- b = 赔率（盈亏比）
-
-```python
-class PositionCalculator:
-    KELLY_FRACTION = 0.5  # 安全系数（半Kelly）
-    MAX_POSITION_PCT = 20.0  # 最大仓位
-
-    @classmethod
-    def calculate_position(
-        cls,
-        win_rate: float,
-        win_loss_ratio: float,
-        principal: float,
-        max_position_pct: float = 20.0
-    ) -> Dict:
-        kelly = win_rate - (1 - win_rate) / win_loss_ratio
-        safe_kelly = kelly * cls.KELLY_FRACTION
-        position_pct = min(safe_kelly, max_position_pct / 100)
-
-        position_amount = principal * position_pct
-        shares = round_to_lot(position_amount / 100) * 100
-
-        return {
-            'kelly_raw': kelly,
-            'kelly_safe': safe_kelly,
-            'position_pct': position_pct * 100,
-            'position_amount': position_amount,
-            'shares': shares,
-            'signal': 'strong_buy' if kelly > 0.3 else 'buy' if kelly > 0.1 else 'hold'
-        }
-```
-
----
-
-### 3.6 StockFilter（股票过滤器）
+### 3.5 StockFilter（股票过滤器）
 
 **文件**: `filters.py`
 
@@ -414,7 +408,7 @@ class PositionCalculator:
 
 ---
 
-### 3.7 prompts.py（推荐理由生成）
+### 3.6 prompts.py（推荐理由生成）
 
 **文件**: `prompts.py`
 
@@ -600,30 +594,52 @@ buys = recommender.get_buy_signals(
 )
 ```
 
-### 6.2 接收 stock_selector 回调
+### 6.2 接收 stock_selector 回调 v18.5
 
 ```python
 class RecommenderCallback:
-    """接收 stock_selector 的池状态变化通知"""
+    """接收 stock_selector 的池状态变化通知 v18.5"""
+
+    def __init__(self, engine: RecommendEngine):
+        self._engine = engine
+        self.candidate_pool: List[str] = []      # 推荐候选池
+        self.priority_candidates: Set[str] = set()  # 优先候选集
+        self.watchlist: Dict[str, List[str]] = {}   # 监控列表 {code: [warnings]}
 
     def on_pool_changed(self, tier: PoolTier, added: List[str], removed: List[str]):
         """池变化时更新推荐候选池"""
-        if tier in [PoolTier.CORE, PoolTier.ACTIVE]:
-            if added:
-                # 新纳入的加入推荐候选池
-                self.candidate_pool.extend(added)
-            if removed:
-                # 移除的从推荐候选池移除
-                self.candidate_pool = [c for c in self.candidate_pool if c not in removed]
+        if tier not in [PoolTier.CORE, PoolTier.ACTIVE]:
+            return
+        for code in added:
+            if code not in self.candidate_pool:
+                self.candidate_pool.append(code)
+        self.candidate_pool = [c for c in self.candidate_pool if c not in removed]
+        for code in removed:
+            self.priority_candidates.discard(code)
 
     def on_stock_upgraded_to_core(self, code: str):
         """股票晋级到核心池 → 优先推荐"""
         self.priority_candidates.add(code)
+        if code not in self.candidate_pool:
+            self.candidate_pool.append(code)
 
     def on_financial_warning(self, code: str, warnings: List[str]):
         """财务预警时 → 从推荐移除，加入监控"""
-        self.candidate_pool.discard(code)
-        self.watchlist.add(code, warnings)
+        self.candidate_pool = [c for c in self.candidate_pool if c != code]
+        self.priority_candidates.discard(code)
+        self.watchlist[code] = warnings
+
+    def get_candidate_pool(self) -> List[str]:
+        """获取当前候选池"""
+        return self.candidate_pool.copy()
+
+    def get_priority_candidates(self) -> Set[str]:
+        """获取优先候选集"""
+        return self.priority_candidates.copy()
+
+    def get_watchlist(self) -> Dict[str, List[str]]:
+        """获取监控列表"""
+        return self.watchlist.copy()
 ```
 
 # 卖出信号
@@ -637,10 +653,11 @@ sells = recommender.get_sell_signals(
 
 ## 七、版本规划
 
-### 7.1 当前状态 (v18.4)
+### 7.1 当前状态 (v18.5)
 
 - [x] 换股计算器
 - [x] 股票过滤器
+- [x] 预测融合 RecommenderCallback v19.8 ✅
 
 ### 7.2 待实现
 
@@ -660,7 +677,7 @@ sells = recommender.get_sell_signals(
 ```
 v18.2: 基础换股计算器 ✅
 
-v18.4 (当前):
+v18.5 (当前):
 ├── P0: BuyAnalyzer 买入分析
 ├── P0: SellAnalyzer 卖出分析
 ├── P0: prompts.py 理由生成
@@ -675,7 +692,7 @@ v18.x: 完善风控、流动性、财报季
 
 | 版本 | 日期 | 更新 |
 |------|------|------|
-| v18.5 | 2026-04-07 | ⚠️ 新增与stock_selector联动：基于池分层确定推荐候选池，接收池变化回调，财务预警时调整推荐权重 |
+| v18.5 | 2026-04-09 | ✅ 预测融合(v19.8)：PredictionFusion实现战力与涨幅/概率预测融合；删除PositionCalculator死代码；BuySignal新增预测字段 |
 | v18.4 | 2026-04-07 | ✅ P0全部完成：三大场景设计（换股+纯买入+纯卖出），BuyAnalyzer/SellAnalyzer/Kelly仓位/StockFilter五大过滤器/prompts.py |
 | v18.3 | 2026-04-07 | 强化设计：涨跌停过滤、滑点成本、prompts.py |
 | v18.2 | 2026-04-07 | 初始版本，基础推荐引擎 + 换股计算 + 过滤器 |

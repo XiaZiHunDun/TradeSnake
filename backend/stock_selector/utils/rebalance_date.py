@@ -30,7 +30,7 @@ class RebalanceDateCalculator:
     def __init__(self):
         pass
 
-    def get_rebalance_dates(self, year: int) -> List[date]:
+    def get_next_rebalance_dates(self, year: int) -> List[date]:
         """
         获取指定年度的所有调样日期
 
@@ -191,7 +191,7 @@ def get_next_rebalance_dates(year: int) -> List[date]:
         调样日期列表
     """
     calc = RebalanceDateCalculator()
-    return calc.get_rebalance_dates(year)
+    return calc.get_next_rebalance_dates(year)
 
 
 def get_days_until_rebalance() -> Tuple[int, str]:

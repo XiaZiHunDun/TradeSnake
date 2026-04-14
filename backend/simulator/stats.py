@@ -48,28 +48,38 @@ class Stats:
         max_profit = 0
         max_loss = 0
 
-        # 按股票分组计算盈亏
+        # 按股票分组计算盈亏（使用FIFO匹配买卖）
         stock_profits: Dict[str, List[float]] = {}
 
-        for trade in sell_trades:
-            code = trade.get('code')
+        for sell in sell_trades:
+            code = sell.get('code')
             if code not in stock_profits:
                 stock_profits[code] = []
-            # 简化：卖出收入 - 印花税 - 佣金 = 净利润
-            stock_profits[code].append(trade.get('total_amount', 0))
+
+            # 使用FIFO匹配对应的买入批次计算真实盈亏
+            sell_quantity = sell.get('quantity', 0)
+
+            # 卖出净收入（扣除费用后）- total_amount在卖出时已是扣税佣金净额
+            net_sell_proceeds = sell.get('total_amount', 0)
+
+            # 通过FIFO找到对应的买入成本
+            matched_buy_cost = self._get_fifo_buy_cost(code, sell.get('created_at', ''), sell_quantity)
+
+            # 真实盈亏 = 卖出净收入 - 买入成本
+            real_profit = net_sell_proceeds - matched_buy_cost
+
+            stock_profits[code].append(real_profit)
 
         # 计算每只股票的盈亏
         for code, profits in stock_profits.items():
-            if profits:
-                # 简化处理：取平均
-                avg_profit = sum(profits) / len(profits)
-                total_profit += avg_profit
-                if avg_profit > 0:
+            for profit in profits:
+                total_profit += profit
+                if profit > 0:
                     winning_trades += 1
-                    max_profit = max(max_profit, avg_profit)
-                elif avg_profit < 0:
+                    max_profit = max(max_profit, profit)
+                elif profit < 0:
                     losing_trades += 1
-                    max_loss = min(max_loss, avg_profit)
+                    max_loss = min(max_loss, profit)
 
         # 胜率
         total_closed = winning_trades + losing_trades
@@ -97,6 +107,42 @@ class Stats:
             'end_date': end_date,
             'calculated_at': datetime.now().isoformat()
         }
+
+    def _get_fifo_buy_cost(self, code: str, sell_date: str, sell_quantity: int) -> float:
+        """通过FIFO匹配计算对应卖出的买入成本
+
+        Args:
+            code: 股票代码
+            sell_date: 卖出日期（用于排除当日买入）
+            sell_quantity: 卖出数量
+
+        Returns:
+            对应的买入成本总额
+        """
+        from datetime import datetime as dt
+
+        # 获取该股票在卖出日前的所有买入批次（按时间顺序FIFO）
+        batches = self.db.get_holding_batches_for_sell(code)
+        # 过滤出在卖出日期之前的批次
+        cutoff_date = dt.fromisoformat(sell_date).date() if sell_date else dt.now().date()
+        eligible_batches = [
+            b for b in batches
+            if dt.fromisoformat(b.get('bought_at', dt.now().isoformat())).date() < cutoff_date
+        ]
+
+        total_cost = 0
+        remaining = sell_quantity
+
+        for batch in eligible_batches:
+            if remaining <= 0:
+                break
+            batch_qty = batch.get('quantity', 0)
+            reduce_qty = min(remaining, batch_qty)
+            cost_price = batch.get('cost_price', 0)
+            total_cost += reduce_qty * cost_price
+            remaining -= reduce_qty
+
+        return total_cost
 
     def _empty_summary(self) -> Dict:
         """返回空统计"""
@@ -142,32 +188,25 @@ class Stats:
         return sum(holding_days_list) / len(holding_days_list) if holding_days_list else 0
 
     def _calculate_max_drawdown(self) -> float:
-        """计算最大回撤（简化版）"""
-        # 获取账户历史资产曲线
-        flows = self.db.get_account_flows(limit=10000)
-        if not flows:
-            return 0
+        """计算最大回撤（使用持仓快照）
 
-        # 构建资产曲线
-        assets_history = []
-        current_assets = self.db.get_account().get('initial_cash', 20000)
+        使用每日持仓快照表计算组合价值的最大回撤，
+        比单纯用资金流水更准确。
+        """
+        # 尝试从持仓快照获取历史市值
+        portfolio_history = self.db.get_portfolio_value_history()
+        if not portfolio_history or len(portfolio_history) < 2:
+            # 兜底：使用资金流水估算
+            return self._calculate_max_drawdown_from_flows()
 
-        # 按时间排序
-        flows_sorted = sorted(flows, key=lambda x: x.get('created_at', ''))
+        # 使用快照中的总资产（含现金）
+        initial_cash = self.db.get_account().get('initial_cash', 20000)
+        assets_history = [initial_cash]  # 从初始资金开始
 
-        for flow in flows_sorted:
-            change_type = flow.get('change_type', '')
-            amount = abs(flow.get('amount', 0))
-
-            if change_type in ('buy', 'sell', 'dividend'):
-                if change_type == 'buy':
-                    current_assets -= amount
-                elif change_type == 'sell':
-                    current_assets += amount
-                elif change_type == 'dividend':
-                    current_assets += amount
-
-                assets_history.append(current_assets)
+        for snapshot in portfolio_history:
+            # 每日总资产 = 持仓市值 + （初始资金 - 累计买入 + 累计卖出 + 分红）
+            market_value = snapshot.get('total_value', 0)
+            assets_history.append(market_value + initial_cash)
 
         if not assets_history:
             return 0
@@ -181,6 +220,49 @@ class Stats:
                 peak = assets
             drawdown = (peak - assets) / peak * 100 if peak > 0 else 0
             max_drawdown = max(max_drawdown, drawdown)
+
+        return max_drawdown
+
+    def _calculate_max_drawdown_from_flows(self) -> float:
+        """通过资金流水估算最大回撤（兜底方案）
+
+        不考虑持仓市值变化，仅跟踪现金变化。
+        注意：此方法不够准确，仅在无快照数据时使用。
+        """
+        flows = self.db.get_account_flows(limit=10000)
+        if not flows:
+            return 0
+
+        initial_cash = self.db.get_account().get('initial_cash', 20000)
+        current_cash = initial_cash
+        peak = initial_cash
+        max_drawdown = 0
+
+        # 按时间排序
+        flows_sorted = sorted(flows, key=lambda x: x.get('created_at', ''))
+
+        for flow in flows_sorted:
+            change_type = flow.get('change_type', '')
+            amount = flow.get('amount', 0)
+
+            # 买卖直接影响现金
+            if change_type in ('buy', 'buy_freeze'):
+                # 买入冻结/扣除
+                current_cash += amount  # amount是负数
+            elif change_type in ('sell', 'sell_proceeds', 'buy_refund', 'buy_unfreeze', 'dividend'):
+                # 卖出收入/解冻/分红
+                current_cash += amount  # amount是正数
+            elif change_type == 'commission':
+                current_cash += amount  # 佣金是负数
+
+            # 更新峰值
+            if current_cash > peak:
+                peak = current_cash
+
+            # 计算回撤
+            if peak > 0:
+                drawdown = (peak - current_cash) / peak * 100
+                max_drawdown = max(max_drawdown, drawdown)
 
         return max_drawdown
 

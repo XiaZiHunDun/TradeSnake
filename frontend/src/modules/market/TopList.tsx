@@ -1,15 +1,30 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useCPTop } from '../../shared/hooks/useApi'
+import { useCPTop, useGainPredictionTop, useProbabilityPredictionTop } from '../../shared/hooks/useApi'
 import { SortableTable } from '../../shared/components/organisms'
-import type { StockCP } from '../../shared/types'
+import type { StockCP, GainPrediction, ProbabilityPrediction } from '../../shared/types'
 
 const PAGE_TITLE = '战力榜'
 
 export function TopList() {
   const navigate = useNavigate()
   const { data, isLoading, error, refetch } = useCPTop(200)
+  const { data: gainData } = useGainPredictionTop(50)
+  const { data: probData } = useProbabilityPredictionTop(50)
   const [filter, setFilter] = useState<'all' | 'up' | 'down'>('all')
+
+  // 创建预测数据查找映射
+  const gainMap = useMemo(() => {
+    const map = new Map<string, GainPrediction>()
+    gainData?.predictions?.forEach(p => map.set(p.code, p))
+    return map
+  }, [gainData])
+
+  const probMap = useMemo(() => {
+    const map = new Map<string, ProbabilityPrediction>()
+    probData?.predictions?.forEach(p => map.set(p.code, p))
+    return map
+  }, [probData])
 
   const filteredStocks = useMemo(() => {
     if (!data?.data) return []
@@ -121,6 +136,41 @@ export function TopList() {
       render: (value: unknown) => (
         <span className="font-mono text-green-600">{(value as number).toFixed(1)}</span>
       ),
+    },
+    {
+      key: 'predicted_gain_3d',
+      title: '预测3日',
+      width: 90,
+      align: 'right' as const,
+      sortable: true,
+      render: (_: unknown, row: StockCP) => {
+        const pred = gainMap.get(row.code)
+        if (!pred) return <span className="text-gray-400 text-xs">-</span>
+        const isUp = pred.predicted_gain_3d >= 0
+        return (
+          <span className={`font-mono text-xs ${isUp ? 'text-red-500' : 'text-green-500'}`}>
+            {isUp ? '+' : ''}{pred.predicted_gain_3d.toFixed(1)}%
+          </span>
+        )
+      },
+    },
+    {
+      key: 'up_probability_3d',
+      title: '上涨概率',
+      width: 80,
+      align: 'right' as const,
+      sortable: true,
+      render: (_: unknown, row: StockCP) => {
+        const pred = probMap.get(row.code)
+        if (!pred) return <span className="text-gray-400 text-xs">-</span>
+        const prob = (pred.up_probability_3d * 100).toFixed(0)
+        const isHigh = pred.up_probability_3d >= 0.6
+        return (
+          <span className={`font-mono text-xs ${isHigh ? 'text-red-500 font-bold' : 'text-gray-600 dark:text-gray-400'}`}>
+            {prob}%
+          </span>
+        )
+      },
     },
   ]
 

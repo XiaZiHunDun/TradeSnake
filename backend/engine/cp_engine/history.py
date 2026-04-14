@@ -22,7 +22,7 @@ from functools import lru_cache
 
 # 尝试导入 CPHistoryStore（如果可用）
 try:
-    from data_manager.cp_history_store import get_cp_history_store, CPHistoryStore
+    from backend.data_manager.cp_history_store import get_cp_history_store, CPHistoryStore
     _HAS_CP_STORE = True
 except ImportError:
     get_cp_history_store = None  # type: ignore

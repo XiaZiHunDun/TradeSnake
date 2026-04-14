@@ -13,14 +13,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from api.router import router, cp_engine
-from api.limits import limiter
-from api.websocket import WebSocketManager
+from backend.api.router import router, cp_engine
+from backend.api.limits import limiter
+from backend.api.websocket import WebSocketManager
 
 
 def preload_cp_engine_from_cache():
     """从磁盘缓存预加载战力引擎数据（快速启动）"""
-    from engine.cp_engine import create_stock_from_raw
+    from backend.engine.cp_engine import create_stock_from_raw
 
     print("[启动] 从本地缓存预加载战力数据...")
     DATA_DIR = Path("/home/ailearn/projects/TradeSnake/data")
@@ -108,7 +108,7 @@ def preload_cp_engine_from_cache():
 
     if cp_engine.stocks:
         cp_engine.calculate_all()
-        from api import router as router_module
+        from backend.api import router as router_module
         router_module.last_update_time = datetime.now().isoformat()
         print(f"[启动] 已预加载 {len(cp_engine.stocks)} 只股票到战力引擎")
 
@@ -117,19 +117,24 @@ def preload_cp_engine_from_cache():
 
 async def background_refresh_task():
     """后台持续刷新任务"""
-    from data_manager.fetcher import get_stock_data_api
-    from engine.cp_engine import create_stock_from_raw
+    from backend.data_manager.fetcher import get_stock_data_api
+    from backend.engine.cp_engine import create_stock_from_raw
 
     print("[后台] 启动数据刷新任务")
+
+    # 初始等待，让服务器先启动完成
+    await asyncio.sleep(5)
+
     while True:
         try:
-            from engine.refresh_strategy import get_refresh_interval
+            from backend.engine.cp_engine.refresh_strategy import get_refresh_interval
             interval = get_refresh_interval()
             print(f"[后台] 等待 {interval} 秒后刷新...")
             await asyncio.sleep(interval)
 
-            # 执行增量刷新
-            stocks_data = get_stock_data_api(limit=100)
+            # 执行增量刷新（在线程池中执行，避免阻塞事件循环）
+            loop = asyncio.get_event_loop()
+            stocks_data = await loop.run_in_executor(None, lambda: get_stock_data_api(limit=100))
 
             async with cp_engine._lock if hasattr(cp_engine, '_lock') else asyncio.Lock():
                 for data in stocks_data:
@@ -153,6 +158,14 @@ async def background_refresh_task():
 
                 cp_engine.calculate_all()
 
+                # 持久化到数据库
+                from backend.simulator.database import get_db
+                from backend.engine.cp_engine.history import save_history
+                stock_dicts = [s.to_dict() for s in cp_engine.stocks]
+                save_history(stock_dicts)
+                _db = get_db()
+                _db.batch_upsert_stocks(stock_dicts)
+
             print(f"[后台] 刷新完成，当前 {len(cp_engine.stocks)} 只股票")
 
         except asyncio.CancelledError:
@@ -166,18 +179,35 @@ async def background_refresh_task():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """启动时初始化数据"""
-    preload_cp_engine_from_cache()
+    # 初始化StockSelector（基础实例化，完整初始化需要数据）
+    selector = get_stock_selector()
+    if selector is not None:
+        # 注册UpdateScheduler回调（用于联动data_manager更新调度）
+        try:
+            from backend.data_manager.update_scheduler import UpdateScheduler, StockSelectorCallback
+            from backend.data_manager.manager import get_data_manager
+            dm = get_data_manager()
+            scheduler = UpdateScheduler(dm, None)  # 临时None，后续需要UpdateStrategyProvider
+            callback = StockSelectorCallback(scheduler)
+            selector.register_callback(callback)
+            print("[启动] StockSelector 回调注册完成")
+        except Exception as e:
+            print(f"[启动] StockSelector 回调注册失败: {e}")
 
+    # preload_cp_engine_from_cache()  # 临时禁用 - 加载2855个文件太慢
+
+    # 启动后台刷新任务（会延迟5秒后执行）
     refresh_task = asyncio.create_task(background_refresh_task())
 
     print("[启动] 服务已就绪")
 
     yield
 
+    # 正确取消后台任务
     refresh_task.cancel()
     try:
-        await refresh_task
-    except asyncio.CancelledError:
+        await asyncio.wait_for(refresh_task, timeout=5.0)
+    except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
         pass
     print("[关闭] 服务关闭")
 
@@ -188,6 +218,23 @@ app = FastAPI(
     version="18.x",
     lifespan=lifespan
 )
+
+# 全局StockSelector实例（延迟初始化）
+_stock_selector = None
+
+
+def get_stock_selector():
+    """获取StockSelector单例"""
+    global _stock_selector
+    if _stock_selector is None:
+        try:
+            from backend.stock_selector import StockSelector
+            _stock_selector = StockSelector()
+            print("[启动] StockSelector 初始化完成")
+        except Exception as e:
+            print(f"[启动] StockSelector 初始化失败: {e}")
+    return _stock_selector
+
 
 ws_manager = WebSocketManager()
 

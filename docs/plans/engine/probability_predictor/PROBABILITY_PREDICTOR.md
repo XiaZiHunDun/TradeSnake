@@ -242,7 +242,7 @@ GET /api/prediction/probability/top
 
 ```bash
 # 1. 单元测试
-python -m pytest backend/engine/probability_predictor/tests/ -v
+python -m pytest backend/tests/test_prediction_engines.py -v
 
 # 2. API测试
 curl "http://localhost:8001/api/prediction/probability/top?days=5&limit=10"

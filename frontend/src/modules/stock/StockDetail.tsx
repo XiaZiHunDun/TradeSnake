@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom'
-import { useStockDetail } from '../../shared/hooks/useApi'
+import { useStockDetail, useGainPredictionStock, useProbabilityPredictionStock } from '../../shared/hooks/useApi'
 import { Button } from '../../shared/components/atoms'
 import { PriceDisplay } from '../../shared/components/molecules'
 
@@ -7,6 +7,8 @@ export function StockDetail() {
   const { code } = useParams<{ code: string }>()
   const navigate = useNavigate()
   const { data, isLoading, error } = useStockDetail(code || '')
+  const { data: gainPrediction } = useGainPredictionStock(code || '')
+  const { data: probPrediction } = useProbabilityPredictionStock(code || '')
 
   if (!code) {
     return (
@@ -127,6 +129,95 @@ export function StockDetail() {
           />
         </div>
       </div>
+
+      {/* 预测分析 v19.8 */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">预测分析</h2>
+
+        {/* 涨幅预测 */}
+        <div className="mb-6">
+          <h3 className="text-sm font-medium text-gray-500 mb-3">涨幅预测</h3>
+          {gainPrediction ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <PredictionCard
+                label="3日预测涨幅"
+                value={gainPrediction.predicted_gain_3d}
+                unit="%"
+                confidence={gainPrediction.confidence}
+                color={gainPrediction.predicted_gain_3d >= 0 ? 'red' : 'green'}
+              />
+              <PredictionCard
+                label="5日预测涨幅"
+                value={gainPrediction.predicted_gain_5d}
+                unit="%"
+                confidence={gainPrediction.confidence}
+                color={gainPrediction.predicted_gain_5d >= 0 ? 'red' : 'green'}
+              />
+              <PredictionCard
+                label="3日置信区间"
+                value={gainPrediction.confidence_interval_3d[0]}
+                value2={gainPrediction.confidence_interval_3d[1]}
+                unit="%"
+                color="gray"
+              />
+              <PredictionCard
+                label="5日置信区间"
+                value={gainPrediction.confidence_interval_5d[0]}
+                value2={gainPrediction.confidence_interval_5d[1]}
+                unit="%"
+                color="gray"
+              />
+            </div>
+          ) : (
+            <div className="text-center py-4 text-gray-500 text-sm">
+              暂无预测数据（K线数据不足）
+            </div>
+          )}
+        </div>
+
+        {/* 上涨概率 */}
+        <div>
+          <h3 className="text-sm font-medium text-gray-500 mb-3">上涨概率</h3>
+          {probPrediction ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <PredictionCard
+                label="3日上涨概率"
+                value={probPrediction.up_probability_3d * 100}
+                unit="%"
+                color={probPrediction.up_probability_3d >= 0.5 ? 'red' : 'green'}
+                isPercent
+              />
+              <PredictionCard
+                label="5日上涨概率"
+                value={probPrediction.up_probability_5d * 100}
+                unit="%"
+                color={probPrediction.up_probability_5d >= 0.5 ? 'red' : 'green'}
+                isPercent
+              />
+              <div className="text-center bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+                <div className="text-xs text-gray-500 mb-1">风险等级</div>
+                <div className={`text-2xl font-bold ${
+                  probPrediction.risk_level === 'high' ? 'text-red-500' :
+                  probPrediction.risk_level === 'medium' ? 'text-yellow-500' : 'text-green-500'
+                }`}>
+                  {probPrediction.risk_level === 'high' ? '高' :
+                   probPrediction.risk_level === 'medium' ? '中' : '低'}
+                </div>
+              </div>
+              <PredictionCard
+                label="模型版本"
+                value={0}
+                displayText={probPrediction.model_version || 'rule_v19.8'}
+                color="gray"
+              />
+            </div>
+          ) : (
+            <div className="text-center py-4 text-gray-500 text-sm">
+              暂无概率数据（K线数据不足）
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -155,6 +246,51 @@ function InfoCard({
       <div className={`text-lg font-semibold font-mono ${color || 'text-gray-900 dark:text-white'}`}>
         {value}
       </div>
+    </div>
+  )
+}
+
+interface PredictionCardProps {
+  label: string
+  value: number
+  value2?: number
+  unit?: string
+  confidence?: number
+  color?: 'red' | 'green' | 'gray' | 'blue'
+  displayText?: string
+  isPercent?: boolean
+}
+
+function PredictionCard({ label, value, value2, unit = '', confidence, color = 'gray', displayText, isPercent }: PredictionCardProps) {
+  const colorClass = color === 'red' ? 'text-red-500' :
+                     color === 'green' ? 'text-green-500' :
+                     color === 'blue' ? 'text-blue-500' : 'text-gray-900 dark:text-white'
+
+  const bgClass = color === 'red' ? 'bg-red-50 dark:bg-red-900/20' :
+                  color === 'green' ? 'bg-green-50 dark:bg-green-900/20' :
+                  color === 'blue' ? 'bg-blue-50 dark:bg-blue-900/20' : 'bg-gray-50 dark:bg-gray-700/50'
+
+  return (
+    <div className={`${bgClass} rounded-lg p-3 text-center`}>
+      <div className="text-xs text-gray-500 mb-1">{label}</div>
+      {displayText ? (
+        <div className="text-sm font-medium font-mono text-gray-900 dark:text-white truncate">
+          {displayText}
+        </div>
+      ) : value2 !== undefined ? (
+        <div className={`text-lg font-bold font-mono ${colorClass}`}>
+          [{value.toFixed(1)}, {value2.toFixed(1)}]{unit}
+        </div>
+      ) : (
+        <div className={`text-lg font-bold font-mono ${colorClass}`}>
+          {isPercent ? value.toFixed(0) : value.toFixed(2)}{unit}
+        </div>
+      )}
+      {confidence !== undefined && (
+        <div className="text-xs text-gray-400 mt-1">
+          置信度: {(confidence * 100).toFixed(0)}%
+        </div>
+      )}
     </div>
   )
 }

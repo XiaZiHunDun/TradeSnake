@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useRecommendations, useSwapSuggestions } from '../../shared/hooks/useApi'
+import { useRecommendations, useSwapSuggestions, useGainPredictionTop, useProbabilityPredictionTop } from '../../shared/hooks/useApi'
 import { Button } from '../../shared/components/atoms'
-import type { SwapSuggestion } from '../../shared/types'
+import type { SwapSuggestion, GainPrediction, ProbabilityPrediction } from '../../shared/types'
 
 const CATEGORIES = [
   { key: 'value', label: '价值型', desc: '低估值的价值股票' },
@@ -16,6 +16,21 @@ export function Recommend() {
   const [category, setCategory] = useState('value')
   const { data: recommendations, isLoading: recLoading } = useRecommendations(category)
   const { data: swapSuggestions, isLoading: swapLoading } = useSwapSuggestions()
+  const { data: gainData } = useGainPredictionTop(50)
+  const { data: probData } = useProbabilityPredictionTop(50)
+
+  // 创建预测数据查找映射
+  const gainMap = useMemo(() => {
+    const map = new Map<string, GainPrediction>()
+    gainData?.predictions?.forEach(p => map.set(p.code, p))
+    return map
+  }, [gainData])
+
+  const probMap = useMemo(() => {
+    const map = new Map<string, ProbabilityPrediction>()
+    probData?.predictions?.forEach(p => map.set(p.code, p))
+    return map
+  }, [probData])
 
   return (
     <div className="space-y-6">
@@ -63,7 +78,7 @@ export function Recommend() {
                     <div className="text-xs text-gray-400">{stock.code}</div>
                   </div>
                 </div>
-                <div className="flex items-center gap-6">
+                <div className="flex items-center gap-4">
                   <div className="text-right">
                     <div className="text-xs text-gray-500">战力</div>
                     <div className="font-mono font-bold text-blue-600">{stock.total_cp.toFixed(1)}</div>
@@ -78,6 +93,28 @@ export function Recommend() {
                       {stock.change_pct >= 0 ? '+' : ''}{stock.change_pct.toFixed(2)}%
                     </div>
                   </div>
+                  {/* 预测数据 */}
+                  {gainMap.get(stock.code) && (
+                    <div className="text-right border-l border-gray-200 dark:border-gray-600 pl-3">
+                      <div className="text-xs text-gray-500">预测3日</div>
+                      <div className={`font-mono text-xs ${
+                        (gainMap.get(stock.code)?.predicted_gain_3d || 0) >= 0 ? 'text-red-500' : 'text-green-500'
+                      }`}>
+                        {(gainMap.get(stock.code)?.predicted_gain_3d || 0) >= 0 ? '+' : ''}
+                        {(gainMap.get(stock.code)?.predicted_gain_3d || 0).toFixed(1)}%
+                      </div>
+                    </div>
+                  )}
+                  {probMap.get(stock.code) && (
+                    <div className="text-right">
+                      <div className="text-xs text-gray-500">上涨概率</div>
+                      <div className={`font-mono text-xs font-bold ${
+                        (probMap.get(stock.code)?.up_probability_3d || 0) >= 0.6 ? 'text-red-500' : 'text-gray-500'
+                      }`}>
+                        {((probMap.get(stock.code)?.up_probability_3d || 0) * 100).toFixed(0)}%
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

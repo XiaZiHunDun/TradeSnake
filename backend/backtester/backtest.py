@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from .strategies import Strategy, StockFactor
 from .metrics import Metrics, Trade, BacktestResult
-from backend.engine.constants import TRADE_COST
+from backend.engine import TRADE_COST
 
 # 交易费用（统一从 engine.constants 导入）
 COMMISSION_RATE = TRADE_COST['commission']
@@ -27,6 +27,112 @@ class Position:
     avg_cost: float = 0.0
     buy_date: str = ''  # 买入日期
     holding_days: int = 0  # 持仓天数（交易日）
+
+
+class PositionManager:
+    """持仓管理器 v19.8
+
+    负责持仓的日常管理：
+    - 更新持仓状态
+    - 检查最大持仓天数
+    - T+1 限制判断
+    """
+
+    def __init__(self):
+        self.positions: Dict[str, Position] = {}
+        self.pending_bought: Set[str] = set()  # 今日买入的股票
+
+    def add(self, code: str, name: str, quantity: int, price: float, buy_date: str):
+        """添加持仓"""
+        if code in self.positions:
+            pos = self.positions[code]
+            total_qty = pos.quantity + quantity
+            pos.avg_cost = (pos.avg_cost * pos.quantity + price * quantity) / total_qty
+            pos.quantity = total_qty
+        else:
+            self.positions[code] = Position(
+                code=code,
+                name=name,
+                quantity=quantity,
+                avg_cost=price,
+                buy_date=buy_date,
+                holding_days=0
+            )
+        self.pending_bought.add(code)
+
+    def remove(self, code: str) -> Optional[Position]:
+        """移除持仓"""
+        if code in self.positions:
+            pos = self.positions.pop(code)
+            return pos
+        return None
+
+    def update(self, date: str):
+        """每日收盘后更新持仓状态
+
+        Args:
+            date: 当前日期
+        """
+        for pos in self.positions.values():
+            pos.holding_days += 1
+
+    def check_max_holding_days(self, max_days: int) -> List[str]:
+        """检查超过最大持仓天数的股票
+
+        Args:
+            max_days: 最大持仓天数
+
+        Returns:
+            应卖出的股票代码列表
+        """
+        return [
+            code for code, pos in self.positions.items()
+            if pos.holding_days > max_days
+        ]
+
+    def was_bought_today(self, code: str, date: str) -> bool:
+        """检查是否今日买入（T+1判断用）
+
+        Args:
+            code: 股票代码
+            date: 当前日期
+
+        Returns:
+            True if 今日买入
+        """
+        if code not in self.positions:
+            return False
+        return self.positions[code].buy_date == date
+
+    def clear_pending(self):
+        """清除pending标记（新交易日开始）"""
+        self.pending_bought.clear()
+
+    def is_pending(self, code: str) -> bool:
+        """检查是否在pending中（T+1限制）"""
+        return code in self.pending_bought
+
+    def get_position(self, code: str) -> Optional[Position]:
+        """获取持仓"""
+        return self.positions.get(code)
+
+    def get_all_positions(self) -> Dict[str, Position]:
+        """获取所有持仓"""
+        return self.positions.copy()
+
+    def total_value(self, price_func) -> float:
+        """计算持仓总市值
+
+        Args:
+            price_func: 获取价格的函数 (code, date) -> float
+
+        Returns:
+            持仓总市值
+        """
+        return sum(
+            pos.quantity * price_func(pos.code)
+            for pos in self.positions.values()
+        )
 
 
 class Backtest:
@@ -375,11 +481,20 @@ class Backtest:
         del self.positions[code]
 
     def _record_daily_value(self, date: str):
-        """记录每日净值"""
-        positions_value = sum(
-            pos.quantity * pos.avg_cost
-            for pos in self.positions.values()
-        )
+        """记录每日净值
+
+        使用当日收盘价计算持仓市值，更准确反映组合真实价值
+        """
+        positions_value = 0.0
+        for pos in self.positions.values():
+            # 优先使用当日收盘价计算市值
+            price_data = self._get_price_data(pos.code, date)
+            current_price = price_data.get('close', 0)
+            if current_price <= 0:
+                # 兜底使用成本价
+                current_price = pos.avg_cost
+            positions_value += pos.quantity * current_price
+
         total_value = self.cash + positions_value
         net_value = total_value / self.initial_capital  # 净值
 
@@ -438,12 +553,22 @@ class Backtest:
         avg_holding_days = sum(holding_days_list) / len(holding_days_list) if holding_days_list else 0
 
         # 构建结果
+        # 计算最终持仓市值（使用最后一日收盘价）
+        final_positions_value = 0.0
+        last_date = trading_dates[-1] if trading_dates else self.end_date
+        for pos in self.positions.values():
+            price_data = self._get_price_data(pos.code, last_date)
+            final_price = price_data.get('close', 0)
+            if final_price <= 0:
+                final_price = pos.avg_cost
+            final_positions_value += pos.quantity * final_price
+
         result = BacktestResult(
             strategy_name=self.strategy.name,
             start_date=self.start_date,
             end_date=self.end_date,
             initial_capital=self.initial_capital,
-            final_capital=self.cash + sum(p.avg_cost * p.quantity for p in self.positions.values()),
+            final_capital=self.cash + final_positions_value,
 
             # 绩效指标
             total_return=metrics.get('total_return', 0),
@@ -481,10 +606,7 @@ class Backtest:
 
     def _default_get_trading_dates(self, start_date: str, end_date: str) -> List[str]:
         """默认获取交易日列表（使用数据库）"""
-        try:
-            from backend.simulator.database import get_db
-        except ImportError:
-            from simulator.database import get_db
+        from backend.simulator.database import get_db
 
         db = get_db()
         cursor = db.conn.cursor()
@@ -497,10 +619,7 @@ class Backtest:
 
     def _default_get_stock_factors(self, date: str, codes: List[str] = None) -> Dict[str, StockFactor]:
         """默认获取战力因子数据"""
-        try:
-            from backend.simulator.database import get_db
-        except ImportError:
-            from simulator.database import get_db
+        from backend.simulator.database import get_db
 
         db = get_db()
         cursor = db.conn.cursor()
@@ -541,10 +660,7 @@ class Backtest:
 
     def _default_get_price_data(self, code: str, date: str) -> Dict:
         """默认获取价格数据"""
-        try:
-            from backend.simulator.database import get_db
-        except ImportError:
-            from simulator.database import get_db
+        from backend.simulator.database import get_db
 
         db = get_db()
         cursor = db.conn.cursor()
@@ -577,7 +693,7 @@ class BacktestEngine:
     """
 
     def __init__(self):
-        from simulator.database import get_db
+        from backend.simulator.database import get_db
         self.db = get_db()
 
     def get_available_dates(self, start_date: str, end_date: str) -> List[str]:
@@ -602,7 +718,23 @@ class BacktestEngine:
         return [dict(row) for row in cursor.fetchall()]
 
     def get_stock_price_at_date(self, code: str, date: str) -> Optional[float]:
-        """获取指定日期之后的第一个交易日价格"""
+        """获取指定日期之后的第一个交易日价格（优先从DuckDB获取）"""
+        # 首先尝试从 DuckDB 获取（推荐方式）
+        try:
+            from backend.data_manager.duckdb_store import get_duckdb_store
+            duckdb = get_duckdb_store()
+            # DuckDB 日期格式需要 YYYY-MM-DD
+            if len(date) == 8:
+                date_fmt = f"{date[:4]}-{date[4:6]}-{date[6:8]}"
+            else:
+                date_fmt = date
+            result = duckdb.get_klines(code, end_date=date_fmt, limit=1)
+            if result.success and result.data is not None and len(result.data) > 0:
+                return float(result.data.iloc[0]['close'])
+        except Exception as e:
+            pass
+
+        # 回退到 SQLite（兼容旧数据）
         cursor = self.db.conn.cursor()
         cursor.execute("""
             SELECT close FROM price_history

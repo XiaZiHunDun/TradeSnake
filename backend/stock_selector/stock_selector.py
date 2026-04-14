@@ -18,6 +18,9 @@ from .financial_watcher import FinancialWatcher, FinancialWarning
 from .types import StockInfo, StockSnapshot
 from . import config
 
+# 延迟导入避免循环依赖
+_recommender_callback_type: Optional[type] = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -62,6 +65,9 @@ class StockSelector:
 
         # 回调
         self._callbacks: List[SelectorCallback] = []
+
+        # Recommender 回调（延迟导入避免循环依赖）
+        self._recommender_callback: Optional["RecommenderCallback"] = None
 
         # 初始化状态
         self._initialized = False
@@ -154,8 +160,10 @@ class StockSelector:
         if exclude_config["exclude_st"] and info.is_st:
             return True
 
-        # 次新股排除
-        if info.listing_days < exclude_config["new_stock_days"]:
+        # 次新股排除（板块差异化保护期）
+        new_stock_days = exclude_config["new_stock_days"]
+        min_days = self._get_min_listing_days(info, new_stock_days)
+        if info.listing_days < min_days:
             return True
 
         # 僵尸股排除
@@ -164,6 +172,20 @@ class StockSelector:
             return True
 
         return False
+
+    def _get_min_listing_days(self, info: StockInfo, new_stock_days: Dict) -> int:
+        """获取股票对应的次新股保护期（按板块）"""
+        # 科创板（688开头）
+        if info.code.startswith("688"):
+            return new_stock_days.get("star", 120)
+        # 创业板（300开头）
+        if info.code.startswith("300") or info.code.startswith("002"):
+            return new_stock_days.get("chinext", 120)
+        # 北交所（4或8开头）
+        if info.code.startswith("4") or info.code.startswith("8"):
+            return new_stock_days.get("bj", 180)
+        # 主板默认
+        return new_stock_days.get("main", 90)
 
     def _classify_initial_tier(self, stock: Dict, market: Dict) -> PoolTier:
         """分类初始池"""
@@ -268,6 +290,9 @@ class StockSelector:
         # 3. 清理临时池过期股票
         expired_temp = self._pm.cleanup_expired_temp()
 
+        # 4. 触发 RecommenderCallback（如果有注册）
+        self._notify_recommender_pool_changes(eval_results, rebalance_results)
+
         stats = {
             "upgrades": len([r for r in rebalance_results.values() if r]),
             "downgrades": len([r for r in rebalance_results.values() if not r]),
@@ -277,6 +302,48 @@ class StockSelector:
 
         logger.info(f"盘后池刷新完成: {stats}")
         return stats
+
+    def _notify_recommender_pool_changes(
+        self,
+        eval_results: Dict[str, List[str]],
+        rebalance_results: Dict[str, bool]
+    ) -> None:
+        """
+        通知 Recommender 池变化
+
+        Args:
+            eval_results: 评估结果 {upgrade/downgrade/evict: [codes]}
+            rebalance_results: 再平衡结果 {code: success}
+        """
+        if self._recommender_callback is None:
+            return
+
+        try:
+            # 通知池变化
+            upgrade_codes = eval_results.get("upgrade", [])
+            downgrade_codes = eval_results.get("downgrade", [])
+            evict_codes = eval_results.get("evict", [])
+
+            # 通知所有池变化（晋级、降级、挤出）
+            all_added = upgrade_codes
+            all_removed = downgrade_codes + evict_codes
+
+            if all_added or all_removed:
+                self._recommender_callback.on_pool_changed(
+                    PoolTier.CORE,  # tier 参数
+                    all_added,
+                    all_removed
+                )
+
+            # 通知晋级到核心池的股票
+            for code in upgrade_codes:
+                # 检查是否晋级到了核心池
+                current_tier = self._pm.get_stock_tier(code)
+                if current_tier == PoolTier.CORE:
+                    self._recommender_callback.on_stock_upgraded_to_core(code)
+
+        except Exception as e:
+            logger.error(f"通知 RecommenderCallback 失败: {e}")
 
     def on_market_data_update(self, code: str, name: str, market_data: Dict) -> Optional[TriggerEvent]:
         """
@@ -324,6 +391,15 @@ class StockSelector:
                 except Exception as e:
                     logger.error(f"财务预警回调失败: {e}")
 
+            # 触发 RecommenderCallback
+            if self._recommender_callback:
+                try:
+                    # 将 FinancialWarning 转换为字符串列表
+                    warning_strings = [w.description for w in warnings]
+                    self._recommender_callback.on_financial_warning(code, warning_strings)
+                except Exception as e:
+                    logger.error(f"RecommenderCallback 财务预警通知失败: {e}")
+
         return warnings
 
     # -------------------- 白名单/黑名单 --------------------
@@ -349,6 +425,16 @@ class StockSelector:
     def register_callback(self, callback: SelectorCallback) -> None:
         """注册回调"""
         self._callbacks.append(callback)
+
+    def register_recommender_callback(self, callback: "RecommenderCallback") -> None:
+        """
+        注册 Recommender 回调
+
+        Args:
+            callback: RecommenderCallback 实例
+        """
+        self._recommender_callback = callback
+        logger.info("RecommenderCallback 已注册")
 
     # -------------------- 状态查询 --------------------
 

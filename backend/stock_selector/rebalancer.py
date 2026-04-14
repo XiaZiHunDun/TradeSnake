@@ -114,7 +114,7 @@ class Rebalancer:
                 candidates.append((code, f"连续 {momentum_days} 日动量强势"))
 
             # 检查纳入指数成分
-            if tier == PoolTier.ACTIVE and data.get("in_hs300") or data.get("in_zz500"):
+            if tier == PoolTier.ACTIVE and (data.get("in_hs300") or data.get("in_zz500")):
                 candidates.append((code, "纳入沪深300或中证500"))
 
         return candidates
@@ -227,7 +227,9 @@ class Rebalancer:
                 priority += data["volume_below_threshold_days"] * 5
 
             # 在池时间短优先挤出（新加入的容易被挤出）
-            days_in_pool = (date.today() - info.tier_entry_date).days
+            days_in_pool = 0
+            if info.tier_entry_date:
+                days_in_pool = (date.today() - info.tier_entry_date).days
             if days_in_pool < 10:
                 priority += (10 - days_in_pool) * 2
 

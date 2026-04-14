@@ -6,13 +6,32 @@
 
 from dataclasses import dataclass
 from typing import List, Dict, Optional
-from backend.engine.cp_engine import StockCP
-from backend.engine.risk_analyzer import KellyCalculator
+from backend.engine import StockCP, KellyCalculator
 
 
 @dataclass
 class BuySignal:
-    """买入信号"""
+    """买入信号
+
+    Attributes:
+        stock: 股票战力数据
+        kelly_position: Kelly建议仓位比例（%）
+        position_amount: 建议买入金额（元）
+        shares: 建议买入股数（100整数倍）
+        entry_price: 建议买入价
+        stop_loss: 止损价（-5%）
+        take_profit: 止盈价（+20%）
+        risk_level: risk/warning/acceptable
+        buy_strength: 买入强度 1-3星
+        reasons: 买入理由
+        warnings: 风险提示
+        breakeven_days: 回本天数
+        # v19.8 预测融合字段
+        predicted_gain_5d: 预测5日涨幅（%）
+        up_probability_5d: 5日上涨概率（0-1）
+        prediction_confidence: 预测置信度（0-1）
+        fused_score: 融合得分
+    """
     stock: StockCP
     kelly_position: float  # Kelly建议仓位比例（%）
     position_amount: float  # 建议买入金额（元）
@@ -25,6 +44,11 @@ class BuySignal:
     reasons: List[str]  # 买入理由
     warnings: List[str]  # 风险提示
     breakeven_days: int  # 回本天数
+    # v19.8 预测融合字段
+    predicted_gain_5d: float = 0  # 预测5日涨幅（%）
+    up_probability_5d: float = 0  # 5日上涨概率（0-1）
+    prediction_confidence: float = 0  # 预测置信度（0-1）
+    fused_score: float = 0  # 融合得分
 
 
 class BuyAnalyzer:
@@ -169,7 +193,11 @@ class BuyAnalyzer:
             buy_strength=0,
             reasons=[],
             warnings=[reason],
-            breakeven_days=999
+            breakeven_days=999,
+            predicted_gain_5d=0,
+            up_probability_5d=0,
+            prediction_confidence=0,
+            fused_score=0
         )
 
     @classmethod
@@ -286,6 +314,11 @@ class BuyAnalyzer:
             'reasons': signal.reasons,
             'warnings': signal.warnings,
             'breakeven_days': signal.breakeven_days,
+            # v19.8 预测融合字段
+            'predicted_gain_5d': round(signal.predicted_gain_5d, 2),
+            'up_probability_5d': round(signal.up_probability_5d, 3),
+            'prediction_confidence': round(signal.prediction_confidence, 3),
+            'fused_score': round(signal.fused_score, 4),
             'prompt': cls._generate_prompt(signal)
         }
 

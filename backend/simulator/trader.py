@@ -32,7 +32,7 @@ class Trader:
         注意：不按涨跌停价成交，直接按当前最新价
         涨跌停时无法成交（由风控检查拦截）
         """
-        from data_manager.fetcher import get_single_stock_data
+        from backend.data_manager.fetcher import get_single_stock_data
 
         stock = get_single_stock_data(code)
         if not stock:
@@ -63,7 +63,7 @@ class Trader:
         Returns:
             成交/委托结果
         """
-        from data_manager.fetcher import get_single_stock_data
+        from backend.data_manager.fetcher import get_single_stock_data
 
         stock = get_single_stock_data(code)
         if not stock:
@@ -203,7 +203,7 @@ class Trader:
         Returns:
             成交/委托结果
         """
-        from data_manager.fetcher import get_single_stock_data
+        from backend.data_manager.fetcher import get_single_stock_data
 
         stock = get_single_stock_data(code)
         if not stock:
@@ -328,7 +328,6 @@ class Trader:
 
         # 解冻资金（买入委托）
         if order['action'] == 'buy' and order.get('frozen_amount', 0) > 0:
-            unfilled = order['quantity'] * order['price']
             # 资金已扣除，只需记录解冻流水
             self.db.record_flow({
                 'change_type': 'buy_unfreeze',
@@ -357,7 +356,7 @@ class Trader:
         - 定时轮询：启动后台线程定期检查
         - 手动调用：查询账户时触发
         """
-        from data_manager.fetcher import get_single_stock_data
+        from backend.data_manager.fetcher import get_single_stock_data
 
         pending = self.db.get_pending_orders(code)
 
@@ -435,6 +434,9 @@ class Trader:
             'total_amount': total_cost
         })
 
+        # 记录费用流水
+        self.account.record_commission(trade_id, commission, 0, transfer_fee)
+
         # 更新订单状态
         self.db.update_order_status(order['id'], 'filled',
                                    filled_quantity=quantity,
@@ -497,7 +499,7 @@ class Trader:
 
     def get_position(self, code: str) -> Optional[Dict]:
         """获取持仓详情"""
-        from data_manager.fetcher import get_single_stock_data
+        from backend.data_manager.fetcher import get_single_stock_data
 
         holding = self.portfolio.get_holding(code)
         if not holding:

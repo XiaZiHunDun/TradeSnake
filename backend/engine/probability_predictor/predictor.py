@@ -224,7 +224,7 @@ class ProbabilityPredictor:
         Returns:
             保存的股票数量
         """
-        from data_manager.prediction_store import get_prediction_store
+        from backend.data_manager.prediction_store import get_prediction_store
 
         if date is None:
             from datetime import datetime
@@ -246,6 +246,163 @@ class ProbabilityPredictor:
 
         store = get_prediction_store()
         return store.record_probability_predictions(predictions, date)
+
+    def backtest_historical(
+        self,
+        codes: List[str],
+        start_date: str,
+        end_date: str,
+        save_to_store: bool = True
+    ) -> Dict:
+        """历史回测：基于历史K线数据验证概率预测准确性
+
+        Args:
+            codes: 股票代码列表
+            start_date: 回测开始日期 (YYYY-MM-DD)
+            end_date: 回测结束日期 (YYYY-MM-DD)
+            save_to_store: 是否保存到 prediction_store
+
+        Returns:
+            回测结果统计
+        """
+        from backend.data_manager.duckdb_store import get_duckdb_store
+        from datetime import datetime, timedelta
+
+        duckdb = get_duckdb_store()
+        results = []
+        errors = []
+
+        # 遍历每一天
+        current_date = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+
+        while current_date <= end:
+            date_str = current_date.strftime("%Y-%m-%d")
+            date_klines = {}
+
+            for code in codes:
+                try:
+                    # 获取该日期之前的历史K线（用于计算特征）
+                    klines = duckdb.get_klines(
+                        code,
+                        start_date=start_date,
+                        end_date=date_str,
+                        limit=60  # 至少60天数据
+                    )
+                    if klines and len(klines) >= 20:
+                        date_klines[code] = klines
+                except Exception as e:
+                    errors.append(f"{code}@{date_str}: {e}")
+
+            if date_klines:
+                # 执行预测
+                prediction_result = self.predict(date_klines)
+
+                # 计算实际是否上涨
+                for pred in prediction_result.predictions:
+                    actual_result = self._get_actual_up(
+                        duckdb, pred.code, date_str, 5
+                    )
+                    if actual_result is not None:
+                        predicted_up = pred.up_probability_5d >= 0.5
+                        results.append({
+                            'date': date_str,
+                            'code': pred.code,
+                            'predicted_probability': pred.up_probability_5d,
+                            'actual_up': actual_result,
+                            'correct': predicted_up == actual_result,
+                        })
+
+                # 保存到 store
+                if save_to_store:
+                    self.save_to_store(prediction_result, date_str)
+
+            # 下一天
+            current_date += timedelta(days=1)
+
+        # 计算统计
+        if not results:
+            return {'error': 'No valid results', 'details': errors}
+
+        df_len = len(results)
+        correct_count = sum(1 for r in results if r['correct'])
+        accuracy = correct_count / df_len * 100
+
+        # 分段统计
+        high_prob_correct = sum(
+            1 for r in results
+            if r['predicted_probability'] >= 0.6 and r['correct']
+        )
+        high_prob_total = sum(1 for r in results if r['predicted_probability'] >= 0.6)
+        high_prob_accuracy = high_prob_correct / high_prob_total * 100 if high_prob_total > 0 else 0
+
+        # ===== 新增评估指标 =====
+
+        # 4. 概率校准度 (Probability Calibration)
+        # 将预测概率分桶，计算每个桶内实际上涨频率
+        buckets = [
+            (0.0, 0.2, []),
+            (0.2, 0.4, []),
+            (0.4, 0.6, []),
+            (0.6, 0.8, []),
+            (0.8, 1.0, []),
+        ]
+        for r in results:
+            prob = r['predicted_probability']
+            actual = 1 if r['actual_up'] else 0
+            for low, high, bucket_data in buckets:
+                if low <= prob < high:
+                    bucket_data.append(actual)
+                    break
+
+        calibration = {}
+        for low, high, bucket_data in buckets:
+            if bucket_data:
+                avg_pred = (low + high) / 2
+                actual_rate = sum(bucket_data) / len(bucket_data)
+                calibration[f'{int(low*100)}-{int(high*100)}'] = {
+                    'predicted': round(avg_pred, 2),
+                    'actual': round(actual_rate, 2),
+                    'count': len(bucket_data)
+                }
+
+        # 计算校准误差 (Expected Calibration Error)
+        ece = 0
+        total_count = len(results)
+        for bucket_data in [b[2] for b in buckets]:
+            if bucket_data:
+                avg_pred = sum([results[i]['predicted_probability'] for i, r in enumerate(results) if r in bucket_data]) / len(bucket_data) if bucket_data else 0
+                actual_rate = sum(bucket_data) / len(bucket_data)
+                ece += len(bucket_data) / total_count * abs(avg_pred - actual_rate)
+
+        return {
+            'total_predictions': df_len,
+            'overall_accuracy': round(accuracy, 1),
+            'high_prob_accuracy': round(high_prob_accuracy, 1),
+            'high_prob_count': high_prob_total,
+            # 新增指标
+            'calibration': calibration,  # 概率校准表
+            'expected_calibration_error': round(ece, 4),  # ECE校准误差
+            'errors': errors[:10]  # 最多10个错误
+        }
+
+    def _get_actual_up(
+        self,
+        duckdb,
+        code: str,
+        date_str: str,
+        days: int
+    ) -> Optional[bool]:
+        """获取指定日期后N日是否上涨"""
+        try:
+            klines = duckdb.get_klines(code, start_date=date_str, limit=days + 1)
+            if klines and len(klines) >= 2:
+                start_price = klines[0].get('close', 0)
+                end_price = klines[-1].get('close', 0)
+                return end_price > start_price
+        except:
+            pass
+        return None
 
 
 # 全局实例

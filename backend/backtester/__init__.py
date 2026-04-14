@@ -1,5 +1,5 @@
 """
-回测验证模块 - Backtester v19.7
+回测验证模块 - Backtester v19.8
 ================================
 职责：历史数据回测、策略验证、绩效评估
 
@@ -9,6 +9,7 @@
 
 主要类：
 - Backtest: 回测引擎
+- PositionManager: 持仓管理器 v19.8新增
 - Strategy: 策略基类
 - StockFactor: 股票因子数据
 - BacktestResult: 回测结果
@@ -16,7 +17,12 @@
 - BacktestVerifier: 回测验证器 v19.7新增
 """
 
-from .backtest import Backtest
+from .backtest import (
+    Backtest,
+    BacktestEngine,
+    Position,
+    PositionManager,
+)
 from .strategies import (
     Strategy,
     StockFactor,
@@ -35,6 +41,7 @@ from .metrics import (
 from .reports import generate_report, save_report
 from .verification import (
     BacktestVerifier,
+    BacktestReportStore,
     SwapVerification,
     CPPredictionAccuracy,
     GainPredictionAccuracy,
@@ -44,11 +51,17 @@ from .verification import (
     verify_gain_prediction_accuracy,
     verify_probability_prediction_accuracy,
     get_verification_report,
+    save_verification_report,
+    save_backtest_report,
+    get_report_store,
 )
 
 __all__ = [
     # 回测引擎
     'Backtest',
+    'BacktestEngine',
+    'Position',
+    'PositionManager',
 
     # 策略
     'Strategy',
@@ -71,6 +84,7 @@ __all__ = [
 
     # 回测验证
     'BacktestVerifier',
+    'BacktestReportStore',
     'SwapVerification',
     'CPPredictionAccuracy',
     'GainPredictionAccuracy',
@@ -80,4 +94,7 @@ __all__ = [
     'verify_gain_prediction_accuracy',
     'verify_probability_prediction_accuracy',
     'get_verification_report',
+    'save_verification_report',
+    'save_backtest_report',
+    'get_report_store',
 ]

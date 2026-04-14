@@ -24,6 +24,9 @@ class StockInfo:
     daily_volume_20d: float = 0     # 近20日日均成交额（万元）
     turnover_rate: float = 0        # 换手率（%）
 
+    # 战力分数（由 engine 模块计算后回填，用于再平衡排序）
+    cp_score: float = 0            # 战力分数
+
     # 基本面
     is_st: bool = False             # 是否ST
     listing_days: int = 0           # 上市天数

@@ -90,7 +90,7 @@ class BacktestVerifier:
         # 尝试导入 CPHistoryStore
         if cp_history_store is None:
             try:
-                from data_manager.cp_history_store import get_cp_history_store
+                from backend.data_manager.cp_history_store import get_cp_history_store
                 self.cp_store = get_cp_history_store()
             except ImportError:
                 self.cp_store = None
@@ -337,7 +337,7 @@ class BacktestVerifier:
 
         # 获取预测数据
         try:
-            from data_manager.prediction_store import get_prediction_store
+            from backend.data_manager.prediction_store import get_prediction_store
             pred_store = get_prediction_store()
             predictions = pred_store.get_gain_predictions_by_date(date)
         except Exception:
@@ -362,11 +362,14 @@ class BacktestVerifier:
             code = pred['code']
             # 从K线获取实际涨幅
             try:
-                from data_manager.duckdb_store import get_klines
-                klines = get_klines(code, days=holding_days + 5)
-                if klines and len(klines) >= 2:
-                    start_price = klines[0].get('close', 0)
-                    end_price = klines[-1].get('close', 0)
+                from backend.data_manager.duckdb_store import get_klines
+                result = get_klines(code, days=holding_days + 5)
+                if result.success and result.data is not None and len(result.data) >= 2:
+                    df = result.data
+                    # K线按日期降序排列（最新在前）
+                    # iloc[0] = 最新，iloc[-1] = 最早
+                    start_price = df.iloc[-1].get('close', 0) or df.iloc[-1].get('adj_close', 0)
+                    end_price = df.iloc[0].get('close', 0) or df.iloc[0].get('adj_close', 0)
                     if start_price > 0:
                         actual_gain = (end_price - start_price) / start_price * 100
                         actual_gains.append({
@@ -405,7 +408,11 @@ class BacktestVerifier:
 
         # TOP N 预测组实际表现
         top_predicted = sorted(actual_gains, key=lambda x: x['predicted_gain'], reverse=True)[:top_n]
-        top_predicted_avg = sum(g['actual_gain'] for g in top_predicted) / len(top_predicted) if top_predicted else 0
+        top_predicted_avg_actual = sum(g['actual_gain'] for g in top_predicted) / len(top_predicted) if top_predicted else 0
+
+        # TOP N 实际涨幅最大的股票组平均预测涨幅
+        top_actual = sorted(actual_gains, key=lambda x: x['actual_gain'], reverse=True)[:top_n]
+        top_actual_avg_predicted = sum(g['predicted_gain'] for g in top_actual) / len(top_actual) if top_actual else 0
 
         return GainPredictionAccuracy(
             period=f"{date} ~ +{holding_days}d",
@@ -415,8 +422,8 @@ class BacktestVerifier:
             prediction_error=round(prediction_error, 2),
             mean_absolute_error=round(mae, 2),
             accuracy_direction=round(direction_accuracy, 2),
-            top_predicted_avg=round(top_predicted_avg, 2),
-            top_actual_avg=round(top_predicted_avg, 2)
+            top_predicted_avg=round(top_predicted_avg_actual, 2),
+            top_actual_avg=round(top_actual_avg_predicted, 2)
         )
 
     def verify_probability_prediction_accuracy(
@@ -440,7 +447,7 @@ class BacktestVerifier:
 
         # 获取预测数据
         try:
-            from data_manager.prediction_store import get_prediction_store
+            from backend.data_manager.prediction_store import get_prediction_store
             pred_store = get_prediction_store()
             predictions = pred_store.get_probability_predictions_by_date(date)
         except Exception:
@@ -466,11 +473,14 @@ class BacktestVerifier:
             code = pred['code']
             prob = pred.get('up_probability_5d', 0.5)
             try:
-                from data_manager.duckdb_store import get_klines
-                klines = get_klines(code, days=6)  # 5天+今天
-                if klines and len(klines) >= 2:
-                    start_price = klines[0].get('close', 0)
-                    end_price = klines[-1].get('close', 0)
+                from backend.data_manager.duckdb_store import get_klines
+                result = get_klines(code, days=6)  # 5天+今天
+                if result.success and result.data is not None and len(result.data) >= 2:
+                    df = result.data
+                    # K线按日期降序排列（最新在前）
+                    # iloc[0] = 最新，iloc[-1] = 最早
+                    start_price = df.iloc[-1].get('close', 0) or df.iloc[-1].get('adj_close', 0)
+                    end_price = df.iloc[0].get('close', 0) or df.iloc[0].get('adj_close', 0)
                     if start_price > 0:
                         actual_gain = (end_price - start_price) / start_price * 100
                         actual_rise = 1 if actual_gain > 0 else 0
@@ -493,11 +503,14 @@ class BacktestVerifier:
             code = pred['code']
             prob = pred.get('up_probability_5d', 0.5)
             try:
-                from data_manager.duckdb_store import get_klines
-                klines = get_klines(code, days=6)
-                if klines and len(klines) >= 2:
-                    start_price = klines[0].get('close', 0)
-                    end_price = klines[-1].get('close', 0)
+                from backend.data_manager.duckdb_store import get_klines
+                result = get_klines(code, days=6)
+                if result.success and result.data is not None and len(result.data) >= 2:
+                    df = result.data
+                    # K线按日期降序排列（最新在前）
+                    # iloc[0] = 最新，iloc[-1] = 最早
+                    start_price = df.iloc[-1].get('close', 0) or df.iloc[-1].get('adj_close', 0)
+                    end_price = df.iloc[0].get('close', 0) or df.iloc[0].get('adj_close', 0)
                     if start_price > 0:
                         actual_gain = (end_price - start_price) / start_price * 100
                         all_probs.append(prob)
@@ -506,6 +519,7 @@ class BacktestVerifier:
                 continue
 
         calibration_error = 0
+        direction_accuracy = 0
         if all_probs:
             # 按概率分组计算期望vs实际
             high_group = [(p, a) for p, a in zip(all_probs, all_actuals) if p >= 0.5]
@@ -516,8 +530,17 @@ class BacktestVerifier:
                 actual_high = sum(a for _, a in high_group) / len(high_group)
                 calibration_error = abs(expected_high - actual_high) * 100
 
-        total_samples = len(high_prob_actual_rises) + len(low_prob_actual_rises)
-        direction_accuracy = (len(high_prob_actual_rises) + len(low_prob_actual_rises)) / 2 / total_samples * 100 if total_samples > 0 else 0
+            if low_group:
+                expected_low = sum(p for p, _ in low_group) / len(low_group)
+                actual_low = sum(a for _, a in low_group) / len(low_group)
+                calibration_error = max(calibration_error, abs(expected_low - actual_low) * 100)
+
+            # 方向准确率：正确预测涨跌方向的次数 / 总次数
+            correct_direction = sum(
+                1 for p, a in zip(all_probs, all_actuals)
+                if (p >= 0.5 and a == 1) or (p < 0.5 and a == 0)
+            )
+            direction_accuracy = correct_direction / len(all_probs) * 100 if all_probs else 0
 
         return ProbabilityPredictionAccuracy(
             period=date,
@@ -624,3 +647,280 @@ def get_verification_report(db, days: int = 30) -> Dict:
     """便捷函数：获取验证报告"""
     verifier = BacktestVerifier(db)
     return verifier.get_verification_report(days)
+
+
+# ==================== 回测报告存档 ====================
+
+import sqlite3
+import threading
+from pathlib import Path
+
+
+class BacktestReportStore:
+    """回测报告存储 (SQLite)
+
+    存储位置: data/backtest_reports.db
+    保留策略: 1年或100条，超限自动删除最旧记录
+    """
+
+    _instance: Optional['BacktestReportStore'] = None
+    _lock = threading.Lock()
+
+    def __new__(cls, db_path: str = None):
+        """单例模式"""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self, db_path: str = None):
+        if self._initialized:
+            return
+
+        if db_path is None:
+            db_path = "/home/ailearn/projects/TradeSnake/data/backtest_reports.db"
+
+        self.db_path = db_path
+        self._write_lock = threading.Lock()
+        self._ensure_db()
+        self._initialized = True
+
+    def _ensure_db(self):
+        """确保数据库和表存在"""
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS verification_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_date TEXT NOT NULL,
+                report_type TEXT NOT NULL,
+                period TEXT,
+                total_stocks INTEGER,
+                content TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS backtest_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_date TEXT NOT NULL,
+                strategy_name TEXT NOT NULL,
+                start_date TEXT,
+                end_date TEXT,
+                total_return REAL,
+                annual_return REAL,
+                sharpe_ratio REAL,
+                calmar_ratio REAL,
+                max_drawdown REAL,
+                content TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_vr_date ON verification_reports(report_date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_br_date ON backtest_reports(report_date)")
+
+        conn.commit()
+        conn.close()
+
+    def save_verification_report(self, report: Dict, report_type: str = 'general') -> str:
+        """保存验证报告
+
+        Args:
+            report: 报告内容字典
+            report_type: 报告类型 ('general', 'swap', 'cp_accuracy', 'gain_accuracy', 'prob_accuracy')
+
+        Returns:
+            报告ID
+        """
+        with self._write_lock:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            import json
+            content = json.dumps(report, ensure_ascii=False, default=str)
+
+            cursor.execute("""
+                INSERT INTO verification_reports (report_date, report_type, period, total_stocks, content)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                report.get('report_date', datetime.now().strftime('%Y-%m-%d')),
+                report_type,
+                report.get('period', ''),
+                report.get('total_stocks', 0),
+                content
+            ))
+
+            report_id = str(cursor.lastrowid)
+
+            # 清理超限记录
+            self._cleanup_old_records(cursor)
+
+            conn.commit()
+            conn.close()
+
+            return report_id
+
+    def save_backtest_report(self, result, content: str = None) -> str:
+        """保存回测报告
+
+        Args:
+            result: BacktestResult 对象
+            content: 报告原文（Markdown格式）
+
+        Returns:
+            报告ID
+        """
+        with self._write_lock:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            if content is None:
+                from .reports import generate_report
+                content = generate_report(result)
+
+            cursor.execute("""
+                INSERT INTO backtest_reports
+                (report_date, strategy_name, start_date, end_date, total_return, annual_return,
+                 sharpe_ratio, calmar_ratio, max_drawdown, content)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                datetime.now().strftime('%Y-%m-%d'),
+                result.strategy_name,
+                result.start_date,
+                result.end_date,
+                result.total_return,
+                result.annual_return,
+                result.sharpe_ratio,
+                result.calmar_ratio,
+                result.max_drawdown,
+                content
+            ))
+
+            report_id = str(cursor.lastrowid)
+
+            # 清理超限记录
+            self._cleanup_old_records(cursor)
+
+            conn.commit()
+            conn.close()
+
+            return report_id
+
+    def _cleanup_old_records(self, cursor):
+        """清理超限记录（保留1年或100条）"""
+        # 验证报告：保留100条
+        cursor.execute("SELECT COUNT(*) FROM verification_reports")
+        count = cursor.fetchone()[0]
+        if count > 100:
+            cursor.execute("""
+                DELETE FROM verification_reports
+                WHERE id IN (
+                    SELECT id FROM verification_reports
+                    ORDER BY created_at ASC
+                    LIMIT ?
+                )
+            """, (count - 100,))
+
+        # 删除1年前的记录
+        one_year_ago = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+        cursor.execute("DELETE FROM verification_reports WHERE report_date < ?", (one_year_ago,))
+        cursor.execute("DELETE FROM backtest_reports WHERE report_date < ?", (one_year_ago,))
+
+    def get_recent_reports(self, report_type: str = None, limit: int = 10) -> List[Dict]:
+        """获取最近的报告
+
+        Args:
+            report_type: 报告类型过滤（None=全部）
+            limit: 返回数量
+
+        Returns:
+            报告列表
+        """
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        if report_type:
+            cursor.execute("""
+                SELECT * FROM verification_reports
+                WHERE report_type = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (report_type, limit))
+        else:
+            cursor.execute("""
+                SELECT * FROM verification_reports
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (limit,))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [dict(row) for row in rows]
+
+    def get_backtest_reports(self, limit: int = 10) -> List[Dict]:
+        """获取回测报告"""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id, report_date, strategy_name, start_date, end_date,
+                   total_return, annual_return, sharpe_ratio, calmar_ratio, max_drawdown
+            FROM backtest_reports
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [dict(row) for row in rows]
+
+
+# 全局单例
+_report_store: Optional[BacktestReportStore] = None
+
+
+def get_report_store() -> BacktestReportStore:
+    """获取回测报告存储单例"""
+    global _report_store
+    if _report_store is None:
+        _report_store = BacktestReportStore()
+    return _report_store
+
+
+def save_verification_report(report: Dict, report_type: str = 'general') -> str:
+    """保存验证报告（便捷函数）
+
+    Args:
+        report: 报告内容字典
+        report_type: 报告类型
+
+    Returns:
+        报告ID
+    """
+    store = get_report_store()
+    return store.save_verification_report(report, report_type)
+
+
+def save_backtest_report(result, content: str = None) -> str:
+    """保存回测报告（便捷函数）
+
+    Args:
+        result: BacktestResult 对象
+        content: 报告原文
+
+    Returns:
+        报告ID
+    """
+    store = get_report_store()
+    return store.save_backtest_report(result, content)
