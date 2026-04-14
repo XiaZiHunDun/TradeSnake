@@ -21,16 +21,20 @@
 import os
 import json
 import time
+import logging
 import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 from collections import OrderedDict
 
+logger = logging.getLogger(__name__)
+
 # 导入现有模块
 from .cache import CacheManager, get_cache_manager, DataValidator, DataQualityScorer, TTL_CONFIG
 from .fetcher import (
     StockDataFetcher, MarketDataFetcher, FinancialDataFetcher, StockListFetcher,
+    IndexDataFetcher,
     get_stock_data_api as fetcher_get_stock_data_api,
     get_single_stock_data as fetcher_get_single_stock_data
 )
@@ -339,6 +343,7 @@ class DataManager:
         self._market_fetcher = MarketDataFetcher()
         self._financial_fetcher = FinancialDataFetcher()
         self._stock_list_fetcher = StockListFetcher()
+        self._index_fetcher = IndexDataFetcher()
 
         # Tushare Provider (如果可用)
         self._tushare = None
@@ -378,6 +383,53 @@ class DataManager:
             Dict: 股票数据
         """
         return fetcher_get_single_stock_data(code)
+
+    def update_single_stock(self, code: str) -> bool:
+        """
+        更新单只股票数据（强制刷新）
+
+        用于 UpdateScheduler 的差异化池更新策略。
+
+        Args:
+            code: 股票代码
+
+        Returns:
+            bool: 是否更新成功
+        """
+        try:
+            # 1. 使缓存失效
+            self.invalidate('realtime', code)
+            self.invalidate('financial', code)
+
+            # 2. 获取最新数据（不使用缓存）
+            stock_data = fetcher_get_single_stock_data(code)
+            if stock_data is None:
+                logger.warning(f"更新股票 {code} 失败：获取数据为空")
+                return False
+
+            # 3. 获取财务数据（不使用缓存）
+            financial_data = self._financial_fetcher.get_financial_data(code, use_cache=False)
+            if financial_data:
+                # 验证并缓存财务数据
+                validated, warnings = self._validator.validate(financial_data)
+                if warnings:
+                    validated['_warnings'] = warnings
+                quality = self._quality_scorer.calculate_quality_score(validated)
+                validated['_quality'] = quality
+                self._cache.set('financial', validated, code, source='financial_fetcher')
+
+            # 4. 更新市场数据缓存
+            market_data = self._market_fetcher.get_market_data([code], use_cache=False)
+            if market_data:
+                cache_key = f"market_{hash((code,))}"
+                self._cache.set('market', market_data[0] if market_data else {}, code, source='market_fetcher')
+
+            logger.debug(f"更新股票 {code} 成功")
+            return True
+
+        except Exception as e:
+            logger.error(f"更新股票 {code} 失败: {e}")
+            return False
 
     def get_market_data(self, codes: List[str], use_cache: bool = True) -> List[Dict]:
         """
@@ -468,6 +520,35 @@ class DataManager:
             return records
 
         return []
+
+    def get_index_constituents(self, use_cache: bool = True, force_refresh: bool = False) -> Dict[str, List[Dict]]:
+        """
+        获取三大指数成分股
+
+        Args:
+            use_cache: 是否使用缓存
+            force_refresh: 是否强制刷新
+
+        Returns:
+            {
+                "hs300": [{"code": "600000", "name": "浦发银行"}, ...],
+                "zz500": [...],
+                "zz1000": [...],
+            }
+        """
+        cache_key = "index_constituents"
+        if use_cache and not force_refresh:
+            cached = self._cache.get('static', cache_key)
+            if cached:
+                return cached
+
+        data = self._index_fetcher.get_index_constituents(force_refresh=force_refresh)
+
+        if data:
+            self._cache.set('static', cache_key, data)
+            return data
+
+        return {}
 
     def get_tushare_data(self, code: str, data_type: str = 'daily', start_date: str = None, end_date: str = None) -> Optional[Dict]:
         """
