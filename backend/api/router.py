@@ -538,8 +538,16 @@ async def refresh_data(limit: int = Query(200, ge=1, le=500)):
             cp_engine.stocks = []
 
             for data in stocks_data:
+                # 标准化代码：去除 sh/sz 前缀
+                raw_code = data.get('code', '')
+                code = raw_code
+                if code.startswith('sh'):
+                    code = code[2:]
+                elif code.startswith('sz'):
+                    code = code[2:]
+
                 stock = create_stock_from_raw(
-                    code=data.get('code', ''),
+                    code=code,
                     name=data.get('name', ''),
                     price=data.get('price', 0),
                     pe=data.get('pe', 0),
