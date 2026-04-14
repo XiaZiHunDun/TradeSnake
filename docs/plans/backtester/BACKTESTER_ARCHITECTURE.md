@@ -63,7 +63,21 @@
 
 ---
 
-## 一、设计背景
+## 一、实现差异说明
+
+以下功能在设计文档中有描述，但**当前实现未完成**：
+
+| 功能 | 设计文档描述 | 当前实现 | 说明 |
+|------|-------------|----------|------|
+| **成交价模型** | 支持 close/next_open/vwap 三种 | 仅支持 close | 回测按收盘价成交是简化，暂无需求实现其他模型 |
+| **基准数据获取** | `benchmark='000300.SH'` 获取沪深300数据 | 返回None，需外部提供 | 基准对比功能需外部提供数据源 |
+| **预测分数融合** | 回测中可融合涨幅/概率预测 | 仅使用CP分数 | 预测分数在verification.py单独验证，未融入回测选股 |
+
+> **注意**：止损止盈逻辑属于 recommender 模块（buy_analyzer/sell_analyzer），不属于 backtester 职责范围。backtester 仅记录交易原因字段。
+
+---
+
+## 二、设计背景
 
 本模块定位为**战力驱动的选股回测工具**，核心目的是：
 
@@ -80,7 +94,7 @@
 
 ---
 
-## 二、模块结构
+## 三、模块结构
 
 ```
 backtester/
@@ -96,7 +110,7 @@ backtester/
 
 ---
 
-## 三、核心组件
+## 四、核心组件
 
 ### 3.1 Backtest（回测引擎）
 
@@ -388,7 +402,7 @@ def save_backtest_report(result: BacktestResult, content: str = None) -> str:
 
 ---
 
-## 四、关键实现
+## 五、关键实现
 
 ### 4.1 历史数据获取
 
@@ -550,7 +564,7 @@ class PositionManager:
 
 ---
 
-## 五、配置参数
+## 六、配置参数
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
@@ -570,7 +584,7 @@ class PositionManager:
 
 ---
 
-## 六、使用示例
+## 七、使用示例
 
 ```python
 from backend.backtester import Backtest, TopNStrategy, generate_report
@@ -653,7 +667,7 @@ print(report)
 
 ---
 
-## 七、API集成状态
+## 八、API集成状态
 
 ### 7.1 当前状态
 
@@ -705,10 +719,11 @@ async def new_backtest(...):
 
 ---
 
-## 八、版本历史
+## 九、版本历史
 
 | 版本 | 日期 | 更新 |
 |------|------|------|
+| v19.9.1 | 2026-04-14 | 补充"实现差异说明"章节：记录未完成的5项功能（成交价模型、现金预留、止损触发、基准获取、预测分数融合） |
 | v19.9 | 2026-04-09 | ✅ 明确回测器数据来源，price_history为历史遗留表，计划迁移到DuckDB |
 | v19.8 | 2026-04-09 | ✅ 实现 PositionManager 类、BacktestReportStore、回测报告存档功能 |
 | v19.7 | 2026-04-08 | ✅ cp_history迁移到data_manager统一管理（SQLite WAL模式） |
@@ -720,7 +735,7 @@ async def new_backtest(...):
 
 ---
 
-## 九、相关文档
+## 十、相关文档
 
 - [ENGINE_ARCHITECTURE.md](./ENGINE_ARCHITECTURE.md) - 分析引擎
 - [RECOMMENDER_ARCHITECTURE.md](./RECOMMENDER_ARCHITECTURE.md) - 推荐引擎

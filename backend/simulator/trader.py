@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 from .database import get_db
 from .account import Account, COMMISSION_RATE, MIN_COMMISSION, STAMP_TAX_RATE, TRANSFER_FEE_RATE
 from .portfolio import Portfolio
+from .risk_control import RiskControl
 
 
 class OrderError(Exception):
@@ -88,9 +89,11 @@ class Trader:
                 return {'success': False, 'error': '涨停无法买入'}
             exec_price = price
 
-        # 风控检查
-        can_buy, reason = self.account.can_buy(exec_price, quantity)
-        if not can_buy:
+        # 风控检查（使用RiskControl.check_all()，包含所有风控规则）
+        can_trade, reason = RiskControl.check_all(
+            'buy', code, quantity, exec_price, self.account, self.portfolio
+        )
+        if not can_trade:
             return {'success': False, 'error': reason}
 
         # 计算冻结金额
@@ -211,12 +214,7 @@ class Trader:
 
         name = stock.get('name', code)
 
-        # T+1检查
-        can_sell, reason = self.account.can_sell(code, quantity)
-        if not can_sell:
-            return {'success': False, 'error': reason}
-
-        # 确定成交价
+        # 确定成交价（需要先获取价格才能进行风控检查）
         if order_type == 'market':
             try:
                 exec_price = self.get_market_price(code, 'sell')
@@ -228,6 +226,13 @@ class Trader:
             if stock.get('is_limit_down'):
                 return {'success': False, 'error': '跌停无法卖出'}
             exec_price = price
+
+        # 风控检查（使用RiskControl.check_all()，包含T+1检查、持仓检查等所有风控规则）
+        can_trade, reason = RiskControl.check_all(
+            'sell', code, quantity, exec_price, self.account, self.portfolio
+        )
+        if not can_trade:
+            return {'success': False, 'error': reason}
 
         # 市价单立即成交
         if order_type == 'market':

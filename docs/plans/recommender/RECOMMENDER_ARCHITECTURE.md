@@ -54,13 +54,23 @@
 
 | 预测维度 | 融合方式 | 说明 |
 |----------|----------|------|
-| **涨幅预测** | predicted_gain_5d × confidence 加权 | 预测涨幅高+置信度高 → 排名靠前 |
-| **上涨概率** | up_probability_5d × confidence 加权 | 上涨概率高+置信度高 → 排名靠前 |
+| **涨幅预测** | (predicted_gain_5d / 50) × confidence 加权 | 归一化到0-1，置信度调节 |
+| **上涨概率** | up_probability_5d × confidence 加权 | 已是0-1范围，置信度调节 |
 
 #### 融合公式
 
 ```
-综合得分 = 战力权重 × total_cp + 涨幅预测权重 × predicted_gain_5d + 上涨概率权重 × up_probability_5d
+归一化处理：
+  cp_norm = total_cp / 100          # 100分制 → 0-1
+  gain_norm = predicted_gain_5d / 50  # 50%以上 → 1（上限1.0）
+  prob_norm = up_probability_5d      # 已是0-1
+
+综合得分 = 战力权重 × cp_norm + 涨幅权重 × gain_norm × confidence + 上涨概率权重 × prob_norm × confidence
+```
+
+**示例**（balanced配置，假设confidence=0.8）：
+```
+得分 = 0.4 × (total_cp/100) + 0.35 × (gain/50) × 0.8 + 0.25 × prob × 0.8
 ```
 
 **权重配置**（可调整）：
@@ -692,6 +702,7 @@ v18.x: 完善风控、流动性、财报季
 
 | 版本 | 日期 | 更新 |
 |------|------|------|
+| v18.6 | 2026-04-14 | 补充融合公式：归一化处理(cp/100, gain/50)、置信度乘数×confidence |
 | v18.5 | 2026-04-09 | ✅ 预测融合(v19.8)：PredictionFusion实现战力与涨幅/概率预测融合；删除PositionCalculator死代码；BuySignal新增预测字段 |
 | v18.4 | 2026-04-07 | ✅ P0全部完成：三大场景设计（换股+纯买入+纯卖出），BuyAnalyzer/SellAnalyzer/Kelly仓位/StockFilter五大过滤器/prompts.py |
 | v18.3 | 2026-04-07 | 强化设计：涨跌停过滤、滑点成本、prompts.py |

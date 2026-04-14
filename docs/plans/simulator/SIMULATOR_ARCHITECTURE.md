@@ -372,10 +372,23 @@ Trader.cancel_order(order_id)
 | GET | `/api/trades` | 成交历史 |
 | GET | `/api/stats/summary` | 交易统计 |
 
-## 七、版本历史
+---
+
+## 七、实现差异说明
+
+| 项目 | 设计文档描述 | 状态 |
+|------|-------------|------|
+| **RiskControl.check_all()调用** | Trader.buy/sell应在执行前调用`RiskControl.check_all()`进行综合风控检查 | ✅ **已修复** (v19.8.1) |
+
+> **说明**：`RiskControl.check_all()`现已整合到Trader.buy()和Trader.sell()中，包含：资金检查、持仓30%上限检查、每日买入80%限额检查、每日10次交易限制、T+1检查、涨跌停拦截。
+
+---
+
+## 八、版本历史
 
 | 版本 | 日期 | 更新 |
 |------|------|------|
+| v19.8.1 | 2026-04-14 | ✅ 修复RiskControl.check_all()未被调用问题：Trader.buy/sell()现使用RiskControl.check_all()进行综合风控检查 |
 | v19.8 | 2026-04-09 | ✅ 修复导入路径错误（TRADE_COST）、盈亏计算使用FIFO匹配、最大回撤使用快照表计算 |
 | v19.7 | 2026-04-08 | ✅ 每日持仓快照记录（holding_snapshots表）、换股效果验证、战力预测准确性分析 |
 | v19.1 | 2026-04-07 | ✅ 完整实现：Stats + RiskControl模块、市价单最新价成交、限价单触发机制 |
@@ -384,7 +397,7 @@ Trader.cancel_order(order_id)
 | v18.5 | 2026-04-07 | 增强：委托单/限价单/撤单/冻结资金 |
 | v18.4 | 2026-04-07 | 初始完整实现 |
 
-## 八、相关文档
+## 九、相关文档
 
 - [ENGINE_ARCHITECTURE.md](./ENGINE_ARCHITECTURE.md) - 分析引擎
 - [RECOMMENDER_ARCHITECTURE.md](./RECOMMENDER_ARCHITECTURE.md) - 推荐引擎
