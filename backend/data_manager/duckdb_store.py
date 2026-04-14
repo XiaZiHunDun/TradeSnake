@@ -285,19 +285,23 @@ class DuckDBStore:
 
         return total_success, total_errors
 
-        return total_success, total_errors
-
     def insert_from_dataframe(self, df: pd.DataFrame, table: str = 'daily_kline') -> int:
         """
         从DataFrame批量插入
 
         Args:
             df: 必须包含 code, trade_date, open, high, low, close, volume 字段
-            table: 表名
+            table: 表名（白名单验证）
 
         Returns:
             插入行数
         """
+        # 白名单验证，防止 SQL 注入
+        ALLOWED_TABLES = {'daily_kline', 'minute_kline', 'trade_cal', 'ex_right_factor'}
+        if table not in ALLOWED_TABLES:
+            print(f"Insert from DataFrame error: Invalid table name: {table}")
+            return 0
+
         if df.empty:
             return 0
 
@@ -460,33 +464,40 @@ class DuckDBStore:
             code: 股票代码
             days: 均线天数
             end_date: 计算截止日期
-            field: 计算字段
+            field: 计算字段（白名单验证）
 
         Returns:
             均线值
         """
+        # 白名单验证，防止 SQL 注入
+        ALLOWED_FIELDS = {'close', 'open', 'high', 'low', 'volume', 'amount',
+                          'change_pct', 'turnover_rate', 'pe', 'pb'}
+        if field not in ALLOWED_FIELDS:
+            return QueryResult(success=False, error=f"Invalid field: {field}")
+
         try:
             with self._get_read_conn() as conn:
+                sql_field = field  # 已通过白名单验证
                 if end_date:
-                    df = conn.execute("""
+                    df = conn.execute(f"""
                         WITH ranked AS (
-                            SELECT code, trade_date, %s,
+                            SELECT code, trade_date, {sql_field},
                                    ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_date DESC) as rn
                             FROM daily_kline
                             WHERE code = ? AND trade_date <= ?
                         )
-                        SELECT AVG(%s) as ma FROM ranked WHERE rn <= ?
-                    """ % (field, field), [code, end_date, days]).df()
+                        SELECT AVG({sql_field}) as ma FROM ranked WHERE rn <= ?
+                    """, [code, end_date, days]).df()
                 else:
-                    df = conn.execute("""
+                    df = conn.execute(f"""
                         WITH ranked AS (
-                            SELECT code, trade_date, %s,
+                            SELECT code, trade_date, {sql_field},
                                    ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_date DESC) as rn
                             FROM daily_kline
                             WHERE code = ?
                         )
-                        SELECT AVG(%s) as ma FROM ranked WHERE rn <= ?
-                    """ % (field, field), [code, days]).df()
+                        SELECT AVG({sql_field}) as ma FROM ranked WHERE rn <= ?
+                    """, [code, days]).df()
 
                 if df.empty or df.iloc[0]['ma'] is None:
                     return QueryResult(success=True, data=pd.DataFrame({'ma': [None]}), row_count=1)
@@ -960,13 +971,16 @@ class HistoryMigrator:
 # ==================== 全局单例 ====================
 
 _duckdb_store = None
+_duckdb_store_lock = threading.Lock()
 
 
 def get_duckdb_store() -> DuckDBStore:
-    """获取DuckDB存储管理器单例"""
+    """获取DuckDB存储管理器单例（线程安全）"""
     global _duckdb_store
     if _duckdb_store is None:
-        _duckdb_store = DuckDBStore()
+        with _duckdb_store_lock:
+            if _duckdb_store is None:  # 二次检查
+                _duckdb_store = DuckDBStore()
     return _duckdb_store
 
 

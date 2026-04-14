@@ -18,6 +18,19 @@ from backend.engine.gain_predictor import GainPrediction
 from backend.engine.probability_predictor import ProbabilityPrediction
 
 
+def _safe_parse_interval(value: Optional[str], default: Tuple[float, float] = (0.0, 0.0)) -> Tuple[float, float]:
+    """安全解析 confidence_interval 字符串，防止格式错误导致崩溃"""
+    if not value:
+        return default
+    try:
+        parsed = ast.literal_eval(value)
+        if isinstance(parsed, tuple) and len(parsed) == 2:
+            return (float(parsed[0]), float(parsed[1]))
+        return default
+    except (ValueError, SyntaxError):
+        return default
+
+
 @dataclass
 class FusionResult:
     """融合结果"""
@@ -244,8 +257,8 @@ class PredictionFusion:
                     predicted_gain_3d=latest['predicted_gain_3d'],
                     predicted_gain_5d=latest['predicted_gain_5d'],
                     confidence=latest['confidence'],
-                    confidence_interval_3d=ast.literal_eval(latest['confidence_interval_3d']) if latest.get('confidence_interval_3d') else (0, 0),
-                    confidence_interval_5d=ast.literal_eval(latest['confidence_interval_5d']) if latest.get('confidence_interval_5d') else (0, 0),
+                    confidence_interval_3d=_safe_parse_interval(latest.get('confidence_interval_3d')),
+                    confidence_interval_5d=_safe_parse_interval(latest.get('confidence_interval_5d')),
                     features=latest.get('features', {}),
                     model_version=latest.get('model_version', 'rule_v19.8')
                 )
