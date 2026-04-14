@@ -108,7 +108,7 @@ class SwapCalculator:
         daily_profit = swap_amount * daily_return
 
         if daily_profit <= 0:
-            return 999
+            return -1  # 无法计算（收益非正）
 
         breakeven = int(trade_cost / daily_profit)
 

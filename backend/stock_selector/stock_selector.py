@@ -18,9 +18,6 @@ from .financial_watcher import FinancialWatcher, FinancialWarning
 from .types import StockInfo, StockSnapshot
 from . import config
 
-# 延迟导入避免循环依赖
-_recommender_callback_type: Optional[type] = None
-
 logger = logging.getLogger(__name__)
 
 

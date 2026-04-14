@@ -11,7 +11,7 @@ from .filters import StockFilter
 from .swap_calculator import SwapCalculator
 from .buy_analyzer import BuyAnalyzer
 from .sell_analyzer import SellAnalyzer
-from .fusion import PredictionFusion, FusionResult
+from .fusion import PredictionFusion
 from .prompts import generate_stock_prompt
 
 

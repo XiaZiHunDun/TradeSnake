@@ -206,6 +206,8 @@ class BuyAnalyzer:
         if price <= 0:
             return 0
         shares = int(amount / price / 100) * 100
+        if shares == 0:
+            return 0  # 金额不足以买1手
         return max(100, shares)  # 最小买入1手
 
     @classmethod
