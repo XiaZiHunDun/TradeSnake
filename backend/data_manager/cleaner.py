@@ -15,6 +15,7 @@
 """
 
 import math
+import re
 import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
@@ -80,11 +81,30 @@ def normalize_date(value: Any) -> Optional[str]:
 
 
 def normalize_code(value: Any) -> Optional[str]:
-    """标准化股票代码"""
+    """标准化股票代码（支持sh/sz前缀、.sz/.sh后缀等）
+
+    Examples:
+        >>> normalize_code("600519")
+        '600519'
+        >>> normalize_code("sh600519")
+        '600519'
+        >>> normalize_code("000001.sz")
+        '000001'
+    """
     if value is None:
         return None
-    code = str(value).strip().zfill(6)
-    return code if len(code) == 6 else None
+    code = str(value).strip()
+    # 移除后缀（.sh/.sz/.bj等）
+    if "." in code:
+        code = code.split(".")[0]
+    # 移除前导标记（sh/sz等）
+    if code.lower() in ("sh", "sz", "bj"):
+        return None
+    # 只保留数字
+    code = re.sub(r"\D", "", code)
+    if not code:
+        return None
+    return code.zfill(6) if len(code) <= 6 else None
 
 
 def is_valid_trade_date(date_str: str) -> bool:
