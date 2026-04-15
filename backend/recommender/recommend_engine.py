@@ -5,7 +5,7 @@
 """
 
 from typing import List, Dict, Optional, Set
-from backend.engine import CPEngine, StockCP, TradeDecision
+from backend.engine import StockCP, TradeDecision
 
 from .filters import StockFilter
 from .swap_calculator import SwapCalculator
@@ -107,7 +107,6 @@ class RecommendEngine:
     """
 
     def __init__(self):
-        self.engine = CPEngine()
         self.stock_filter = StockFilter()
         self.swap_calculator = SwapCalculator()
 
@@ -372,66 +371,6 @@ class RecommendEngine:
             market_mode=market_mode
         )
         return SellAnalyzer._to_dict(signal)
-
-    # ==================== 原有方法（保持兼容） ====================
-
-    def get_recommendations(
-        self,
-        category: str = 'value',
-        risk_preference: str = 'balanced',
-        exclude_holdings: bool = True,
-        holdings: List[str] = None,
-        limit: int = 10
-    ) -> List[Dict]:
-        """获取推荐股票（原有接口，保持兼容）"""
-        if holdings is None:
-            holdings = []
-
-        stocks = self.engine.stocks
-        if exclude_holdings and holdings:
-            stocks = [s for s in stocks if s.code not in holdings]
-
-        # 排序
-        if category == 'value':
-            sorted_stocks = sorted(stocks, key=lambda x: x.value_score, reverse=True)
-        elif category == 'growth':
-            sorted_stocks = sorted(stocks, key=lambda x: x.growth_score, reverse=True)
-        elif category == 'momentum':
-            sorted_stocks = sorted(stocks, key=lambda x: x.momentum_score, reverse=True)
-        elif category == 'quality':
-            sorted_stocks = sorted(stocks, key=lambda x: x.quality_score, reverse=True)
-        else:
-            sorted_stocks = sorted(stocks, key=lambda x: x.total_cp, reverse=True)
-
-        # 风险过滤
-        if risk_preference == 'conservative':
-            sorted_stocks = [s for s in sorted_stocks if s.risk_score < 30]
-        elif risk_preference == 'balanced':
-            sorted_stocks = [s for s in sorted_stocks if s.risk_score < 50]
-
-        result = []
-        for stock in sorted_stocks[:limit]:
-            result.append({
-                'code': stock.code,
-                'name': stock.name,
-                'total_cp': round(stock.total_cp, 1),
-                'growth_score': round(stock.growth_score, 1),
-                'value_score': round(stock.value_score, 1),
-                'quality_score': round(stock.quality_score, 1),
-                'momentum_score': round(stock.momentum_score, 1),
-                'risk_score': stock.risk_score,
-                'risk_level': stock.get_risk_level(),
-                'pe': stock.pe,
-                'roe': stock.roe,
-                'net_profit_growth': stock.net_profit_growth,
-                'change_pct': stock.change_pct,
-                'price': stock.price,
-                'board_type': stock.board_type,
-                'board_name': stock.board_name,
-                'can_trade_newbie': stock.can_trade_newbie
-            })
-
-        return result
 
 
 # 单例
