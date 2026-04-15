@@ -38,6 +38,10 @@ from backend.recommender.recommend_engine import RecommendEngine
 from backend.backtester.backtest import BacktestEngine
 from backend.data_manager.fetcher import get_stock_data_api, get_single_stock_data
 from backend.data_manager.cache import get_cache_manager
+def get_stock_selector():
+    """延迟导入避免循环依赖"""
+    from backend.api.main import get_stock_selector as _get
+    return _get()
 
 router = APIRouter()
 
@@ -534,7 +538,47 @@ async def refresh_data(limit: int = Query(200, ge=1, le=500)):
 
     async with _cp_lock:
         try:
-            stocks_data = get_stock_data_api(limit=limit)
+            # 获取 StockSelector 的核心池+活跃池股票代码集合
+            selector = get_stock_selector()
+            analysable_codes = set(selector.get_all_analysable_codes())
+            print(f"[刷新] StockSelector 可分析股票: {len(analysable_codes)} 只")
+
+            # 获取足够多的股票数据（按成交额排序）
+            all_stocks_data = get_stock_data_api(limit=1500)
+            print(f"[刷新] 获取股票数据: {len(all_stocks_data)} 只")
+
+            # 过滤出可分析股票
+            stocks_data = []
+            found_codes = set()
+            missing_codes = set()
+
+            for data in all_stocks_data:
+                raw_code = data.get('code', '')
+                code = raw_code
+                if code.startswith('sh'):
+                    code = code[2:]
+                elif code.startswith('sz'):
+                    code = code[2:]
+
+                if code in analysable_codes:
+                    stocks_data.append(data)
+                    found_codes.add(code)
+
+            missing_codes = analysable_codes - found_codes
+            if missing_codes:
+                print(f"[刷新] 警告: {len(missing_codes)} 只可分析股票未获取到数据")
+                # 尝试逐个获取缺失的股票
+                for code in list(missing_codes)[:100]:  # 最多补100只
+                    try:
+                        single = get_single_stock_data(code)
+                        if single:
+                            stocks_data.append(single)
+                    except:
+                        pass
+
+            print(f"[刷新] 最终加载: {len(stocks_data)} 只")
+
+            # 清空并重新加载
             cp_engine.stocks = []
 
             for data in stocks_data:

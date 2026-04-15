@@ -16,9 +16,10 @@ import time
 import argparse
 from datetime import datetime, timedelta
 
-# 设置代理
-os.environ['http_proxy'] = 'http://192.168.13.218:10808'
-os.environ['https_proxy'] = 'http://192.168.13.218:10808'
+# 设置代理（支持环境变量覆盖）
+_PROXY = os.environ.get('https_proxy') or os.environ.get('HTTPS_PROXY') or 'http://192.168.13.218:10808'
+os.environ['http_proxy'] = _PROXY
+os.environ['https_proxy'] = _PROXY
 
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

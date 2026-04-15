@@ -31,10 +31,10 @@ def calculate_features(klines: List[Dict]) -> Dict[str, float]:
     if not klines or len(klines) < 2:
         return _empty_features()
 
-    closes = [k.get('close', 0) for k in klines]
-    highs = [k.get('high', 0) for k in klines]
-    lows = [k.get('low', 0) for k in klines]
-    volumes = [k.get('volume', 0) for k in klines]
+    closes = [float(k.get('close', 0)) for k in klines]
+    highs = [float(k.get('high', 0)) for k in klines]
+    lows = [float(k.get('low', 0)) for k in klines]
+    volumes = [float(k.get('volume', 0)) for k in klines]
 
     features = {}
 
