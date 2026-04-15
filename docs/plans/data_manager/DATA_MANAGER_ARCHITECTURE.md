@@ -660,10 +660,135 @@ record_tushare_points(10)
 
 ---
 
-## 八、版本历史
+## 八、数据源问题排查 (v1.0)
+
+> 记录实际遇到的数据源获取问题及解决方案
+
+### 8.1 东方财富API不稳定
+
+**问题描述:**
+```
+获取市值排名失败: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443):
+Max retries exceeded with url: /api/qt/clist/get?...
+(Caused by ProxyError('Unable to connect to proxy', RemoteDisconnected(...)))
+```
+
+**根本原因:**
+1. 东方财富行情API域名有多个CDN节点（如 `push2.eastmoney.com`、`82.push2.eastmoney.com`）
+2. 部分CDN节点通过代理访问时存在SSL兼容性问题（`unexpected eof while reading`）
+3. 直连无法访问（需要代理）
+
+**影响范围:**
+- `StockListFetcher.get_market_cap_leaders()` - 获取成交额排名
+- `akshare.stock_zh_a_spot_em()` - akshare东方财富实时行情
+
+**当前处理:**
+- `fetcher.py` 中 `get_market_cap_leaders()` 已添加3次重试 + 2/4秒指数退避
+- 失败时返回空列表，背景刷新降级为随机抽样模式
+
+**代理配置:**
+```python
+# 优先使用环境变量，否则用默认值
+_PROXY = os.environ.get('https_proxy') or os.environ.get('HTTPS_PROXY') or 'http://192.168.13.218:10808'
+os.environ['http_proxy'] = _PROXY
+os.environ['https_proxy'] = _PROXY
+```
+
+**相关文件:**
+- `backend/data_manager/providers/tushare.py` - 代理配置
+- `backend/data/tushare_provider.py` - 代理配置
+- `backend/data/data_provider.py` - 代理配置
+- `backend/data/data_enhancer.py` - 代理配置
+- `backend/data_manager/fetcher.py` - 重试逻辑
+
+### 8.2 Baostock连接频繁login/logout
+
+**问题描述:**
+1500只股票刷新时，日志中产生大量 `login success! / logout success!` 输出（3000+次），拖慢整体刷新速度（50+分钟）。
+
+**根本原因:**
+`_fetch_from_baostock()` 对每只股票执行独立的 `bs.login()` → `query_xxx()` → `bs.logout()` 对。
+
+**解决方案:**
+- 新增 `BaoStockSession` 类：封装单次会话，支持自动重连
+- 新增 `BaoStockPool` 类：5连接池，每连接最大复用500次
+- 改用单例 `get_financial_fetcher()` 确保连接池复用
+
+**效果:**
+- 1500只股票：3000+次 login/logout → **仅5次**
+- 日志输出大幅减少
+- 刷新时间显著缩短
+
+**相关文件:**
+- `backend/data_manager/fetcher.py` - `BaoStockSession`、`BaoStockPool` 类
+
+### 8.3 SQLite数据库损坏
+
+**问题描述:**
+```
+sqlite3.OperationalError: database disk image is malformed
+```
+
+**根本原因:**
+数据库文件在写入过程中被中断（如进程崩溃、磁盘满）。
+
+**解决方案:**
+```bash
+# 1. 备份损坏的数据库
+cp tradesnake.db tradesnake.db.corrupted
+
+# 2. 使用.recover提取数据
+sqlite3 tradesnake.db ".recover" > /tmp/tradesnake_recover.sql
+
+# 3. 重建数据库
+sqlite3 tradesnake_new.db < /tmp/tradesnake_recover.sql
+
+# 4. 替换损坏的数据库
+mv tradesnake_new.db tradesnake.db
+```
+
+**预防措施:**
+- 所有SQLite数据库使用 **WAL模式**（`PRAGMA journal_mode=WAL`）
+- 定期执行 `VACUUM` 清理碎片
+
+### 8.4 cp_engine启动时为空
+
+**问题描述:**
+服务启动后，`cp_engine.stocks` 为空，需要等待8分钟背景刷新完成。
+
+**根本原因:**
+`preload_cp_engine_from_cache()` 加载2855个JSON文件太慢被禁用，背景刷新需串行获取1500只股票财务数据。
+
+**解决方案:**
+- 新增 `StockCP.from_precalculated()` 方法：从预计算分数创建StockCP，跳过 `calculate_scores()`
+- 新增 `preload_cp_engine_from_history()` 从SQLite cp_history快速加载（<1秒）
+- 启动时加载300只股票的预计算CP分数
+
+**效果:**
+- 启动时间：数分钟 → **<1秒**
+- API立即返回300只股票
+
+**相关文件:**
+- `backend/engine/cp_engine/cp_engine.py` - `StockCP.from_precalculated()`
+- `backend/api/main.py` - `preload_cp_engine_from_history()`
+
+### 8.5 数据源可用性矩阵
+
+| 数据源 | 用途 | 稳定性 | 依赖 | 失败降级 |
+|--------|------|--------|------|----------|
+| 东方财富(akshare) | 成交额排名 | ⚠️ 不稳定 | 代理 | 随机抽样 |
+| 腾讯行情API | 实时行情 | ✅ 稳定 | 无 | 返回空 |
+| baostock | 财务数据 | ✅ 稳定 | 无 | 返回空 |
+| Tushare Pro | K线/财务 | ✅ 稳定 | 代理/积分 | 返回空 |
+| 新浪行情API | 备用实时行情 | ⚠️ 不稳定 | 无 | 返回空 |
+
+---
+
+## 九、版本历史
 
 | 版本 | 日期 | 更新 |
 |---|---|---|
+| v18.6 | 2026-04-15 | 新增"数据源问题排查"章节：东方财富API不稳定、Baostock连接池、SQLite损坏、cp_engine预加载 |
 | v18.5 | 2026-04-09 | 补充 alerts 表到数据存储现状（cleanup.py 管理90天保留） |
 | v18.4 | 2026-04-09 | 完善数据存储说明，补充历史数据填充模块、价格历史表定位、预测引擎数据来源 |
 | v18.3 | 2026-04-08 | 新增 `cp_history_store.py`（战力历史统一存储）；新增 `cleanup.py` 数据生命周期清理模块（Phase 1 + Phase 2） |
@@ -678,7 +803,7 @@ record_tushare_points(10)
 
 ---
 
-## 九、相关文档
+## 十、相关文档
 
 - [项目概览](./PROJECT_OVERVIEW.md) - 项目整体介绍
 - [实施方案](../references/) - 外部参考资料
