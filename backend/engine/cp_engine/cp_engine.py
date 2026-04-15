@@ -382,8 +382,64 @@ class StockCP:
     # v19.6 新增字段
     real_time_score: float = 0  # 实时分（基于1分钟K线，仅核心池）
 
+    # 内部标记：跳过分数计算（用于从历史数据快速加载）
+    _skip_score_calc: bool = False
+
+    @classmethod
+    def from_precalculated(cls, code: str, name: str, price: float,
+                          total_cp: float, growth_score: float, value_score: float,
+                          quality_score: float, momentum_score: float, risk_score: float,
+                          pe: float = 0, roe: float = 0, net_profit_growth: float = 0,
+                          revenue_growth: float = 0, change_pct: float = 0, pb: float = 0,
+                          gross_margin: float = 0, revenue: float = 0, cashflow: float = 0,
+                          debt_ratio: float = 0, data_quality: str = 'medium',
+                          sector: str = '', rank: int = 0, **kwargs) -> 'StockCP':
+        """从预计算的CP分数创建StockCP（跳过score计算，用于快速加载历史数据）"""
+        # 直接设置属性，绕过__post_init__
+        stock = cls.__new__(cls)
+        object.__setattr__(stock, 'code', code)
+        object.__setattr__(stock, 'name', name)
+        object.__setattr__(stock, 'price', price)
+        object.__setattr__(stock, 'pe', pe)
+        object.__setattr__(stock, 'roe', roe)
+        object.__setattr__(stock, 'net_profit_growth', net_profit_growth)
+        object.__setattr__(stock, 'revenue_growth', revenue_growth)
+        object.__setattr__(stock, 'change_pct', change_pct)
+        object.__setattr__(stock, 'pb', pb)
+        object.__setattr__(stock, 'gross_margin', gross_margin)
+        object.__setattr__(stock, 'revenue', revenue)
+        object.__setattr__(stock, 'cashflow', cashflow)
+        object.__setattr__(stock, 'debt_ratio', debt_ratio)
+        object.__setattr__(stock, 'volume', 0)
+        object.__setattr__(stock, 'amount', 0)
+        object.__setattr__(stock, 'dividend_yield', 0)
+        object.__setattr__(stock, 'market_cap', 0)
+        object.__setattr__(stock, 'high', price)
+        object.__setattr__(stock, 'low', price)
+        object.__setattr__(stock, 'sector', sector)
+        object.__setattr__(stock, 'current_ratio', 0)
+        object.__setattr__(stock, 'interest_coverage', 0)
+        object.__setattr__(stock, 'deducted_net_profit', 0)
+        object.__setattr__(stock, 'is_suspended', False)
+        object.__setattr__(stock, 'avg_daily_amount_20d', 0)
+        object.__setattr__(stock, 'turnover_rate', 0)
+        object.__setattr__(stock, 'volatility_20d', 0)
+        object.__setattr__(stock, 'real_time_score', 0)
+        # 预计算的分数
+        object.__setattr__(stock, 'growth_score', growth_score)
+        object.__setattr__(stock, 'value_score', value_score)
+        object.__setattr__(stock, 'momentum_score', momentum_score)
+        object.__setattr__(stock, 'quality_score', quality_score)
+        object.__setattr__(stock, 'total_cp', total_cp)
+        object.__setattr__(stock, 'risk_score', risk_score)
+        object.__setattr__(stock, 'peg', 0)
+        object.__setattr__(stock, 'data_quality', data_quality)
+        object.__setattr__(stock, '_skip_score_calc', True)
+        return stock
+
     def __post_init__(self):
-        self.calculate_scores()
+        if not self._skip_score_calc:
+            self.calculate_scores()
 
     @property
     def board_type(self) -> str:

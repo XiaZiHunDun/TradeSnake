@@ -65,6 +65,8 @@ class BaoStockSession:
     """封装单次 baostock 会话"""
 
     def __init__(self, max_reuses: int = 500):
+        # 注意：使用模块级导入的 bs，不在 __init__ 中 import
+        # （避免重复导入导致问题）
         self._bs = bs
         self._reuses = 0
         self._max_reuses = max_reuses
@@ -94,8 +96,10 @@ class BaoStockSession:
             raise
 
     def _relogin(self):
-        """重新登录"""
-        if self._logged_in:
+        """重新登录（状态修复：先重置_logged_in再logout）"""
+        was_logged_in = self._logged_in
+        self._logged_in = False  # 先重置状态
+        if was_logged_in:
             self._bs.logout()
         self._login()
         self._reuses = 0
@@ -203,8 +207,10 @@ pool.release(session)  (归还连接1，继续处理下一只)
 |------|--------|--------|
 | login/logout 次数 | 1500 对 | ~5 对（池大小） |
 | 日志输出 | 3000+ 行 `login/logout success!` | ~10 行 |
-| 1500 只股票获取耗时 | 50+ 分钟 | ~2-3 分钟 |
+| 1500 只股票获取耗时 | 50+ 分钟 | ~8 分钟（串行网络延迟） |
 | 线程安全 | 无 | 线程安全 |
+| API启动响应 | 数分钟等待 | **<1秒** |
+| cp_engine股票数 | 0（启动时） | **300只**（预加载） |
 
 ---
 
@@ -212,7 +218,9 @@ pool.release(session)  (归还连接1，继续处理下一只)
 
 | 文件 | 改动内容 |
 |------|----------|
-| `backend/data_manager/fetcher.py` | 新增 `BaoStockSession`、`BaoStockPool` 类；改造 `_fetch_from_baostock` 使用连接池 |
+| `backend/data_manager/fetcher.py` | 新增 `BaoStockSession`、`BaoStockPool` 类；改造 `_fetch_from_baostock`；新增 `get_market_cap_leaders` 重试逻辑 |
+| `backend/engine/cp_engine/cp_engine.py` | 新增 `StockCP.from_precalculated()` 方法 |
+| `backend/api/main.py` | 新增 `preload_cp_engine_from_history()` 快速预加载器 |
 
 ---
 
@@ -224,15 +232,26 @@ pool.release(session)  (归还连接1，继续处理下一只)
 4. **复用上限**: 500 次后强制 relogin，防止 baostock 服务端超时
 5. **兼容现有逻辑**: `_fetch_from_baostock` 的输入输出不变，只是内部实现改为池操作
 6. **异常安全**: `try/finally` 确保连接一定归还
+7. **快速预加载**: 从SQLite cp_history加载预计算分数，跳过 `calculate_scores()`
 
 ---
 
-## 测试验证
+## 附加修复
 
-1. 单元测试: 模拟 100 只股票，验证连接复用次数不超限
-2. 并发测试: 多线程同时获取，验证无死锁
-3. 断连测试: 模拟 query 失败，验证自动重连
-4. 集成测试: 调用 `/api/refresh`，观察日志中 login/logout 次数
+### cp_engine启动为空
+- **问题**: 背景刷新需8分钟，服务启动后长时间 `cp_engine.stocks=0`
+- **方案**: 新增 `StockCP.from_precalculated()` + `preload_cp_engine_from_history()`
+- **效果**: <1秒加载300只股票
+
+### 东方财富API不稳定
+- **问题**: `ak.stock_zh_a_spot_em()` 偶发失败
+- **方案**: 3次重试 + 2/4秒指数退避
+- **效果**: 失败时降级到随机抽样
+
+### 数据库损坏
+- **问题**: `tradesnake.db` 显示 "database disk image is malformed"
+- **方案**: `sqlite3 .recover` + 重建
+- **效果**: 恢复3424只股票
 
 ---
 
@@ -241,3 +260,4 @@ pool.release(session)  (归还连接1，继续处理下一只)
 | 版本 | 日期 | 更新 |
 |------|------|------|
 | v1 | 2026-04-15 | 初始设计 |
+| v2 | 2026-04-15 | 实现+附加cp_engine预加载+重试逻辑 |

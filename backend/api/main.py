@@ -115,6 +115,81 @@ def preload_cp_engine_from_cache():
     return loaded
 
 
+def preload_cp_engine_from_history():
+    """从SQLite cp_history快速预加载战力引擎数据（启动用）
+
+    与 preload_cp_engine_from_cache 的区别：
+    - 直接从SQLite读取已计算的CP分数，无需重新计算
+    - 加载速度快（<1秒 vs 2855文件的慢速加载）
+    - 使用预计算的分数（可能有轻微滞后）
+    """
+    from backend.engine.cp_engine import StockCP
+    import sqlite3
+
+    print("[启动] 从cp_history快速预加载战力数据...")
+    DB_PATH = "/home/ailearn/projects/TradeSnake/data/tradesnake_cp_history.db"
+
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+
+        # 优先加载今天的记录，其次昨天的
+        cursor = conn.execute("""
+            SELECT DISTINCT recorded_at FROM cp_history
+            ORDER BY recorded_at DESC LIMIT 2
+        """)
+        dates = [row['recorded_at'] for row in cursor.fetchall()]
+
+        loaded = 0
+        for date in dates:
+            if loaded >= 300:  # 最多加载300只
+                break
+            cursor = conn.execute("""
+                SELECT code, name, price, total_cp, growth_score, value_score,
+                       quality_score, momentum_score, risk_score, rank
+                FROM cp_history
+                WHERE recorded_at = ?
+                LIMIT ?
+            """, (date, 300 - loaded))
+            rows = cursor.fetchall()
+
+            if not rows:
+                continue
+
+            for row in rows:
+                try:
+                    stock = StockCP.from_precalculated(
+                        code=str(row['code']),
+                        name=str(row['name']),
+                        price=float(row['price'] or 0),
+                        total_cp=float(row['total_cp'] or 0),
+                        growth_score=float(row['growth_score'] or 0),
+                        value_score=float(row['value_score'] or 0),
+                        quality_score=float(row['quality_score'] or 0),
+                        momentum_score=float(row['momentum_score'] or 0),
+                        risk_score=float(row['risk_score'] or 0),
+                        pe=0, roe=0, net_profit_growth=0, revenue_growth=0,
+                        change_pct=0, pb=0, gross_margin=0, revenue=0,
+                        cashflow=0, debt_ratio=0,
+                        data_quality='medium',
+                        sector='',
+                        rank=int(row['rank'] or 0),
+                    )
+                    cp_engine.add_stock(stock)
+                    loaded += 1
+                except Exception:
+                    continue
+
+            if loaded >= 300:
+                break
+
+        conn.close()
+        print(f"[启动] 已从cp_history快速加载 {loaded} 只股票到战力引擎")
+
+    except Exception as e:
+        print(f"[启动] cp_history快速预加载失败: {e}")
+
+
 class RefreshState:
     """差异化刷新的状态管理"""
     def __init__(self):
@@ -415,6 +490,8 @@ async def lifespan(app: FastAPI):
         print(f"[启动] RecommenderCallback 注册失败: {e}")
 
     # preload_cp_engine_from_cache()  # 临时禁用 - 加载2855个文件太慢
+    # 改用快速版本：从SQLite cp_history直接加载预计算的CP分数（<1秒）
+    preload_cp_engine_from_history()
 
     # 启动后台刷新任务（会延迟5秒后执行）
     refresh_task = asyncio.create_task(background_refresh_task())

@@ -157,20 +157,27 @@ class StockListFetcher:
             return pd.DataFrame()
 
     def get_market_cap_leaders(self, limit: int = 50) -> List[str]:
-        try:
-            cached = read_cache('top_volume')
-            if cached:
-                return cached[:limit]
+        cached = read_cache('top_volume')
+        if cached:
+            return cached[:limit]
 
-            df = ak.stock_zh_a_spot_em()
-            if df is not None and len(df) > 0:
-                if '成交额' in df.columns:
-                    df = df.sort_values('成交额', ascending=False)
-                    top_codes = df['代码'].head(limit).tolist()
-                    write_cache('top_volume', top_codes, expire_minutes=60)
-                    return top_codes
-        except Exception as e:
-            print(f"获取市值排名失败: {e}")
+        # 重试机制：东方财富API不稳定
+        last_error = None
+        for attempt in range(3):
+            try:
+                df = ak.stock_zh_a_spot_em()
+                if df is not None and len(df) > 0:
+                    if '成交额' in df.columns:
+                        df = df.sort_values('成交额', ascending=False)
+                        top_codes = df['代码'].head(limit).tolist()
+                        write_cache('top_volume', top_codes, expire_minutes=60)
+                        return top_codes
+            except Exception as e:
+                last_error = e
+                if attempt < 2:
+                    time.sleep(2 * (attempt + 1))  # 2, 4秒指数退避
+
+        print(f"获取市值排名失败: {last_error}")
         return []
 
 
