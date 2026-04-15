@@ -1734,7 +1734,7 @@ class CPHistoryBatchCalculator:
         placeholders = ','.join(['?' for _ in codes])
         cursor.execute(f"""
             SELECT code, name, price, pe, roe, net_profit_growth, revenue_growth,
-                   pb, gross_margin, cashflow, debt_ratio
+                   pb, gross_margin, cashflow, debt_ratio, sector
             FROM stocks WHERE code IN ({placeholders})
         """, codes)
 
@@ -1752,7 +1752,7 @@ class CPHistoryBatchCalculator:
                 'gross_margin': row[8] or 0,
                 'cashflow': row[9] or 0,
                 'debt_ratio': row[10] or 0,
-                'sector': '',  # stocks 表暂无 sector 字段
+                'sector': row[11] or '',
             }
         conn.close()
         return result

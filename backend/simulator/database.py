@@ -60,7 +60,8 @@ class Database:
                     momentum_score REAL DEFAULT 0, quality_score REAL DEFAULT 0,
                     total_cp REAL DEFAULT 0, risk_score REAL DEFAULT 0,
                     risk_level TEXT DEFAULT '', peg REAL DEFAULT 0,
-                    data_quality TEXT DEFAULT 'low', updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    data_quality TEXT DEFAULT 'low', sector TEXT DEFAULT '',
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
@@ -282,7 +283,8 @@ class Database:
                  s.get('momentum_score', 0), s.get('quality_score', 0),
                  s.get('total_cp', 0), s.get('risk_score', 0),
                  s.get('risk_level', ''), s.get('peg', 0),
-                 s.get('data_quality', 'low'), datetime.now().isoformat()
+                 s.get('data_quality', 'low'), s.get('sector', ''),
+                 datetime.now().isoformat()
                 ) for s in stocks
             ]
             cursor.executemany("""
@@ -291,8 +293,9 @@ class Database:
                     change_pct, pb, gross_margin, revenue, cashflow, debt_ratio,
                     volume, amount, dividend_yield, market_cap, high, low,
                     growth_score, value_score, momentum_score, quality_score,
-                    total_cp, risk_score, risk_level, peg, data_quality, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    total_cp, risk_score, risk_level, peg, data_quality, sector,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, data)
             self.conn.commit()
             return cursor.rowcount

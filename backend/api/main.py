@@ -116,7 +116,11 @@ def preload_cp_engine_from_cache():
 
 
 def preload_cp_engine_from_history():
-    """从SQLite cp_history快速预加载战力引擎数据（启动用）
+    """从SQLite stocks表快速预加载战力引擎数据（启动用）
+
+    注意：之前使用cp_history表，但该表只存储基础CP字段（缺少PE/ROE等财务数据）。
+    现在改用stocks表，该表存储完整数据（含所有财务字段），确保战力引擎启动时
+    拥有完整的股票数据。
 
     与 preload_cp_engine_from_cache 的区别：
     - 直接从SQLite读取已计算的CP分数，无需重新计算
@@ -126,68 +130,64 @@ def preload_cp_engine_from_history():
     from backend.engine.cp_engine import StockCP
     import sqlite3
 
-    print("[启动] 从cp_history快速预加载战力数据...")
-    DB_PATH = "/home/ailearn/projects/TradeSnake/data/tradesnake_cp_history.db"
+    print("[启动] 从stocks表快速预加载战力数据...")
+    DB_PATH = "/home/ailearn/projects/TradeSnake/data/tradesnake.db"
 
     try:
         conn = sqlite3.connect(DB_PATH, timeout=10)
         conn.row_factory = sqlite3.Row
 
-        # 优先加载今天的记录，其次昨天的
+        # 从stocks表加载，按total_cp排序取前300只
         cursor = conn.execute("""
-            SELECT DISTINCT recorded_at FROM cp_history
-            ORDER BY recorded_at DESC LIMIT 2
+            SELECT code, name, price,
+                   pe, roe, net_profit_growth, revenue_growth, change_pct,
+                   pb, gross_margin, revenue, cashflow, debt_ratio,
+                   growth_score, value_score, quality_score,
+                   momentum_score, risk_score, total_cp,
+                   data_quality, sector
+            FROM stocks
+            ORDER BY total_cp DESC
+            LIMIT 300
         """)
-        dates = [row['recorded_at'] for row in cursor.fetchall()]
+        rows = cursor.fetchall()
 
         loaded = 0
-        for date in dates:
-            if loaded >= 300:  # 最多加载300只
-                break
-            cursor = conn.execute("""
-                SELECT code, name, price, total_cp, growth_score, value_score,
-                       quality_score, momentum_score, risk_score, rank
-                FROM cp_history
-                WHERE recorded_at = ?
-                LIMIT ?
-            """, (date, 300 - loaded))
-            rows = cursor.fetchall()
-
-            if not rows:
+        for row in rows:
+            try:
+                stock = StockCP.from_precalculated(
+                    code=str(row['code']),
+                    name=str(row['name']),
+                    price=float(row['price'] or 0),
+                    total_cp=float(row['total_cp'] or 0),
+                    growth_score=float(row['growth_score'] or 0),
+                    value_score=float(row['value_score'] or 0),
+                    quality_score=float(row['quality_score'] or 0),
+                    momentum_score=float(row['momentum_score'] or 0),
+                    risk_score=float(row['risk_score'] or 0),
+                    pe=float(row['pe'] or 0),
+                    roe=float(row['roe'] or 0),
+                    net_profit_growth=float(row['net_profit_growth'] or 0),
+                    revenue_growth=float(row['revenue_growth'] or 0),
+                    change_pct=float(row['change_pct'] or 0),
+                    pb=float(row['pb'] or 0),
+                    gross_margin=float(row['gross_margin'] or 0),
+                    revenue=float(row['revenue'] or 0),
+                    cashflow=float(row['cashflow'] or 0),
+                    debt_ratio=float(row['debt_ratio'] or 0),
+                    data_quality=str(row['data_quality'] or 'medium'),
+                    sector=str(row['sector'] or ''),
+                    rank=loaded + 1,
+                )
+                cp_engine.add_stock(stock)
+                loaded += 1
+            except Exception:
                 continue
 
-            for row in rows:
-                try:
-                    stock = StockCP.from_precalculated(
-                        code=str(row['code']),
-                        name=str(row['name']),
-                        price=float(row['price'] or 0),
-                        total_cp=float(row['total_cp'] or 0),
-                        growth_score=float(row['growth_score'] or 0),
-                        value_score=float(row['value_score'] or 0),
-                        quality_score=float(row['quality_score'] or 0),
-                        momentum_score=float(row['momentum_score'] or 0),
-                        risk_score=float(row['risk_score'] or 0),
-                        pe=0, roe=0, net_profit_growth=0, revenue_growth=0,
-                        change_pct=0, pb=0, gross_margin=0, revenue=0,
-                        cashflow=0, debt_ratio=0,
-                        data_quality='medium',
-                        sector='',
-                        rank=int(row['rank'] or 0),
-                    )
-                    cp_engine.add_stock(stock)
-                    loaded += 1
-                except Exception:
-                    continue
-
-            if loaded >= 300:
-                break
-
         conn.close()
-        print(f"[启动] 已从cp_history快速加载 {loaded} 只股票到战力引擎")
+        print(f"[启动] 已从stocks表快速加载 {loaded} 只股票到战力引擎")
 
     except Exception as e:
-        print(f"[启动] cp_history快速预加载失败: {e}")
+        print(f"[启动] stocks表快速预加载失败: {e}")
 
 
 class RefreshState:
