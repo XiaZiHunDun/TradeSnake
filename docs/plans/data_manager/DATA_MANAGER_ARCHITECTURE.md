@@ -47,15 +47,16 @@
 
 | 表名 | 行数 | 状态 | 说明 |
 |-----|------|------|------|
-| `daily_kline` | 2,440,666 | ✅ 已填充 | 日K线，已填充至2026-04 |
-| `minute_kline` | 0 | **空** | 分钟K线，**需要先填充** |
+| `daily_kline` | 2,440,666 | ✅ 已填充 | 日K线，2024-04-10~2026-04-13，每日~5000只 |
+| `minute_kline` | 2,393,152 | ⚠️ 覆盖不足 | 分钟K线，仅4天数据（应保留14天） |
+| `trade_cal` | **0** | ❌ 为空 | 交易日历，需要调用 `TradeCalendar.fetch_from_tushare()` 填充 |
 
 **SQLite (tradesnake.db)**：
 
 | 表名 | 行数 | 状态 | 说明 |
 |-----|------|------|------|
-| `stocks` | 3,432 | 已有 | 股票列表（含sector字段） |
-| `ex_right_factor` | **0** | **空！** | 除权因子，**紧急需要填充** |
+| `stocks` | 3,432 | ⚠️ 部分缺失 | 股票列表，PE有效78%，ROE有效47%，sector缺失32% |
+| `ex_right_factor` | 5,346,230 | ✅ 已填充 | 除权因子 |
 | `cp_history` | 36,370 | ✅ 已填充 | 战力历史，由引擎计算写入 |
 | `price_history` | 11,343 | 历史遗留 | 回测器使用，**计划迁移到DuckDB** |
 | `alerts` | 0 | 已有 | 告警记录，cleanup.py 管理90天保留 |
@@ -64,8 +65,8 @@
 
 | 表名 | 行数 | 状态 | 说明 |
 |-----|------|------|------|
-| `gain_predictions` | 32,568 | ✅ 已填充 | 涨幅预测，由引擎计算写入 |
-| `probability_predictions` | 32,568 | ✅ 已填充 | 上涨概率，由引擎计算写入 |
+| `gain_predictions` | 32,568 | ✅ 已填充 | 涨幅预测 |
+| `probability_predictions` | 32,568 | ✅ 已填充 | 上涨概率 |
 
 > **重要**：历史数据填充详见 [DATA_FILLER_ARCHITECTURE.md](./DATA_FILLER_ARCHITECTURE.md)
 
