@@ -39,7 +39,7 @@
 | **`refresh_pools` 触发** | 除业务代码手动调用外，由 **`pool_rebalance_background_task`** 在交易日收盘（`get_trading_status` 为已收盘）后尝试执行，每日最多一次。 |
 | **池变更通知** | `initialize` 完成后对各池发送一次 `on_pool_changed(tier, added,[])`；`refresh_pools` 在再平衡后按 tier 计算 `added`/`removed` 并通知；财务预警降级时对旧池/新池分别通知，并调用 `on_stock_downgraded`。 |
 | **`get_stock_info(code)`** | `StockSelector` 对外查询当前池中 `StockInfo`（供再平衡任务等组装指数标记）。 |
-| **脚本中的「核心池」** | `scripts/backfill_core_pool.py` 等使用的 `total_cp > 0` **不等于** `PoolTier.CORE`，以各脚本 docstring 为准。 |
+| **脚本中的「核心池」** | 部分脚本使用 `total_cp > 0` 筛选股票（**不等于** `PoolTier.CORE`），以各脚本 docstring 为准。 |
 | **产品范围：仅主板** | 与 `docs/plans/PROJECT_OVERVIEW.md`「产品范围」一节一致；批量 `market_data` 构建依赖主板抽样，非文档笔误。 |
 
 ---
