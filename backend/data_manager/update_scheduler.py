@@ -231,51 +231,40 @@ class UpdateScheduler:
 
 class StockSelectorCallback:
     """
-    接收 stock_selector 的池状态变化通知
+    实现 stock_selector.SelectorCallback，将池变动映射到 UpdateScheduler。
 
     用法：
-    ```python
-    scheduler = UpdateScheduler(dm, strategy_provider)
-    selector.register_callback(scheduler.on_pool_changed)
-    ```
+        scheduler = UpdateScheduler(dm, strategy_provider)
+        selector.register_callback(StockSelectorCallback(scheduler))
     """
 
     def __init__(self, scheduler: UpdateScheduler):
         self.scheduler = scheduler
 
-    def on_pool_changed(
-        self, tier: "PoolTier", action: str, new_codes: List[str]
-    ) -> None:
-        """
-        池变化时更新调度策略
+    def on_pool_changed(self, tier, added: List[str], removed: List[str]) -> None:
+        for code in added:
+            self.scheduler.last_update_time[code] = 0
+        for code in removed:
+            self.scheduler.last_update_time.pop(code, None)
+        if added or removed:
+            logger.info(
+                "UpdateScheduler 池更新: tier=%s added=%s removed=%s",
+                getattr(tier, "value", tier),
+                added,
+                removed,
+            )
 
-        Args:
-            tier: 变化的池
-            action: 动作类型（"add", "remove", "upgrade", "downgrade"）
-            new_codes: 涉及的股票代码
-        """
-        if action == "upgrade":
-            # 晋级的股票提高更新频率（清空上次更新时间，使其立即可更新）
-            for code in new_codes:
-                if code in self.scheduler.last_update_time:
-                    del self.scheduler.last_update_time[code]
-            logger.info(f"股票晋级，刷新更新间隔: {new_codes}")
+    def on_stock_upgraded(self, code: str, from_tier, to_tier) -> None:
+        self.scheduler.last_update_time.pop(code, None)
 
-        elif action == "downgrade":
-            # 降级的股票降低更新频率
-            logger.info(f"股票降级，更新策略不变: {new_codes}")
+    def on_stock_downgraded(self, code: str, from_tier, to_tier) -> None:
+        pass
 
-        elif action == "add":
-            # 新加入的股票加入更新队列
-            for code in new_codes:
-                self.scheduler.last_update_time[code] = 0
-            logger.info(f"新股票加入更新队列: {new_codes}")
+    def on_event_triggered(self, code: str, event) -> None:
+        pass
 
-        elif action == "remove":
-            # 移除的股票从更新队列移除
-            for code in new_codes:
-                self.scheduler.last_update_time.pop(code, None)
-            logger.info(f"股票从更新队列移除: {new_codes}")
+    def on_financial_warning(self, code: str, warnings) -> None:
+        pass
 
     def on_pool_update_strategy_changed(
         self, tier: "PoolTier", action: str, new_codes: List[str]

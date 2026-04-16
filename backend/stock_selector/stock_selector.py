@@ -109,27 +109,32 @@ class StockSelector:
             # 判断初始池
             tier = self._classify_initial_tier(stock, market_data.get(code, {}))
             if tier == PoolTier.CORE:
-                core_stocks.append((code, info))
+                core_stocks.append((code, info, stock))
             elif tier == PoolTier.ACTIVE:
-                active_stocks.append((code, info))
+                active_stocks.append((code, info, stock))
             else:
-                observe_stocks.append((code, info))
+                observe_stocks.append((code, info, stock))
 
         # 加入各池（按优先级）
         # 1. 先加入核心池（沪深300、中证500优先）
-        for code, info in core_stocks:
+        for code, info, stock in core_stocks:
             self._pm.add_stock(code, PoolTier.CORE, info, self._get_initial_reason(stock, market_data.get(code, {})))
 
         # 2. 加入活跃池
-        for code, info in active_stocks:
+        for code, info, stock in active_stocks:
             self._pm.add_stock(code, PoolTier.ACTIVE, info, self._get_initial_reason(stock, market_data.get(code, {})))
 
         # 3. 加入观察池
-        for code, info in observe_stocks:
+        for code, info, stock in observe_stocks:
             self._pm.add_stock(code, PoolTier.OBSERVE, info, self._get_initial_reason(stock, market_data.get(code, {})))
 
         self._initialized = True
         logger.info(f"股票池初始化完成: {self._pm.get_pool_stats()}")
+
+        for tier in (PoolTier.CORE, PoolTier.ACTIVE, PoolTier.OBSERVE):
+            codes = self._pm.get_pool(tier)
+            if codes:
+                self._emit_pool_tier_changed(tier, list(codes), [])
 
     def _create_stock_info(self, stock: Dict, market: Dict, financial: Dict) -> StockInfo:
         """创建股票信息对象"""
@@ -237,6 +242,13 @@ class StockSelector:
         """获取股票所在池"""
         return self._pm.get_stock_tier(code)
 
+    def get_stock_info(self, code: str) -> Optional[StockInfo]:
+        """获取池中股票的 StockInfo（不在任何池则 None）"""
+        tier = self._pm.get_stock_tier(code)
+        if tier is None:
+            return None
+        return self._pm.get_stock_info(code, tier)
+
     def should_include(self, code: str) -> Tuple[bool, str]:
         """
         检查股票是否应该被纳入分析范围
@@ -274,6 +286,21 @@ class StockSelector:
         """
         logger.info("开始盘后池刷新")
 
+        tiers = (PoolTier.CORE, PoolTier.ACTIVE, PoolTier.OBSERVE)
+        before_sets = {t: set(self._pm.get_pool(t)) for t in tiers}
+
+        for t in tiers:
+            for code in self._pm.get_pool(t):
+                info = self._pm.get_stock_info(code, t)
+                if info is None:
+                    continue
+                md = market_data.get(code, {})
+                if md:
+                    if md.get("daily_volume_20d") is not None:
+                        info.daily_volume_20d = float(md.get("daily_volume_20d") or 0)
+                    if md.get("turnover_rate") is not None:
+                        info.turnover_rate = float(md.get("turnover_rate") or 0)
+
         # 1. 评估晋级/降级
         eval_results = self._rebalancer.evaluate_all(market_data)
 
@@ -286,6 +313,13 @@ class StockSelector:
 
         # 3. 清理临时池过期股票
         expired_temp = self._pm.cleanup_expired_temp()
+
+        after_sets = {t: set(self._pm.get_pool(t)) for t in tiers}
+        for t in tiers:
+            added = list(after_sets[t] - before_sets[t])
+            removed = list(before_sets[t] - after_sets[t])
+            if added or removed:
+                self._emit_pool_tier_changed(t, added, removed)
 
         # 4. 触发 RecommenderCallback（如果有注册）
         self._notify_recommender_pool_changes(eval_results, rebalance_results)
@@ -379,7 +413,15 @@ class StockSelector:
                         tier_order = [PoolTier.OBSERVE, PoolTier.ACTIVE, PoolTier.CORE]
                         current_idx = tier_order.index(tier)
                         lower_tier = tier_order[current_idx - 1]
+                        old_tier = tier
                         self._pm.downgrade(code, lower_tier, f"财务预警: {reason}")
+                        self._emit_pool_tier_changed(old_tier, [], [code])
+                        self._emit_pool_tier_changed(lower_tier, [code], [])
+                        for cb in self._callbacks:
+                            try:
+                                cb.on_stock_downgraded(code, old_tier, lower_tier)
+                            except Exception as e:
+                                logger.error(f"降级回调失败: {e}")
 
             # 触发回调
             for callback in self._callbacks:
@@ -422,6 +464,17 @@ class StockSelector:
     def register_callback(self, callback: SelectorCallback) -> None:
         """注册回调"""
         self._callbacks.append(callback)
+
+    def _emit_pool_tier_changed(
+        self, tier: PoolTier, added: List[str], removed: List[str]
+    ) -> None:
+        if not added and not removed:
+            return
+        for cb in self._callbacks:
+            try:
+                cb.on_pool_changed(tier, added, removed)
+            except Exception as e:
+                logger.error(f"池变更回调 on_pool_changed 失败: {e}")
 
     def register_recommender_callback(self, callback: "RecommenderCallback") -> None:
         """

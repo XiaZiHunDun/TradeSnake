@@ -7,7 +7,8 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
+from typing import Any, Dict, List, Optional, Set
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
@@ -115,7 +116,7 @@ def preload_cp_engine_from_cache():
     return loaded
 
 
-def preload_cp_engine_from_history():
+def preload_cp_engine_from_history(allowed_codes: Optional[Set[str]] = None):
     """从SQLite stocks表快速预加载战力引擎数据（启动用）
 
     注意：之前使用cp_history表，但该表只存储基础CP字段（缺少PE/ROE等财务数据）。
@@ -126,6 +127,10 @@ def preload_cp_engine_from_history():
     - 直接从SQLite读取已计算的CP分数，无需重新计算
     - 加载速度快（<1秒 vs 2855文件的慢速加载）
     - 使用预计算的分数（可能有轻微滞后）
+
+    Args:
+        allowed_codes: 若给定（如 StockSelector 核心池+活跃池），仅加载这些代码；
+            若无交集则回退为全表 total_cp 前 300。
     """
     from backend.engine.cp_engine import StockCP
     import sqlite3
@@ -133,12 +138,7 @@ def preload_cp_engine_from_history():
     print("[启动] 从stocks表快速预加载战力数据...")
     DB_PATH = "/home/ailearn/projects/TradeSnake/data/tradesnake.db"
 
-    try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        conn.row_factory = sqlite3.Row
-
-        # 从stocks表加载，按total_cp排序取前300只
-        cursor = conn.execute("""
+    sql_select = """
             SELECT code, name, price,
                    pe, roe, net_profit_growth, revenue_growth, change_pct,
                    pb, gross_margin, revenue, cashflow, debt_ratio,
@@ -146,10 +146,31 @@ def preload_cp_engine_from_history():
                    momentum_score, risk_score, total_cp,
                    data_quality, sector
             FROM stocks
-            ORDER BY total_cp DESC
-            LIMIT 300
-        """)
-        rows = cursor.fetchall()
+    """
+
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+
+        rows = []
+        if allowed_codes:
+            codes_list = [str(c).strip() for c in allowed_codes if c]
+            by_code: Dict[str, Any] = {}
+            chunk_size = 400
+            for i in range(0, len(codes_list), chunk_size):
+                chunk = codes_list[i : i + chunk_size]
+                placeholders = ",".join(["?"] * len(chunk))
+                cur = conn.execute(
+                    f"{sql_select} WHERE code IN ({placeholders})",
+                    chunk,
+                )
+                for row in cur.fetchall():
+                    by_code[str(row["code"])] = row
+            rows = sorted(by_code.values(), key=lambda r: float(r["total_cp"] or 0), reverse=True)
+
+        if not rows:
+            cursor = conn.execute(f"{sql_select} ORDER BY total_cp DESC LIMIT 300")
+            rows = cursor.fetchall()
 
         loaded = 0
         for row in rows:
@@ -200,6 +221,9 @@ class RefreshState:
         self.all_analysable_codes = set() # 所有可分析股票
 
 _refresh_state = RefreshState()
+
+_scheduler_for_background = None
+last_pool_rebalance_date: Optional[date] = None
 
 
 def _normalize_code(raw_code: str) -> str:
@@ -320,9 +344,11 @@ async def background_refresh_task():
             print(f"[后台] 最终加载: {len(stocks_data)} 只", flush=True)
 
             async with cp_engine._lock if hasattr(cp_engine, '_lock') else asyncio.Lock():
-                # 增量更新：只更新需要刷新的股票，保留其他
-                existing_codes = {s.code for s in cp_engine.stocks}
-                stocks_to_keep = [s for s in cp_engine.stocks if s.code not in stocks_to_refresh]
+                # 增量更新：仅保留「可分析池」内且本次未刷新的股票
+                stocks_to_keep = [
+                    s for s in cp_engine.stocks
+                    if s.code not in stocks_to_refresh and s.code in analysable_codes
+                ]
 
                 # 清空并重新加载需要刷新的股票
                 cp_engine.stocks = stocks_to_keep
@@ -350,6 +376,9 @@ async def background_refresh_task():
 
                 cp_engine.calculate_all()
 
+                # 仅保留核心池+活跃池内的股票，与 StockSelector 语义一致
+                cp_engine.stocks = [s for s in cp_engine.stocks if s.code in analysable_codes]
+
                 # 持久化到数据库
                 from backend.simulator.database import get_db
                 from backend.engine.cp_engine.history import save_history
@@ -358,7 +387,16 @@ async def background_refresh_task():
                 _db = get_db()
                 _db.batch_upsert_stocks(stock_dicts)
 
-            print(f"[后台] 刷新完成，当前 {len(cp_engine.stocks)} 只股票")
+            if _scheduler_for_background and getattr(_scheduler_for_background, "strategy", None):
+                try:
+                    await loop.run_in_executor(
+                        None,
+                        lambda: _scheduler_for_background.trading_day_update(limit_per_batch=25),
+                    )
+                except Exception as _e:
+                    print(f"[后台] UpdateScheduler 批次更新跳过: {_e}", flush=True)
+
+            print(f"[后台] 刷新完成，当前 {len(cp_engine.stocks)} 只股票", flush=True)
 
             # 更新全局可分析代码集合
             _refresh_state.all_analysable_codes = analysable_codes
@@ -373,9 +411,82 @@ async def background_refresh_task():
             await asyncio.sleep(60)
 
 
+async def pool_rebalance_background_task():
+    """交易日收盘后触发一次股票池再平衡（refresh_pools）。"""
+    global last_pool_rebalance_date
+    await asyncio.sleep(180)
+    while True:
+        try:
+            from backend.engine.cp_engine.trading_time import get_trading_status
+            from backend.data_manager.fetcher import StockDataFetcher
+            from backend.stock_selector.market_snapshot import (
+                build_market_data_from_fetcher_rows,
+                merge_market_data_for_stock_list,
+            )
+            from backend.stock_selector.enums import PoolTier
+
+            now = datetime.now()
+            if now.weekday() >= 5:
+                await asyncio.sleep(900)
+                continue
+
+            st = get_trading_status()
+            if now.hour < 15 or st.get("status") != "closed" or st.get("reason") != "已收盘":
+                await asyncio.sleep(480)
+                continue
+
+            today = now.date()
+            if last_pool_rebalance_date == today:
+                await asyncio.sleep(1800)
+                continue
+
+            sel = get_stock_selector()
+            if not sel.is_initialized():
+                await asyncio.sleep(600)
+                continue
+
+            loop = asyncio.get_event_loop()
+            raw = await loop.run_in_executor(
+                None,
+                lambda: StockDataFetcher().get_batch_market_data(2000, prefer_top=True, page=0),
+            )
+            index_flags: Dict[str, Dict[str, bool]] = {}
+            for t in (PoolTier.CORE, PoolTier.ACTIVE, PoolTier.OBSERVE):
+                for code in sel.get_pool(t):
+                    info = sel.get_stock_info(code)
+                    if info:
+                        index_flags[code] = {
+                            "in_hs300": info.in_hs300,
+                            "in_zz500": info.in_zz500,
+                            "in_zz1000": info.in_zz1000,
+                        }
+            pool_codes: List[str] = []
+            for t in (PoolTier.CORE, PoolTier.ACTIVE, PoolTier.OBSERVE):
+                pool_codes.extend(sel.get_pool(t))
+            base_md = build_market_data_from_fetcher_rows(raw, index_flags)
+            md = merge_market_data_for_stock_list(pool_codes, base_md, index_flags)
+
+            def _run_rebalance():
+                return sel.refresh_pools(md)
+
+            stats = await loop.run_in_executor(None, _run_rebalance)
+            print(f"[池再平衡] {today} 完成: {stats}", flush=True)
+            last_pool_rebalance_date = today
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[池再平衡] 错误: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+        await asyncio.sleep(600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """启动时初始化数据"""
+    global _scheduler_for_background
+    _scheduler_for_background = None
+
     # 初始化StockSelector（基础实例化，完整初始化需要数据）
     selector = get_stock_selector()
 
@@ -426,11 +537,55 @@ async def lifespan(app: FastAPI):
 
         print(f"[启动] 指数成分: 沪深300={len(hs300_codes)}, 中证500={len(zz500_codes)}, 中证1000={len(zz1000_codes)}")
 
-        # 获取市场数据（成交量等）
-        market_data = {}
+        from backend.data_manager.fetcher import StockDataFetcher
+        from backend.stock_selector.market_snapshot import (
+            build_market_data_from_fetcher_rows,
+            merge_market_data_for_stock_list,
+        )
 
-        # 获取财务数据
+        print("[启动] 拉取行情用于股票池流动性与成交额排名...", flush=True)
+        fetch_rows = StockDataFetcher().get_batch_market_data(2000, prefer_top=True, page=0)
+        index_flags_by_code = {
+            str(s.get("code", "")): {
+                "in_hs300": bool(s.get("in_hs300")),
+                "in_zz500": bool(s.get("in_zz500")),
+                "in_zz1000": bool(s.get("in_zz1000")),
+            }
+            for s in formatted_stock_list
+            if s.get("code")
+        }
+        base_market = build_market_data_from_fetcher_rows(fetch_rows, index_flags_by_code)
+        all_list_codes = [str(s.get("code", "")) for s in formatted_stock_list if s.get("code")]
+        market_data = merge_market_data_for_stock_list(all_list_codes, base_market, index_flags_by_code)
+
         financial_data = {}
+
+        # 注册 UpdateScheduler 必须在 initialize 之前，以便初始化入池事件能写入调度队列
+        scheduler = None
+        try:
+            from backend.data_manager.update_scheduler import UpdateScheduler, StockSelectorCallback
+            from backend.stock_selector.update_strategy import UpdateStrategyProvider
+
+            pool_manager = getattr(selector, '_pm', None)
+            if pool_manager is None:
+                pool_manager = getattr(selector, 'pool_manager', None)
+
+            if pool_manager is None:
+                print("[启动] UpdateScheduler 使用简化模式（PoolManager 未直接暴露）")
+                strategy_provider = None
+            else:
+                strategy_provider = UpdateStrategyProvider(pool_manager)
+
+            scheduler = UpdateScheduler(dm, strategy_provider)
+            selector.register_callback(StockSelectorCallback(scheduler))
+            app.state.scheduler = scheduler
+            print("[启动] UpdateScheduler + StockSelectorCallback 注册完成")
+        except Exception as e:
+            print(f"[启动] UpdateScheduler 注册失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+        _scheduler_for_background = scheduler
 
         # 初始化 StockSelector
         if formatted_stock_list:
@@ -444,42 +599,6 @@ async def lifespan(app: FastAPI):
         import traceback
         traceback.print_exc()
 
-    # 注册UpdateScheduler（联动data_manager + UpdateStrategyProvider）
-    try:
-        from backend.data_manager.update_scheduler import UpdateScheduler, StockSelectorCallback
-        from backend.data_manager.manager import get_data_manager
-        from backend.stock_selector.update_strategy import UpdateStrategyProvider
-        from backend.stock_selector.pool_manager import PoolManager
-
-        dm = get_data_manager()
-
-        # 获取 PoolManager（selector 内部使用）
-        pool_manager = getattr(selector, '_pm', None)
-        if pool_manager is None:
-            # 尝试从 selector 获取 pool_manager
-            pool_manager = getattr(selector, 'pool_manager', None)
-
-        if pool_manager is None:
-            # 创建 UpdateStrategyProvider 时需要 PoolManager
-            # 由于 PoolManager 是 selector 的内部属性，我们通过 selector 的方法间接使用
-            print("[启动] UpdateScheduler 使用简化模式（PoolManager 未直接暴露）")
-            strategy_provider = None
-        else:
-            strategy_provider = UpdateStrategyProvider(pool_manager)
-
-        scheduler = UpdateScheduler(dm, strategy_provider)
-        callback = StockSelectorCallback(scheduler)
-        selector.register_callback(callback)
-
-        # 保存 scheduler 引用供后续使用
-        app.state.scheduler = scheduler
-
-        print("[启动] UpdateScheduler + StockSelectorCallback 注册完成")
-    except Exception as e:
-        print(f"[启动] UpdateScheduler 注册失败: {e}")
-        import traceback
-        traceback.print_exc()
-
     # 注册 Recommender 回调
     try:
         from backend.recommender.recommend_engine import RecommenderCallback
@@ -490,22 +609,30 @@ async def lifespan(app: FastAPI):
         print(f"[启动] RecommenderCallback 注册失败: {e}")
 
     # preload_cp_engine_from_cache()  # 临时禁用 - 加载2855个文件太慢
-    # 改用快速版本：从SQLite cp_history直接加载预计算的CP分数（<1秒）
-    preload_cp_engine_from_history()
+    # 改用快速版本：从SQLite stocks 加载；默认仅加载核心池+活跃池代码
+    preload_allowed: Optional[Set[str]] = None
+    if selector.is_initialized():
+        _codes = set(selector.get_all_analysable_codes())
+        if _codes:
+            preload_allowed = _codes
+    preload_cp_engine_from_history(allowed_codes=preload_allowed)
 
     # 启动后台刷新任务（会延迟5秒后执行）
     refresh_task = asyncio.create_task(background_refresh_task())
+    pool_rebalance_task = asyncio.create_task(pool_rebalance_background_task())
 
     print("[启动] 服务已就绪")
 
     yield
 
     # 正确取消后台任务
+    pool_rebalance_task.cancel()
     refresh_task.cancel()
-    try:
-        await asyncio.wait_for(refresh_task, timeout=5.0)
-    except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
-        pass
+    for t in (pool_rebalance_task, refresh_task):
+        try:
+            await asyncio.wait_for(t, timeout=5.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+            pass
     print("[关闭] 服务关闭")
 
 

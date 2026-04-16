@@ -8,6 +8,8 @@
 
 数据管理模块负责 TradeSnake 系统的所有数据访问，包括获取、缓存、清洗、持久化。
 
+**产品范围（与 `PROJECT_OVERVIEW` 一致）**：批量实时行情抽样（如 `StockDataFetcher.get_batch_market_data`）以 **沪深主板** 为边界，不含创业板、科创板、北交所；全市场股票列表、指数成分等仍可获取，用于列表或标志位，**不等于**对上述非主板标的按主板主流程承担同等批量行情义务。
+
 **版本**: v18.5 | **测试**: 106 个单元测试全部通过
 
 **核心流程**: `数据获取 → 数据校验与清洗 → 数据存储`
@@ -530,23 +532,30 @@ class UpdateScheduler:
 
 #### 订阅 stock_selector 回调
 
+`StockSelectorCallback`（`update_scheduler.py`）**实现 `stock_selector.SelectorCallback` 协议**，与 `register_callback` 一致；池变化时维护 `UpdateScheduler.last_update_time`（新入池置 0 以优先更新，移除则 `pop`）。
+
 ```python
 class StockSelectorCallback:
-    """接收 stock_selector 的池状态变化通知"""
+    """实现 SelectorCallback，将池变动映射到 UpdateScheduler"""
 
-    def on_pool_update_strategy_changed(
-        self, tier: PoolTier, action: str, new_codes: List[str]
-    ):
-        """池变化时更新调度策略"""
-        if action == "upgrade":
-            # 晋级的股票提高更新频率
-            for code in new_codes:
-                self.scheduler.set_priority(code, tier)
-        elif action == "downgrade":
-            # 降级的股票降低更新频率
-            for code in new_codes:
-                self.scheduler.set_priority(code, tier)
+    def on_pool_changed(self, tier, added: List[str], removed: List[str]) -> None:
+        for code in added:
+            self.scheduler.last_update_time[code] = 0
+        for code in removed:
+            self.scheduler.last_update_time.pop(code, None)
+
+    def on_stock_upgraded(self, code: str, from_tier, to_tier) -> None:
+        self.scheduler.last_update_time.pop(code, None)
+
+    def on_stock_downgraded(self, code: str, from_tier, to_tier) -> None:
+        pass
+
+    # on_event_triggered / on_financial_warning：当前为空实现，占位协议
 ```
+
+另：`on_pool_update_strategy_changed(tier, action, new_codes)` 仍保留在类上供扩展，**不由** `StockSelector` 标准路径调用。
+
+**触发时机（与 stock_selector 对齐，2026-04-15）**：`StockSelector.initialize` 结束、`refresh_pools` 再平衡之后、财务降级路径会调用 `on_pool_changed`；`background_refresh_task` 在策略可用时会顺带调用 `trading_day_update` 小批量更新。
 
 ---
 
@@ -761,16 +770,18 @@ mv tradesnake_new.db tradesnake.db
 
 **解决方案:**
 - 新增 `StockCP.from_precalculated()` 方法：从预计算分数创建StockCP，跳过 `calculate_scores()`
-- 新增 `preload_cp_engine_from_history()` 从SQLite cp_history快速加载（<1秒）
-- 启动时加载300只股票的预计算CP分数
+- 新增 `preload_cp_engine_from_history()`：从 SQLite **`stocks` 表**（完整财务字段）快速加载（<1秒）；**默认仅加载 `StockSelector.get_all_analysable_codes()`（核心池+活跃池）** 在表中的行，与战力计算范围一致；若无交集则回退为按 `total_cp` 取前 300 只
+- 启动前用 `stock_selector/market_snapshot.py` + `StockDataFetcher.get_batch_market_data` 构建 `market_data`，再 `initialize`（避免对全市场逐只拉财务导致启动过慢）
 
 **效果:**
-- 启动时间：数分钟 → **<1秒**
-- API立即返回300只股票
+- 启动时间：数分钟 → **秒级**（视 batch 行情请求而定）
+- API 启动即有与池一致的预加载集合（通常少于 300 时以池为准）
 
 **相关文件:**
 - `backend/engine/cp_engine/cp_engine.py` - `StockCP.from_precalculated()`
-- `backend/api/main.py` - `preload_cp_engine_from_history()`
+- `backend/api/main.py` - `preload_cp_engine_from_history(allowed_codes=...)`
+- `backend/stock_selector/market_snapshot.py` - 启动/再平衡用 `market_data` 构建
+- `backend/data_manager/duckdb_store.py` - `get_avg_daily_amount_20d_bulk`（日均成交额批量查询，供 snapshot 使用）
 
 ### 8.5 数据源可用性矩阵
 
@@ -788,6 +799,8 @@ mv tradesnake_new.db tradesnake.db
 
 | 版本 | 日期 | 更新 |
 |---|---|---|
+| v18.8 | 2026-04-15 | 概述补充「产品范围：仅沪深主板」及与全市场列表数据源的关系说明（与 `PROJECT_OVERVIEW` 对齐） |
+| v18.7 | 2026-04-15 | 与实现对齐：`StockSelectorCallback` 按 `SelectorCallback` 协议；`preload_cp_engine_from_history` 说明改为 `stocks` 表 + 可选 `allowed_codes`（核心+活跃池）；补充 `market_snapshot` / DuckDB 批量日均额、`pool_rebalance` 与 `trading_day_update` 触发说明 |
 | v18.6 | 2026-04-15 | 新增"数据源问题排查"章节：东方财富API不稳定、Baostock连接池、SQLite损坏、cp_engine预加载 |
 | v18.5 | 2026-04-09 | 补充 alerts 表到数据存储现状（cleanup.py 管理90天保留） |
 | v18.4 | 2026-04-09 | 完善数据存储说明，补充历史数据填充模块、价格历史表定位、预测引擎数据来源 |

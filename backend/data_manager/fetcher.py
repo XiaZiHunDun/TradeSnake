@@ -857,8 +857,8 @@ class StockDataFetcher:
     def get_batch_market_data(self, limit: int = 300, prefer_top: bool = True, page: int = 0) -> List[Dict]:
         stock_df = self.stock_list_fetcher.get_stock_list()
 
-        # 主板股票筛选（排除科创板688、创业板300、北交所4/8）
-        # 注意：沪深300/中证500/中证1000本身不含这些板块，但成交额路径可能纳入
+        # 产品范围：仅主板（排除科创板 688、创业板 300、北交所 4/8）。
+        # 与股票池/战力分析范围一致；指数成分中属非主板的标的不会进入本路径抽样。
         main_stocks = stock_df[
             (
                 (stock_df['code'].str.startswith('6') & ~stock_df['code'].str.startswith('688')) |

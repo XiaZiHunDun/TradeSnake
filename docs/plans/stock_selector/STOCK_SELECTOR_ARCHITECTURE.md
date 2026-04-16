@@ -1,4 +1,4 @@
-# 股票筛选模块架构方案 v19.5.3
+# 股票筛选模块架构方案 v19.5.5
 
 > 本文档描述 `stock_selector/` 模块的设计方案
 
@@ -9,8 +9,10 @@
 ### 输入
 | 来源 | 数据内容 |
 |------|----------|
-| data_manager | 全量股票列表、行情数据、财务数据、指数成分 |
+| data_manager | 股票列表、行情数据、财务数据、指数成分（列表可含全市场；**与本模块主流程一致的批量行情与池化范围见下「产品范围」**） |
 | 手动配置 | 白名单/黑名单用户自定义配置 |
+
+**产品范围（与 `PROJECT_OVERVIEW` 一致）**：本模块与战力主算路径配套的 **池分层、流动性排名、批量行情抽样** 以 **沪深主板** 为边界（不含创业板 300、科创板 688、北交所），与 `StockDataFetcher.get_batch_market_data` 一致。指数成分标志仍可用于规则；**不表示**对非主板标的按主板同等能力做批量行情与入池承诺。
 
 ### 输出
 | 输出内容 | 使用者 |
@@ -19,10 +21,26 @@
 | 池状态变化通知 | engine/recommender（刷新缓存） |
 >
 > **版本历史**：
+> - v19.5.5: **产品范围显式化**：方案写明仅沪深主板；澄清 data_manager「全量列表」与池/批量行情边界的关系
+> - v19.5.4: **与实现对齐**：`market_snapshot` 构建 `market_data`；`initialize` 前注册调度回调；`refresh_pools` 盘后任务触发；池变更 `_emit_pool_tier_changed`；`get_stock_info` 查询接口
 > - v19.5.3: 新增数据更新频率策略联动（双向数据流）+ RecommenderCallback 集成
 > - v19.5.2: 专家评审完善：准入门槛递进、挤出机制、冲突处理、TTL清理、动态容量
 > - v19.5.1: 补充白名单/黑名单、财务预警、历史保留、指数同步兜底
 > - v19.5: 初始版本
+
+### 实现同步说明（v19.5.4，2026-04-15）
+
+以下条目描述 **当前仓库行为**，与上文部分伪代码/理想接口可能略有出入时，以本节为准。
+
+| 项 | 实现要点 |
+|----|----------|
+| **`market_snapshot.py`** | 将 `StockDataFetcher.get_batch_market_data` 等返回的行情行转为 `market_data[code]`（`daily_volume_20d` 万元、`volume_rank`、指数成分标记等）。近 20 日日均成交额优先用 DuckDB `get_avg_daily_amount_20d_bulk`；无 K 线时用当日 `amount` 近似。 |
+| **启动顺序**（`backend/api/main.py`） | 构建 `market_data` → 注册 `UpdateScheduler` + `StockSelectorCallback`（实现完整 `SelectorCallback`）→ `StockSelector.initialize(...)`，保证 **入池时的 `on_pool_changed` 能到达调度器**。 |
+| **`refresh_pools` 触发** | 除业务代码手动调用外，由 **`pool_rebalance_background_task`** 在交易日收盘（`get_trading_status` 为已收盘）后尝试执行，每日最多一次。 |
+| **池变更通知** | `initialize` 完成后对各池发送一次 `on_pool_changed(tier, added,[])`；`refresh_pools` 在再平衡后按 tier 计算 `added`/`removed` 并通知；财务预警降级时对旧池/新池分别通知，并调用 `on_stock_downgraded`。 |
+| **`get_stock_info(code)`** | `StockSelector` 对外查询当前池中 `StockInfo`（供再平衡任务等组装指数标记）。 |
+| **脚本中的「核心池」** | `scripts/backfill_core_pool.py` 等使用的 `total_cp > 0` **不等于** `PoolTier.CORE`，以各脚本 docstring 为准。 |
+| **产品范围：仅主板** | 与 `docs/plans/PROJECT_OVERVIEW.md`「产品范围」一节一致；批量 `market_data` 构建依赖主板抽样，非文档笔误。 |
 
 ---
 

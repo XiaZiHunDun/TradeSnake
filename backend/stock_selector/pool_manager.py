@@ -334,6 +334,9 @@ class PoolManager:
             oldest = min(self._temp_stocks.values(), key=lambda x: x.trigger_time)
             self.remove_from_temp(oldest.code, "容量满，移除旧事件")
 
+        # 从原池移除前记录所在层级（供临时池结束后回归）
+        current_tier = self._code_to_tier.get(code)
+
         # 添加到临时池
         temp_info = TempStockInfo(
             code=code,
@@ -348,7 +351,6 @@ class PoolManager:
         self._temp_stocks[code] = temp_info
 
         # 从原池移除（如果在的话）
-        current_tier = self._code_to_tier.get(code)
         if current_tier and current_tier != PoolTier.TEMP:
             self._remove_from_pool(code, current_tier, f"事件驱动进入临时池: {event_type.value}")
 

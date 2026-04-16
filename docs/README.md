@@ -1,5 +1,7 @@
 # TradeSnake 文档中心
 
+**产品范围**：当前方案下，股票池、战力主算与批量行情抽样以 **沪深主板** 为边界（详见 `plans/PROJECT_OVERVIEW.md`「产品范围」及 `stock_selector/STOCK_SELECTOR_ARCHITECTURE.md`）。
+
 ---
 
 ## 目录结构
@@ -9,7 +11,8 @@ docs/
 ├── README.md
 ├── plans/                          # 实施方案
 │   ├── PROJECT_OVERVIEW.md       # 项目概览
-│   └── DATA_MANAGER_*.md         # 数据管理模块方案
+│   ├── data_manager/DATA_MANAGER_*.md   # 数据管理模块方案
+│   └── stock_selector/STOCK_SELECTOR_*.md  # 股票筛选模块方案
 ├── references/                     # 参考资料
 │   ├── 01_旧版设计文档.md
 │   ├── 02_数据来源方案.md
@@ -31,8 +34,9 @@ docs/
 | 文件 | 说明 | 状态 |
 |------|------|------|
 | `PROJECT_OVERVIEW.md` | 项目概览 | ✅ |
-| `DATA_MANAGER_ARCHITECTURE.md` | 数据管理模块方案 v18.1.6 | ✅ 完整 |
-| `ENGINE_ARCHITECTURE.md` | 分析引擎模块方案 v18.1.6 | ✅ 完整 |
+| `data_manager/DATA_MANAGER_ARCHITECTURE.md` | 数据管理模块方案（当前 v18.7 与实现同步说明见文内版本表） | ✅ 完整 |
+| `stock_selector/STOCK_SELECTOR_ARCHITECTURE.md` | 股票筛选模块方案 v19.5.5（含产品范围：仅主板） | ✅ 完整 |
+| `engine/ENGINE_ARCHITECTURE.md` | 分析引擎模块方案 v18.1.6 | ✅ 完整 |
 
 ---
 

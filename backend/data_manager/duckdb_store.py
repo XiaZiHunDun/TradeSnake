@@ -20,12 +20,15 @@ DuckDB历史行情存储 - DuckDB Historical Price Store
 import sqlite3
 import duckdb
 import json
+import logging
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 import threading
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 # ==================== 路径配置 ====================
@@ -431,6 +434,44 @@ class DuckDBStore:
         except Exception as e:
             print(f"get_klines_bulk error: {e}")
             return {}
+
+    def get_avg_daily_amount_20d_bulk(
+        self, codes: List[str], chunk_size: int = 400
+    ) -> Dict[str, float]:
+        """
+        批量计算近 20 个交易日日均成交额（元，与 daily_kline.amount 一致）。
+
+        用于股票池初始化/再平衡时填充 daily_volume_20d（万元 = 本返回值 / 10000）。
+        """
+        result: Dict[str, float] = {}
+        if not codes:
+            return result
+        unique = list({str(c).strip() for c in codes if c})
+        try:
+            with self._get_read_conn() as conn:
+                for i in range(0, len(unique), chunk_size):
+                    chunk = unique[i : i + chunk_size]
+                    placeholders = ",".join(["?" for _ in chunk])
+                    sql = f"""
+                        SELECT code, AVG(amount) AS avg_amt
+                        FROM (
+                            SELECT code, amount,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY code ORDER BY trade_date DESC
+                                ) AS rn
+                            FROM daily_kline
+                            WHERE code IN ({placeholders})
+                        ) t
+                        WHERE rn <= 20
+                        GROUP BY code
+                    """
+                    rows = conn.execute(sql, chunk).fetchall()
+                    for row in rows:
+                        if row[0] is not None:
+                            result[str(row[0])] = float(row[1] or 0)
+        except Exception as e:
+            logger.debug("get_avg_daily_amount_20d_bulk failed: %s", e)
+        return result
 
     def get_latest_kline(self, code: str) -> Optional[Dict]:
         """获取最新一条K线"""
