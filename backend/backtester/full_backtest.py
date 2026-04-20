@@ -109,7 +109,7 @@ class FullBacktestEngine:
             raise ValueError("交易日数据不足")
 
         # 初始化状态
-        cash = initial_capital
+        cash = {'value': initial_capital}
         positions: Dict[str, Position] = {}
         pending_bought: Set[str] = set()
         trades: List[BacktestTrade] = []
@@ -148,15 +148,15 @@ class FullBacktestEngine:
                 self._execute_buy(positions, cash, trades, pending_bought, code, trade_date)
 
             # 记录净值
-            total_value = cash + sum(
+            total_value = cash['value'] + sum(
                 pos.quantity * self._get_price(pos.code, trade_date)
                 for pos in positions.values()
             )
             equity_curve.append({
                 'date': trade_date,
                 'total_value': total_value,
-                'cash': cash,
-                'position_value': total_value - cash
+                'cash': cash['value'],
+                'position_value': total_value - cash['value']
             })
 
             # 清除当日买入记录
@@ -164,7 +164,7 @@ class FullBacktestEngine:
 
         # 计算统计
         return self._calculate_stats(
-            initial_capital, cash, positions, equity_curve, trades
+            initial_capital, cash['value'], positions, equity_curve, trades
         )
 
     def _get_trading_dates(self, start_date: str, end_date: str) -> List[str]:
@@ -214,7 +214,7 @@ class FullBacktestEngine:
             result[factor.code] = factor
         return result
 
-    def _execute_buy(self, positions: Dict, cash: float, trades: List,
+    def _execute_buy(self, positions: Dict, cash: Dict, trades: List,
                      pending_bought: Set, code: str, date: str):
         """执行买入"""
         price = self._get_price(code, date)
@@ -227,7 +227,7 @@ class FullBacktestEngine:
 
         # 计算可买入数量（100股整数倍）
         # 考虑交易费用
-        available_cash = cash * 0.99  # 预留1%费用
+        available_cash = cash['value'] * 0.99  # 预留1%费用
         max_qty = int(available_cash / price) // 100 * 100
         if max_qty < 100:
             return
@@ -238,9 +238,9 @@ class FullBacktestEngine:
         transfer_fee = gross_amount * self.TRANSFER_FEE_RATE
         total_cost = gross_amount + commission + transfer_fee
 
-        if total_cost > cash:
+        if total_cost > cash['value']:
             # 资金不足，减少数量
-            max_qty = int((cash * 0.99) / (price * (1 + self.COMMISSION_RATE + self.TRANSFER_FEE_RATE))) // 100 * 100
+            max_qty = int((cash['value'] * 0.99) / (price * (1 + self.COMMISSION_RATE + self.TRANSFER_FEE_RATE))) // 100 * 100
             if max_qty < 100:
                 return
             gross_amount = price * max_qty
@@ -249,7 +249,7 @@ class FullBacktestEngine:
             total_cost = gross_amount + commission + transfer_fee
 
         # 执行
-        cash -= total_cost
+        cash['value'] -= total_cost
         positions[code] = Position(
             code=code,
             name=name,
@@ -271,7 +271,7 @@ class FullBacktestEngine:
             commission=commission + transfer_fee
         ))
 
-    def _execute_sell(self, positions: Dict, cash: float, trades: List,
+    def _execute_sell(self, positions: Dict, cash: Dict, trades: List,
                      code: str, date: str, reason: str):
         """执行卖出"""
         if code not in positions:
@@ -290,7 +290,7 @@ class FullBacktestEngine:
         total_cost = commission + stamp_tax + transfer_fee
 
         net_amount = gross_amount - total_cost
-        cash += net_amount
+        cash['value'] += net_amount
 
         trades.append(BacktestTrade(
             date=date,
