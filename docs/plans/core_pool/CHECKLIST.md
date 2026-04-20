@@ -174,6 +174,7 @@ python -m pytest backend/tests/test_recommender.py -v
 | 2026-04-20 | adj_close = 0 未计算 | DuckDB UPDATE | 3,578 行已修复 |
 | 2026-04-20 | DuckDB trade_cal 为空 | Tushare填充 | 366行已填充 |
 | 2026-04-20 | prediction_store 覆盖率低 | 批量预测生成 | 5053/5194只 (97.3%) |
+| 2026-04-20 | SQLite stocks表有148条sh/sz前缀重复 | DELETE WHERE code LIKE 'sh%' | 148条已删除 |
 
 ---
 

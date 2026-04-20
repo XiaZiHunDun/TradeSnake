@@ -232,6 +232,23 @@ WHERE adj_factor != 1.0 AND adj_close = 0
 
 **状态**: ✅ 已修复 (2026-04-20) - 3,578行已更新
 
+---
+
+### ✅ P2: SQLite stocks表有sh/sz前缀重复记录 (v19.9.6)
+
+**描述**: SQLite stocks表有148条带sh/sz前缀的重复记录，导致核心池查询时找不到这些股票。
+
+**影响**:
+- 核心池300只股票中9只显示"无K线数据"
+- 实际是代码格式不一致（sh603207 vs 603207）
+
+**修复**:
+```sql
+DELETE FROM stocks WHERE code LIKE 'sh%' OR code LIKE 'sz%'
+```
+
+**状态**: ✅ 已修复 (2026-04-20) - 148条已删除，核心池300只全部有K线
+
 ### ✅ P1: prediction_store 代码格式不一致 (v19.9.5)
 
 **描述**: `prediction_store` 中部分代码带 `sh/sz` 前缀，与 DuckDB/SQLite stocks 表不一致，导致融合推荐时查不到预测数据。
