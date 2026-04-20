@@ -1,4 +1,4 @@
-# 核心池流程状态文档 v19.9.5
+# 核心池流程状态文档 v19.9.6
 
 > 核心池是 TradeSnake 分析系统的核心，涵盖股票池管理、战力计算、预测分析、推荐决策等关键功能。
 > 本文档记录核心池的整体流程、模块对接、数据流转和问题追踪。
@@ -208,9 +208,11 @@ minute_kline (
 )
 ```
 
-**数据量**:
-- daily_kline: ~2.4M 行
-- minute_kline: ~2.4M 行
+**数据量** (2026-04-20):
+- daily_kline: 2,398,525 行, 5194 只股票
+- minute_kline: 2,421,863 行
+- trade_cal: 366 行
+- 日期范围: 2024-04-10 ~ 2026-04-13
 
 ### 4.2 SQLite
 
@@ -242,6 +244,11 @@ probability_predictions (
     code, name, up_probability_3d/5d, confidence, risk_level, recorded_at
 )
 ```
+
+**数据量** (2026-04-20):
+- stocks: 3,284 只股票
+- prediction_store: 5,053 只股票有预测 (97.3%)
+- cp_history: 43,463 条记录
 
 ---
 
@@ -310,13 +317,18 @@ def _normalize_code(raw_code: str) -> str:
 | `BacktestCompatibilityLayer` SQLite fallback | MEDIUM | v19.9.5 | ✅ 已修复 |
 | DuckDB `get_klines` 异常未记录 | MEDIUM | v19.9.5 | ✅ 已修复 |
 | DuckDB trade_cal 空 | MEDIUM | v19.9.4 | ✅ 懒加载修复 |
+| DuckDB adj_factor NULL | MEDIUM | v19.9.6 | ✅ 已修复 |
+| DuckDB adj_close = 0 | MEDIUM | v19.9.6 | ✅ 已修复 |
+| prediction_store 覆盖率低 | MEDIUM | v19.9.6 | ✅ 已修复 (97.3%) |
+| roe > 0 阻止负ROE股票保存 | MEDIUM | v19.9.6 | ✅ 已修复 |
+| SQLite stocks表有sh/sz前缀重复记录 | MEDIUM | v19.9.6 | ✅ 已修复 (148条) |
 
 ### 7.2 已知问题
 
 | 问题 | 严重性 | 说明 | 解决方案 |
 |------|--------|------|----------|
-| adj_factor 全为 1.0 | LOW | 复权因子未回填 | 调用 `duckdb.backfill_adj_factor()` |
 | DuckDB minute_kline 仅约5天 | LOW | 应保留14天 | 需数据源持续补充 |
+| 141只股票K线不足5根 | LOW | 数据源限制，无法生成预测 | 不影响核心池 |
 
 ---
 
@@ -324,6 +336,7 @@ def _normalize_code(raw_code: str) -> str:
 
 | 版本 | 日期 | 更新 |
 |------|------|------|
+| v19.9.6 | 2026-04-20 | 修复adj_factor/adj_close/trade_cal、数据完整性、重复记录 |
 | v19.9.5 | 2026-04-17 | 修复预测融合接入、添加融合字段 |
 | v19.9.4 | 2026-04-17 | 懒加载修复、adj_factor 回填方法 |
 | v19.9.3 | 2026-04-17 | asyncio.Lock、JSON持久化 |
