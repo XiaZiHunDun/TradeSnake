@@ -777,7 +777,7 @@ class KlineFiller:
         将缺失的日期列表合并为连续的区间
 
         Args:
-            missing_days: 缺失的日期列表 (YYYY-MM-DD格式)
+            missing_days: 缺失的日期列表 (YYYY-MM-DD格式 或 datetime.date 对象)
 
         Returns:
             [(gap_start, gap_end), ...] 缺口区间列表
@@ -785,27 +785,36 @@ class KlineFiller:
         if not missing_days:
             return []
 
-        from datetime import datetime, timedelta
+        from datetime import datetime, date
 
-        # 排序
-        missing_days.sort()
+        def to_date(val) -> datetime:
+            """将字符串或 datetime.date 转换为 datetime"""
+            if isinstance(val, str):
+                return datetime.strptime(val, '%Y-%m-%d')
+            elif isinstance(val, date):
+                return datetime.combine(val, datetime.min.time())
+            else:
+                raise ValueError(f"Unsupported date type: {type(val)}")
+
+        # 排序并转换为统一格式
+        sorted_days = sorted(missing_days, key=lambda x: to_date(x))
         gaps = []
-        gap_start = missing_days[0]
-        prev_date = datetime.strptime(missing_days[0], '%Y-%m-%d')
+        gap_start_dt = to_date(sorted_days[0])
+        prev_date = gap_start_dt
 
-        for i in range(1, len(missing_days)):
-            current_date = datetime.strptime(missing_days[i], '%Y-%m-%d')
+        for i in range(1, len(sorted_days)):
+            current_date = to_date(sorted_days[i])
             # 如果当前日期是前一天+1，说明是连续的
             if (current_date - prev_date).days == 1:
                 prev_date = current_date
             else:
                 # 不连续，保存当前区间并开始新区间
-                gaps.append((gap_start, prev_date.strftime('%Y-%m-%d')))
-                gap_start = missing_days[i]
-                prev_date = current_date
+                gaps.append((gap_start_dt.strftime('%Y-%m-%d'), prev_date.strftime('%Y-%m-%d')))
+                gap_start_dt = to_date(sorted_days[i])
+                prev_date = gap_start_dt
 
         # 保存最后一个区间
-        gaps.append((gap_start, prev_date.strftime('%Y-%m-%d')))
+        gaps.append((gap_start_dt.strftime('%Y-%m-%d'), prev_date.strftime('%Y-%m-%d')))
 
         return gaps
 
@@ -2017,6 +2026,151 @@ class CPHistoryBatchCalculator:
                 result.errors.append(f"{code}: {str(e)}")
 
         return stocks_to_save
+
+    def _get_core_pool_codes(self) -> List[str]:
+        """
+        获取核心池股票代码
+
+        Returns:
+            核心池股票代码列表
+        """
+        try:
+            from backend.stock_selector.stock_selector import StockSelector
+            from backend.stock_selector.enums import PoolTier
+            selector = StockSelector()
+            # 核心池股票代码
+            return selector.get_pool(PoolTier.CORE)
+        except Exception as e:
+            print(f"获取核心池股票失败: {e}")
+            return []
+
+    def _calculate_cp_for_date(self, date: str, codes: List[str]) -> List[Dict]:
+        """
+        计算指定日期的战力
+
+        Args:
+            date: 日期 (YYYY-MM-DD)
+            codes: 股票代码列表
+
+        Returns:
+            股票战力列表，按 total_cp 降序排列
+        """
+        from datetime import datetime, timedelta
+
+        # 计算60天前的日期
+        end_dt = datetime.strptime(date, '%Y-%m-%d')
+        start_dt = end_dt - timedelta(days=70)  # 多取几天确保有足够数据
+        start_date = start_dt.strftime('%Y-%m-%d')
+
+        # 获取K线数据
+        klines_dict = {}
+        for code in codes:
+            result = self.duckdb.get_klines(
+                code,
+                start_date=start_date,
+                end_date=date,
+                limit=100
+            )
+            if result.success and result.data is not None and not result.data.empty:
+                klines_dict[code] = result.data.to_dict('records')
+
+        # 获取财务数据
+        financials = self._get_stock_financials(codes)
+
+        # 使用 CPEngine 计算
+        cp_engine = self._get_cp_engine()
+        stocks_to_save = []
+
+        if cp_engine is not None:
+            # 使用真实 CPEngine 计算
+            stock_objects = []
+            for code in codes:
+                klines = klines_dict.get(code, [])
+                stock_data = financials.get(code, {'code': code, 'name': '', 'pe': 0, 'roe': 0})
+
+                stock = self._create_stock_cp(stock_data, klines)
+                if stock:
+                    stock_objects.append(stock)
+                    cp_engine.add_stock(stock)
+
+            if stock_objects:
+                calculated_stocks = cp_engine.calculate_all(use_multi_day_momentum=True)
+                for stock in calculated_stocks:
+                    stocks_to_save.append({
+                        'code': stock.code,
+                        'name': stock.name,
+                        'total_cp': stock.total_cp,
+                        'growth_score': stock.growth_score,
+                        'value_score': stock.value_score,
+                        'quality_score': stock.quality_score,
+                        'momentum_score': stock.momentum_score,
+                        'risk_score': stock.risk_score,
+                        'rank': 0,
+                    })
+        else:
+            # 简化计算（兼容模式）
+            for code in codes:
+                klines = klines_dict.get(code, [])
+                stock_data = financials.get(code, {'code': code, 'name': '', 'pe': 0, 'roe': 0})
+                cp_data = self._calculate_simple_cp(stock_data, klines)
+                stocks_to_save.append(cp_data)
+
+        # 按 total_cp 降序排列并设置排名
+        stocks_to_save.sort(key=lambda x: x['total_cp'], reverse=True)
+        for i, stock in enumerate(stocks_to_save):
+            stock['rank'] = i + 1
+
+        return stocks_to_save
+
+    def calculate_historical_cp(self, dates: List[str], codes: List[str] = None,
+                                 force_recalculate: bool = False) -> FillResult:
+        """
+        批量计算历史战力
+
+        Args:
+            dates: 日期列表 (YYYY-MM-DD)
+            codes: 股票代码列表（None表示使用核心池）
+            force_recalculate: 是否强制重新计算
+
+        Returns:
+            FillResult: 计算结果统计
+        """
+        result = FillResult()
+
+        # 获取股票代码
+        if codes is None:
+            codes = self._get_core_pool_codes()
+
+        if not codes:
+            print("没有指定股票代码")
+            return result
+
+        print(f"开始计算 {len(codes)} 只股票在 {len(dates)} 个日期的战力...")
+
+        for date in dates:
+            # 检查是否已有数据
+            existing = self.cp_store.get_cp_history_by_date(date)
+            if existing and not force_recalculate:
+                print(f"日期 {date} 已有数据 ({len(existing)}只)，跳过")
+                result.skipped += len(existing)
+                continue
+
+            # 计算战力
+            try:
+                stocks = self._calculate_cp_for_date(date, codes)
+                if stocks:
+                    # 保存到 cp_history
+                    self.cp_store.record_cp_history(stocks)
+                    result.success += len(stocks)
+                    print(f"日期 {date}: 计算 {len(stocks)} 只股票")
+                else:
+                    result.failed += 1
+            except Exception as e:
+                result.failed += 1
+                result.errors.append(f"{date}: {str(e)}")
+                print(f"日期 {date} 计算失败: {e}")
+
+        return result
 
     def get_stats(self) -> Dict:
         """获取计算统计"""
