@@ -706,6 +706,55 @@ print(report)
 
 **TODO**: 将 backtester 模块接入 `api/router.py`
 
+### 7.3 待完善功能 (TODO)
+
+| 功能 | 优先级 | 说明 |
+|------|--------|------|
+| **成交价模型扩展** | 中 | 目前仅支持 close 收盘价成交；方案设计支持 next_open/vwap，需外部需求驱动 |
+| **基准数据获取** | 中 | 方案设计支持沪深300基准对比，目前返回 None；需数据源支持 |
+| **预测分数融合** | 低 | 方案设计回测中可融合涨幅/概率预测；目前仅用CP分数，预测分数在 verification.py 单独验证 |
+| **price_history 迁移** | 高 | 回测器当前使用 SQLite price_history 表；方案已记录应迁移到 DuckDB daily_kline |
+
+> 注：上述功能在"一、实现差异说明"章节已有记录，此处汇总为 TODO 便于跟踪
+
+## 七.y 输入输出验证 (2026-04-16)
+
+### 输入验证
+
+| 来源 | 方案描述 | 实际实现 | 状态 |
+|------|----------|----------|------|
+| data_manager.cp_history | 历史战力数据 | backtest.py:609-618 从 simulator.database 读取 | ⚠️ |
+| data_manager.prediction_store | 历史预测结果 | verification.py:340-344,450-454 正确读取 | ✅ |
+| data_manager | 历史行情数据 | backtest.py:661-675 从 SQLite price_history 读取 | ⚠️ |
+| simulator | holding_snapshots | verification.py:119 正确读取 | ✅ |
+| simulator | trades | verification.py:119 正确读取 | ✅ |
+
+### 输出验证
+
+| 输出内容 | 方案描述 | 实际实现 | 状态 |
+|----------|----------|----------|------|
+| BacktestResult | 回测绩效结果 | backtest.py 返回 BacktestResult 对象 | ✅ |
+| 换股验证报告 | 胜率/平均收益 | verification.py:100-179 verify_swap_effectiveness() | ✅ |
+| CP预测准确性 | 高战力组跑赢概率 | verification.py:211-317 verify_cp_prediction_accuracy() | ✅ |
+| 涨幅预测准确性 | 预测偏差/TOPK准确率 | verification.py:319-427 verify_gain_prediction_accuracy() | ✅ |
+| 概率预测准确性 | 概率校准度 | verification.py:429-554 verify_probability_prediction_accuracy() | ✅ |
+| 回测报告存档 | backtest_reports.db | verification.py:732-768 save_verification_report() | ✅ |
+
+### 模块对接检查
+
+| 对接项 | 方向 | 实现方式 | 状态 |
+|--------|------|----------|------|
+| cp_history读取 | data_manager → backtester | backtester 从 simulator.database 读取，而非 data_manager/cp_history_store | ⚠️ |
+| prediction_store读取 | data_manager → backtester | verification.py 正确导入 data_manager.prediction_store | ✅ |
+| holding_snapshots读取 | simulator → backtester | verification.py 通过 db.get_holding_snapshots() 读取 | ✅ |
+| trades读取 | simulator → backtester | verification.py 通过 db.get_trades() 读取 | ✅ |
+
+**问题**：backtest.py 的 `_default_get_trading_dates()` 和 `_default_get_stock_factors()` 从 `simulator.database` 读取 cp_history，但战力数据实际由 `data_manager/cp_history_store` 管理。
+
+**✅ 已修复 (v19.9.2)**：backtester 的 `_default_get_trading_dates()` 和 `_default_get_stock_factors()` 现从 `data_manager.cp_history_store` 读取，与战力刷新保持一致。同时修复 `cp_history_store` 表结构，添加 `change_pct` 列用于回测涨跌停判断。
+
+**建议**：回测器应支持从 data_manager 获取数据，或确保两个数据源同步。
+
 ```python
 # 目标：使用新的 backtester 模块接入 api/router.py
 from backend.backtester import Backtest, TopNStrategy, generate_report
@@ -723,6 +772,7 @@ async def new_backtest(...):
 
 | 版本 | 日期 | 更新 |
 |------|------|------|
+| v19.9.2 | 2026-04-17 | ✅ 修复backtester从data_manager.cp_history_store读取战力数据 |
 | v19.9.1 | 2026-04-14 | 补充"实现差异说明"章节：记录未完成的5项功能（成交价模型、现金预留、止损触发、基准获取、预测分数融合） |
 | v19.9 | 2026-04-09 | ✅ 明确回测器数据来源，price_history为历史遗留表，计划迁移到DuckDB |
 | v19.8 | 2026-04-09 | ✅ 实现 PositionManager 类、BacktestReportStore、回测报告存档功能 |

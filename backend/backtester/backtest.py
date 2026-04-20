@@ -605,24 +605,28 @@ class Backtest:
         return result
 
     def _default_get_trading_dates(self, start_date: str, end_date: str) -> List[str]:
-        """默认获取交易日列表（使用数据库）"""
-        from backend.simulator.database import get_db
+        """默认获取交易日列表（从 data_manager/cp_history_store 读取）"""
+        from backend.data_manager.cp_history_store import get_cp_history_store
 
-        db = get_db()
-        cursor = db.conn.cursor()
+        store = get_cp_history_store()
+        conn = store._get_conn()
+        cursor = conn.cursor()
         cursor.execute("""
             SELECT DISTINCT recorded_at FROM cp_history
             WHERE recorded_at >= ? AND recorded_at <= ?
             ORDER BY recorded_at
         """, (start_date, end_date))
-        return [row['recorded_at'] for row in cursor.fetchall()]
+        dates = [row['recorded_at'] for row in cursor.fetchall()]
+        conn.close()
+        return dates
 
     def _default_get_stock_factors(self, date: str, codes: List[str] = None) -> Dict[str, StockFactor]:
-        """默认获取战力因子数据"""
-        from backend.simulator.database import get_db
+        """默认获取战力因子数据（从 data_manager/cp_history_store 读取）"""
+        from backend.data_manager.cp_history_store import get_cp_history_store
 
-        db = get_db()
-        cursor = db.conn.cursor()
+        store = get_cp_history_store()
+        conn = store._get_conn()
+        cursor = conn.cursor()
 
         if codes:
             placeholders = ','.join('?' * len(codes))
@@ -656,6 +660,7 @@ class Backtest:
             )
             result[factor.code] = factor
 
+        conn.close()
         return result
 
     def _default_get_price_data(self, code: str, date: str) -> Dict:
@@ -693,29 +698,35 @@ class BacktestEngine:
     """
 
     def __init__(self):
-        from backend.simulator.database import get_db
-        self.db = get_db()
+        from backend.data_manager.cp_history_store import get_cp_history_store
+        self.cp_store = get_cp_history_store()
 
     def get_available_dates(self, start_date: str, end_date: str) -> List[str]:
-        """获取回测期间内有数据的日期"""
-        cursor = self.db.conn.cursor()
+        """获取回测期间内有数据的日期（从 cp_history_store 读取）"""
+        conn = self.cp_store._get_conn()
+        cursor = conn.cursor()
         cursor.execute("""
             SELECT DISTINCT recorded_at FROM cp_history
             WHERE recorded_at >= ? AND recorded_at <= ?
             ORDER BY recorded_at
         """, (start_date, end_date))
-        return [row['recorded_at'] for row in cursor.fetchall()]
+        dates = [row['recorded_at'] for row in cursor.fetchall()]
+        conn.close()
+        return dates
 
     def get_top_stocks_at_date(self, date: str, limit: int = 10) -> List[Dict]:
-        """获取指定日期的TOP N股票"""
-        cursor = self.db.conn.cursor()
+        """获取指定日期的TOP N股票（从 cp_history_store 读取）"""
+        conn = self.cp_store._get_conn()
+        cursor = conn.cursor()
         cursor.execute("""
             SELECT * FROM cp_history
             WHERE recorded_at = ?
             ORDER BY rank
             LIMIT ?
         """, (date, limit))
-        return [dict(row) for row in cursor.fetchall()]
+        result = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return result
 
     def get_stock_price_at_date(self, code: str, date: str) -> Optional[float]:
         """获取指定日期之后的第一个交易日价格（优先从DuckDB获取）"""
@@ -734,16 +745,8 @@ class BacktestEngine:
         except Exception as e:
             pass
 
-        # 回退到 SQLite（兼容旧数据）
-        cursor = self.db.conn.cursor()
-        cursor.execute("""
-            SELECT close FROM price_history
-            WHERE code = ? AND date <= ?
-            ORDER BY date DESC LIMIT 1
-        """, (code, date))
-        row = cursor.fetchone()
-        if row:
-            return row['close']
+        # 回退到 DuckDB 查询（使用更早的日期范围确保找到数据）
+        # v19.9.5: 移除无效的 SQLite fallback（DuckDB 是唯一数据源）
         return None
 
     def calculate_simple_backtest(

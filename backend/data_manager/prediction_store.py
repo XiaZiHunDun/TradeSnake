@@ -19,6 +19,18 @@ from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 
 
+def _normalize_code(raw_code: str) -> str:
+    """标准化股票代码为6位格式 (v19.9.5)"""
+    code = raw_code
+    if code.startswith('sh'):
+        code = code[2:]
+    elif code.startswith('sz'):
+        code = code[2:]
+    if '.' in code:
+        code = code.split('.')[0]
+    return code
+
+
 def _tuple_to_str(tup: Tuple) -> str:
     """将tuple转换为字符串，用于数据库存储"""
     if tup is None:
@@ -146,6 +158,8 @@ class PredictionStore:
 
             for pred in predictions:
                 features_json = json.dumps(pred.get('features', {})) if pred.get('features') else None
+                # v19.9.5: 标准化代码格式
+                code = _normalize_code(pred.get('code', ''))
                 cursor.execute("""
                     INSERT INTO gain_predictions (
                         code, name, predicted_gain_3d, predicted_gain_5d,
@@ -153,7 +167,7 @@ class PredictionStore:
                         features, model_version, recorded_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    pred.get('code'),
+                    code,
                     pred.get('name'),
                     pred.get('predicted_gain_3d', 0),
                     pred.get('predicted_gain_5d', 0),
@@ -190,13 +204,15 @@ class PredictionStore:
 
             for pred in predictions:
                 features_json = json.dumps(pred.get('features', {})) if pred.get('features') else None
+                # v19.9.5: 标准化代码格式
+                code = _normalize_code(pred.get('code', ''))
                 cursor.execute("""
                     INSERT INTO probability_predictions (
                         code, name, up_probability_3d, up_probability_5d,
                         confidence, risk_level, features, model_version, recorded_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    pred.get('code'),
+                    code,
                     pred.get('name'),
                     pred.get('up_probability_3d', 0),
                     pred.get('up_probability_5d', 0),
@@ -221,6 +237,8 @@ class PredictionStore:
         Returns:
             历史涨幅预测列表
         """
+        # v19.9.5: 标准化代码格式
+        code = _normalize_code(code)
         conn = self._get_conn()
         cursor = conn.cursor()
 
@@ -253,6 +271,8 @@ class PredictionStore:
         Returns:
             历史概率预测列表
         """
+        # v19.9.5: 标准化代码格式
+        code = _normalize_code(code)
         conn = self._get_conn()
         cursor = conn.cursor()
 

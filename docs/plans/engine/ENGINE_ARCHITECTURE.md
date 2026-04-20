@@ -82,6 +82,33 @@
 
 ---
 
+## 一.x 实现同步说明
+
+### 战力引擎与 stock_selector 对接
+
+| 项 | 方案设计 | 实际实现 |
+|----|----------|----------|
+| **池变化通知** | cp_engine 实现 `SelectorCallback` 协议，接收 `on_pool_changed` 等回调 | 后台任务 `background_refresh_task` 定期轮询 `selector.get_all_analysable_codes()` 获取池信息 |
+| **数据刷新** | 回调触发时主动刷新对应股票战力 | 轮询触发：按核心池/活跃池分层刷新策略定时执行 |
+
+**说明**：方案设计采用**回调驱动**（事件通知），实际实现采用**轮询驱动**（定时查询）。功能上等效，但架构风格不同。当前实现避免了在 cp_engine 中引入回调依赖，简化了模块耦合。
+
+### 预测引擎与 recommendation 对接
+
+| 项 | 方案设计 | 实际实现 |
+|----|----------|----------|
+| **预测计算触发** | 每日收盘后（约15:30-16:00）自动计算并保存 | 仅通过 API 按需计算，未自动定时触发 |
+| **预测结果保存** | `predict()` 自动将结果写入 `prediction_store` | `save_to_store()` 方法存在但**未被自动调用** |
+| **融合决策** | recommender 从 `prediction_store` 读取最新预测 | 正确：`PredictionFusion.get_latest_predictions()` |
+
+**影响**：若未主动调用 API 保存预测，`prediction_store` 为空，融合将退化为仅使用战力评分（`predicted_gain=0`, `up_probability=0.5`）。
+
+**建议**：可通过后台任务或 `api/main.py` 启动时添加每日预测计算并保存的逻辑。
+
+**✅ 已修复 (v19.8.2)**：收盘后（16:00之后）战力刷新时自动计算并保存预测到 prediction_store。详见 `api/main.py` 的 `background_refresh_task`。
+
+---
+
 ## 二、模块结构
 
 ```
@@ -375,6 +402,10 @@ probability_predictor/
 
 | 版本 | 日期 | 更新 |
 |------|------|------|
+| v19.9.3 | 2026-04-17 | 🐛 修复 cp_engine 并发锁（添加 asyncio.Lock）；修复 last_prediction_save_date 持久化（JSON文件） |
+| v19.9.2 | 2026-04-17 | 🐛 修复 `save_predictions_to_store` 参数类型错误（predictor.predict 接收 Dict，需将 DataFrame 转为 List[Dict]） |
+| v19.9.1 | 2026-04-17 | 🐛 修复 `cp_engine.stocks.keys()` 类型错误（List[StockCP] 无 .keys()） |
+| v19.8.2 | 2026-04-17 | ✅ 收盘后自动计算并保存预测到 prediction_store |
 | v19.8 | 2026-04-08 | 🔨 重组为引擎目录结构，新增预测引擎 |
 | v19.7 | 2026-04-08 | cp_history迁移到data_manager |
 | v18.2 | 2026-04-07 | 技术指标集成、稳健归一化 |

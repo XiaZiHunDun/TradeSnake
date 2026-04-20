@@ -813,19 +813,29 @@ class DuckDBCleaner:
             # 先执行归档（如果表不存在会创建）
             archived_count, _ = self.archive_old_daily_klines(keep_years)
 
-            # 直接删除旧数据（DuckDB 不支持 DELETE ... LIMIT）
-            result = conn.execute("""
-                DELETE FROM daily_kline
-                WHERE trade_date < ?
-            """, [cutoff_date])
+            # v19.9.3: 分批删除旧数据，避免长时间锁表
+            total_deleted = 0
+            while True:
+                # DuckDB 支持 DELETE ... LIMIT
+                result = conn.execute("""
+                    DELETE FROM daily_kline
+                    WHERE trade_date < ?
+                    LIMIT ?
+                """, [cutoff_date, batch_size])
 
-            deleted = result.rowcount
+                deleted = result.rowcount
+                if deleted == 0:
+                    break
+                total_deleted += deleted
+                # 短暂等待避免阻塞其他操作
+                import time
+                time.sleep(0.05)
 
             return CleanupResult(
                 success=True,
                 operation="duckdb_daily_kline",
-                deleted_count=deleted,
-                freed_bytes=deleted * 54,  # 每条约54字节
+                deleted_count=total_deleted,
+                freed_bytes=total_deleted * 54,  # 每条约54字节
                 details={
                     "cutoff_date": cutoff_date,
                     "keep_years": keep_years,
@@ -852,11 +862,12 @@ class DuckDBCleaner:
         try:
             total_deleted = 0
             while True:
-                # DuckDB 不支持 DELETE ... LIMIT，直接删除符合条件的记录
+                # v19.9.3: DuckDB 支持 DELETE ... LIMIT，使用分批删除
                 result = conn.execute("""
                     DELETE FROM minute_kline
                     WHERE trade_time < ?
-                """, [cutoff_datetime])
+                    LIMIT ?
+                """, [cutoff_datetime, batch_size])
 
                 deleted = result.rowcount
                 if deleted == 0:
@@ -864,7 +875,7 @@ class DuckDBCleaner:
 
                 total_deleted += deleted
                 # 分钟K线数据量大，等待一下避免阻塞
-                time.sleep(0.1)
+                time.sleep(0.05)
 
             return CleanupResult(
                 success=True,
@@ -1090,6 +1101,43 @@ class LifecycleCleanupScheduler:
                     "deleted_count": alerts_result.deleted_count,
                     "freed_bytes": alerts_result.freed_bytes
                 })
+
+                # Step 5.1: v19.9.3 清理 cp_history_store (独立数据库)
+                try:
+                    from backend.data_manager.cp_history_store import get_cp_history_store
+                    cp_store = get_cp_history_store()
+                    # 清理90天前的战力历史
+                    from datetime import datetime, timedelta
+                    cutoff = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+                    deleted = cp_store.delete_old_records(cutoff)
+                    results["operations"].append({
+                        "operation": "cp_history_store_cleanup",
+                        "status": "success",
+                        "deleted_count": deleted
+                    })
+                except Exception as e:
+                    results["operations"].append({
+                        "operation": "cp_history_store_cleanup",
+                        "status": "failed",
+                        "error": str(e)
+                    })
+
+                # Step 5.2: v19.9.3 清理 prediction_store (独立数据库)
+                try:
+                    from backend.data_manager.prediction_store import get_prediction_store
+                    pred_store = get_prediction_store()
+                    deleted = pred_store.delete_old_records(cutoff)
+                    results["operations"].append({
+                        "operation": "prediction_store_cleanup",
+                        "status": "success",
+                        "deleted_count": deleted
+                    })
+                except Exception as e:
+                    results["operations"].append({
+                        "operation": "prediction_store_cleanup",
+                        "status": "failed",
+                        "error": str(e)
+                    })
 
             # Step 6: 记录审计日志
             self._log_audit(results)

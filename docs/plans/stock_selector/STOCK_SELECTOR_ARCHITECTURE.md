@@ -36,6 +36,7 @@
 | 项 | 实现要点 |
 |----|----------|
 | **`market_snapshot.py`** | 将 `StockDataFetcher.get_batch_market_data` 等返回的行情行转为 `market_data[code]`（`daily_volume_20d` 万元、`volume_rank`、指数成分标记等）。近 20 日日均成交额优先用 DuckDB `get_avg_daily_amount_20d_bulk`；无 K 线时用当日 `amount` 近似。 |
+| **启动时 `financial_data`** | 方案描述"由 data_manager 提供财务数据"；实际启动时传入空 `{}`（`api/main.py` 第561行）。财务数据在 `refresh_pools` 时补充，或由战力计算阶段按需获取。 |
 | **启动顺序**（`backend/api/main.py`） | 构建 `market_data` → 注册 `UpdateScheduler` + `StockSelectorCallback`（实现完整 `SelectorCallback`）→ `StockSelector.initialize(...)`，保证 **入池时的 `on_pool_changed` 能到达调度器**。 |
 | **`refresh_pools` 触发** | 除业务代码手动调用外，由 **`pool_rebalance_background_task`** 在交易日收盘（`get_trading_status` 为已收盘）后尝试执行，每日最多一次。 |
 | **池变更通知** | `initialize` 完成后对各池发送一次 `on_pool_changed(tier, added,[])`；`refresh_pools` 在再平衡后按 tier 计算 `added`/`removed` 并通知；财务预警降级时对旧池/新池分别通知，并调用 `on_stock_downgraded`。 |

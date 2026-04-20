@@ -76,6 +76,7 @@ class CPHistoryStore:
         # 需要添加的列（表结构升级）
         required_columns = {
             'price': 'REAL DEFAULT 0',
+            'change_pct': 'REAL DEFAULT 0',  # v19.9.2: 添加涨跌幅用于回测涨跌停判断
             'is_hot': 'INTEGER DEFAULT 1',
         }
 
@@ -127,13 +128,14 @@ class CPHistoryStore:
             for rank, stock in enumerate(sorted_stocks, 1):
                 cursor.execute("""
                     INSERT INTO cp_history (
-                        code, name, price, total_cp, growth_score, value_score,
+                        code, name, price, change_pct, total_cp, growth_score, value_score,
                         quality_score, momentum_score, risk_score, rank, recorded_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     stock.get('code'),
                     stock.get('name'),
                     stock.get('price', 0),
+                    stock.get('change_pct', 0),
                     stock.get('total_cp', 0),
                     stock.get('growth_score', 0),
                     stock.get('value_score', 0),

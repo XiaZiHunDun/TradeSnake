@@ -415,3 +415,42 @@ def get_probability_predictor() -> ProbabilityPredictor:
     if _predictor is None:
         _predictor = ProbabilityPredictor()
     return _predictor
+
+
+def save_predictions_to_store(codes: List[str], data_manager=None, date: str = None) -> int:
+    """批量计算并保存上涨概率预测（便捷函数）
+
+    Args:
+        codes: 股票代码列表
+        data_manager: data_manager 实例（可选）
+        date: 日期，默认当天
+
+    Returns:
+        保存的股票数量
+    """
+    from datetime import datetime
+
+    if date is None:
+        date = datetime.now().strftime("%Y-%m-%d")
+
+    # 从 DuckDB 获取 K 线数据
+    from backend.data_manager.duckdb_store import get_klines_bulk
+    klines_dict_df = get_klines_bulk(codes, days=60)
+
+    # 转换为 List[Dict] 格式（predictor.predict 需要的格式）
+    klines_dict: Dict[str, List[Dict]] = {}
+    for code, df in klines_dict_df.items():
+        if df is not None and not df.empty:
+            # DataFrame 按日期升序排列
+            df_sorted = df.sort_values('trade_date')
+            klines_dict[code] = df_sorted.to_dict('records')
+
+    if not klines_dict:
+        return 0
+
+    predictor = get_probability_predictor()
+    result = predictor.predict(klines_dict)
+
+    if result and result.predictions:
+        return predictor.save_to_store(result, date)
+    return 0

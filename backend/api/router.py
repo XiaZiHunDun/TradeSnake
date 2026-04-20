@@ -182,9 +182,14 @@ async def get_cp_explain(code: str):
 async def get_recommend(
     category: str = Query("value", pattern="^(value|growth|momentum|quality)$"),
     risk_preference: str = Query("balanced", pattern="^(conservative|balanced|aggressive)$"),
-    exclude_holdings: bool = True
+    exclude_holdings: bool = True,
+    fusion: bool = Query(False, description="是否使用战力+预测融合推荐 (v19.9.5)")
 ):
-    """获取推荐股票"""
+    """获取推荐股票
+
+    Args:
+        fusion: True时使用战力×涨幅预测×上涨概率融合推荐，False时使用纯战力排序
+    """
     holdings = _portfolio.get_holdings() if exclude_holdings else []
     holding_codes = [h.get('code') for h in holdings]
 
@@ -193,27 +198,56 @@ async def get_recommend(
     if exclude_holdings and holding_codes:
         stocks = [s for s in stocks if s.code not in holding_codes]
 
-    # 排序
-    if category == 'value':
-        sorted_stocks = sorted(stocks, key=lambda x: x.value_score, reverse=True)
-    elif category == 'growth':
-        sorted_stocks = sorted(stocks, key=lambda x: x.growth_score, reverse=True)
-    elif category == 'momentum':
-        sorted_stocks = sorted(stocks, key=lambda x: x.momentum_score, reverse=True)
-    elif category == 'quality':
-        sorted_stocks = sorted(stocks, key=lambda x: x.quality_score, reverse=True)
+    if fusion:
+        # v19.9.5: 使用预测融合推荐
+        principal = 100000  # 默认本金10万
+        fusion_signals = recommend_engine.get_buy_signals(
+            stocks=stocks,
+            principal=principal,
+            risk_preference=risk_preference,
+            limit=20,
+            use_fusion=True
+        )
+
+        # 将融合结果转换为 StockCPData 格式
+        recs = []
+        for sig in fusion_signals:
+            # 获取原始 stock 对象
+            stock_obj = next((s for s in stocks if s.code == sig['code']), None)
+            if stock_obj:
+                resp = _build_stock_response(stock_obj)
+                resp_dict = resp.model_dump()
+                # 添加融合字段
+                resp_dict['kelly_position'] = sig.get('kelly_position', 0)
+                resp_dict['predicted_gain_5d'] = sig.get('predicted_gain_5d', 0)
+                resp_dict['up_probability_5d'] = sig.get('up_probability_5d', 0)
+                resp_dict['prediction_confidence'] = sig.get('prediction_confidence', 0)
+                resp_dict['fused_score'] = sig.get('fused_score', 0)
+                recs.append(resp_dict)
+            # stock_obj 为 None 时跳过（不应该发生）
     else:
-        sorted_stocks = sorted(stocks, key=lambda x: x.total_cp, reverse=True)
+        # 原有逻辑：按单维度排序
+        if category == 'value':
+            sorted_stocks = sorted(stocks, key=lambda x: x.value_score, reverse=True)
+        elif category == 'growth':
+            sorted_stocks = sorted(stocks, key=lambda x: x.growth_score, reverse=True)
+        elif category == 'momentum':
+            sorted_stocks = sorted(stocks, key=lambda x: x.momentum_score, reverse=True)
+        elif category == 'quality':
+            sorted_stocks = sorted(stocks, key=lambda x: x.quality_score, reverse=True)
+        else:
+            sorted_stocks = sorted(stocks, key=lambda x: x.total_cp, reverse=True)
 
-    # 风险过滤
-    if risk_preference == 'conservative':
-        sorted_stocks = [s for s in sorted_stocks if s.risk_score < 30]
-    elif risk_preference == 'balanced':
-        sorted_stocks = [s for s in sorted_stocks if s.risk_score < 50]
+        # 风险过滤
+        if risk_preference == 'conservative':
+            sorted_stocks = [s for s in sorted_stocks if s.risk_score < 30]
+        elif risk_preference == 'balanced':
+            sorted_stocks = [s for s in sorted_stocks if s.risk_score < 50]
 
-    recs = [_build_stock_response(s).model_dump() for s in sorted_stocks[:20]]
+        recs = [_build_stock_response(s).model_dump() for s in sorted_stocks[:20]]
 
-    return RecommendResponse(data=recs, total=len(recs), category=category)
+    return RecommendResponse(data=recs, total=len(recs), category=category,
+                              risk_preference=risk_preference)
 
 
 @router.get("/api/cp/swap", response_model=List[SwapSuggestion])

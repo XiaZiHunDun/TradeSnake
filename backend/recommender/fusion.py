@@ -247,8 +247,8 @@ class PredictionFusion:
         prob_predictions = {}
 
         for code in codes:
-            # 获取最新涨幅预测
-            gain_list = store.get_gain_predictions(code, days=1)
+            # 获取最新涨幅预测（优先今天，如果今天没预测则查近7天）
+            gain_list = store.get_gain_predictions(code, days=7)
             if gain_list:
                 latest = gain_list[0]
                 gain_predictions[code] = GainPrediction(
@@ -263,8 +263,8 @@ class PredictionFusion:
                     model_version=latest.get('model_version', 'rule_v19.8')
                 )
 
-            # 获取最新概率预测
-            prob_list = store.get_probability_predictions(code, days=1)
+            # 获取最新概率预测（优先今天，如果今天没预测则查近7天）
+            prob_list = store.get_probability_predictions(code, days=7)
             if prob_list:
                 latest = prob_list[0]
                 prob_predictions[code] = ProbabilityPrediction(

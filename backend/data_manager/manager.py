@@ -691,17 +691,21 @@ class DataManager:
 
                 records = []
                 for k in klines:
+                    # v19.9.4: Tushare pro.daily() 不返回复权因子
+                    # adj_factor 暂时使用默认值1.0，adj_close = close
+                    # 批量回填请调用 duckdb.backfill_adj_factor()
+                    close = k.get('close', 0)
                     records.append(KlineRecord(
                         code=code,
                         trade_date=k.get('trade_date', ''),
                         open=k.get('open', 0),
                         high=k.get('high', 0),
                         low=k.get('low', 0),
-                        close=k.get('close', 0),
+                        close=close,
                         volume=k.get('volume', 0),
                         amount=k.get('amount', 0),
                         change_pct=k.get('change_pct', 0),
-                        adj_close=k.get('close', 0)
+                        adj_close=close  # 回填后会被 backfill_adj_factor 更新
                     ))
 
                 if records:

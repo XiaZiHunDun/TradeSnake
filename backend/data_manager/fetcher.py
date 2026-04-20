@@ -1320,7 +1320,8 @@ def batch_update_stocks_pe_roe() -> Dict:
             gross_margin = fin.get('gross_margin', 0) or 0
             debt_ratio = fin.get('debt_ratio', 0) or 0
 
-            if roe > 0:
+            # v19.9.6: 包含负ROE（亏损公司也应该有财务数据）
+            if roe != 0:
                 try:
                     cursor.execute("""
                         UPDATE stocks SET roe = ?, net_profit_growth = ?,

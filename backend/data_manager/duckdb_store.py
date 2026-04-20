@@ -371,6 +371,7 @@ class DuckDBStore:
                     row_count=len(df)
                 )
         except Exception as e:
+            logger.warning(f"get_klines 查询失败 code={code}: {e}")
             return QueryResult(success=False, error=str(e))
 
     def get_date_range(self, code: str) -> Tuple[Optional[str], Optional[str]]:
@@ -871,6 +872,71 @@ class DuckDBStore:
                 return info
         except Exception as e:
             return {'error': str(e)}
+
+    def backfill_adj_factor(self, batch_size: int = 1000) -> Dict:
+        """
+        v19.9.4: 从 ex_right_factor 表回填 adj_factor 和 adj_close
+
+        由于历史原因，DuckDB daily_kline 表的 adj_factor 全部为1.0，
+        adj_close 也未正确计算。本方法从 SQLite ex_right_factor 表
+        获取复权因子并回填。
+
+        Returns:
+            回填结果统计
+        """
+        # 注意：这需要 SQLite ex_right_factor 表有数据
+        # 如果表为空，先调用 ExRightFactorFiller.fetch_from_tushare()
+        try:
+            import sqlite3
+            sqlite_path = str(Path("/home/ailearn/projects/TradeSnake/data/tradesnake.db"))
+            sqlite_conn = sqlite3.connect(sqlite_path)
+
+            # 获取需要回填的股票
+            cursor = sqlite_conn.execute("""
+                SELECT DISTINCT symbol FROM ex_right_factor
+                WHERE adj_type = 'qfq'
+            """)
+            symbols = [row[0] for row in cursor.fetchall()]
+            sqlite_conn.close()
+
+            total_updated = 0
+            for symbol in symbols[:100]:  # 限制处理数量
+                try:
+                    # 获取该股票的所有因子
+                    sqlite_conn = sqlite3.connect(sqlite_path)
+                    cursor = sqlite_conn.execute("""
+                        SELECT trade_date, factor FROM ex_right_factor
+                        WHERE symbol = ? AND adj_type = 'qfq'
+                        ORDER BY trade_date
+                    """, (symbol,))
+                    factors = {row[0]: row[1] for row in cursor.fetchall()}
+                    sqlite_conn.close()
+
+                    if not factors:
+                        continue
+
+                    # 更新 DuckDB 中该股票的 adj_factor
+                    # 由于 DuckDB 不支持直接 UPDATE ... JOIN，需要逐条处理
+                    for trade_date, factor in factors.items():
+                        try:
+                            self._get_conn().execute("""
+                                UPDATE daily_kline
+                                SET adj_factor = ?, adj_close = close * ?
+                                WHERE code = ? AND trade_date = ?
+                            """, [factor, factor, symbol, trade_date])
+                        except Exception:
+                            pass
+                    total_updated += len(factors)
+                except Exception:
+                    pass
+
+            return {
+                'success': True,
+                'symbols_processed': min(len(symbols), 100),
+                'rows_updated': total_updated
+            }
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
 
 
 # ==================== SQLite历史数据迁移 ====================

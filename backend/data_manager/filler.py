@@ -13,6 +13,7 @@
 - cleanup: 过期删除
 """
 
+import os
 import sqlite3
 import time
 import gc
@@ -21,6 +22,15 @@ from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def _disable_proxy():
+    """禁用代理以解决 Tushare API 连接问题 (v19.9.6)
+
+    Tushare Python SDK 与代理不兼容，调用前需禁用代理
+    """
+    for key in ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY']:
+        os.environ.pop(key, None)
 
 
 def _ensure_path():
@@ -339,6 +349,9 @@ class ExRightFactorFiller:
             return []
 
         try:
+            # v19.9.6: 禁用代理解决 Tushare SDK 连接问题
+            _disable_proxy()
+
             pro = ts.pro_api()
             df = pro.adj_factor(ts_code=ts_code, trade_date='')
 
@@ -859,6 +872,9 @@ class KlineFiller:
             return []
 
         try:
+            # v19.9.6: 禁用代理解决 Tushare SDK 连接问题
+            _disable_proxy()
+
             pro = ts.pro_api()
             ts_code = self._convert_to_ts_code(code)
 
@@ -2166,6 +2182,9 @@ class FinancialHistoryFiller:
             return []
 
         try:
+            # v19.9.6: 禁用代理解决 Tushare SDK 连接问题
+            _disable_proxy()
+
             pro = ts.pro_api()
             end_date = date.today().strftime('%Y%m%d')
             start_date = f"{start_year}0101"
@@ -2452,6 +2471,7 @@ class TradeCalendar:
     def __init__(self):
         self.duckdb = _get_duckdb_store()
         self._ensure_table()
+        self._initialized = False
 
     def _ensure_table(self):
         """确保交易日历表存在"""
@@ -2466,6 +2486,21 @@ class TradeCalendar:
                 """)
         except Exception as e:
             print(f"创建交易日历表失败: {e}")
+
+    def _ensure_data(self):
+        """v19.9.4: 懒加载数据 - 如果表为空则自动从Tushare获取"""
+        if self._initialized:
+            return
+        try:
+            stats = self.get_stats()
+            if stats['total_days'] == 0:
+                print("[TradeCalendar] 交易日历为空，自动从Tushare获取...")
+                count = self.fetch_from_tushare()
+                print(f"[TradeCalendar] 获取了 {count} 条记录")
+        except Exception as e:
+            print(f"[TradeCalendar] 懒加载失败: {e}")
+        finally:
+            self._initialized = True
 
     def fetch_from_tushare(self, start_date: str = None, end_date: str = None) -> int:
         """
@@ -2490,6 +2525,9 @@ class TradeCalendar:
             end_date = (date.today() + timedelta(days=30)).strftime('%Y%m%d')
 
         try:
+            # v19.9.6: 禁用代理解决 Tushare SDK 连接问题
+            _disable_proxy()
+
             pro = ts.pro_api()
             df = pro.trade_cal(start_date=start_date, end_date=end_date)
 
@@ -2528,6 +2566,9 @@ class TradeCalendar:
         Returns:
             True=是交易日, False=非交易日
         """
+        # v19.9.4: 懒加载数据
+        self._ensure_data()
+
         if check_date is None:
             check_date = date.today()
         elif isinstance(check_date, str):
@@ -2551,6 +2592,9 @@ class TradeCalendar:
 
     def get_next_trading_day(self, from_date: str = None) -> str:
         """获取下一个交易日"""
+        # v19.9.4: 懒加载数据
+        self._ensure_data()
+
         if from_date is None:
             from_date = date.today()
         elif isinstance(from_date, str):
@@ -2576,6 +2620,9 @@ class TradeCalendar:
 
     def get_trading_days_between(self, start_date: str, end_date: str) -> List[str]:
         """获取两个日期之间的所有交易日"""
+        # v19.9.4: 懒加载数据
+        self._ensure_data()
+
         if len(start_date) == 8:
             start_date = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]}"
         if len(end_date) == 8:

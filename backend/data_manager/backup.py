@@ -161,17 +161,9 @@ class BackupManager:
         """
         缓存JSON备份
 
-        复制cache目录下的所有JSON文件到备份位置。
+        v19.9.3: 修复路径问题 - cache.py 写入 data/*.json，而非 data/cache/*.json
         """
         data_path = data_dir or DATA_DIR
-        cache_dir = data_path / "cache"
-
-        if not cache_dir.exists():
-            return BackupResult(
-                success=False,
-                backup_type='cache_json',
-                error=f"Cache directory not found: {cache_dir}"
-            )
 
         try:
             today = date.today().isoformat()
@@ -182,9 +174,17 @@ class BackupManager:
             import tarfile
             import tempfile
 
-            # 创建tarball
+            # v19.9.3: 直接从 data/ 目录备份 *.json 文件
+            json_files = list(data_path.glob("*.json"))
+            if not json_files:
+                return BackupResult(
+                    success=False,
+                    backup_type='cache_json',
+                    error=f"No JSON cache files found in {data_path}"
+                )
+
             with tarfile.open(str(backup_file), "w:gz") as tar:
-                for json_file in cache_dir.glob("*.json"):
+                for json_file in json_files:
                     tar.add(json_file, arcname=json_file.name)
 
             size = backup_file.stat().st_size
@@ -377,11 +377,11 @@ class BackupManager:
             current_backup = self.db_path + f".pre_restore_{date.today().isoformat()}"
             shutil.copy2(self.db_path, current_backup)
 
-            # 恢复
+            # v19.9.3: 修复恢复方向 - 应从备份文件恢复到当前数据库
             restore_conn = sqlite3.connect(str(backup_path))
             current_conn = sqlite3.connect(self.db_path)
 
-            current_conn.backup(restore_conn)  # 反向恢复
+            restore_conn.backup(current_conn)  # 从备份恢复到当前
 
             restore_conn.close()
             current_conn.close()

@@ -68,6 +68,19 @@
 | `gain_predictions` | 32,568 | ✅ 已填充 | 涨幅预测 |
 | `probability_predictions` | 32,568 | ✅ 已填充 | 上涨概率 |
 
+**数据初始化命令**：
+
+```bash
+# 填充交易日历（Tushare需要积分权限）
+cd backend && python -m data_manager.filler trade_cal fetch
+
+# 补充分钟K线数据（14天）
+cd backend && python -m data_manager.filler minute_klines fill
+
+# 批量更新财务数据（PE/ROE等）
+curl -X POST http://localhost:8001/api/refresh/financials
+```
+
 > **重要**：历史数据填充详见 [DATA_FILLER_ARCHITECTURE.md](./DATA_FILLER_ARCHITECTURE.md)
 
 > **说明**：data_manager 从 stock_selector 获取池分层（每日变更），自行制定外部数据获取的频率策略（如核心池5分钟、活跃池30分钟）。分析行为的频率由 engine 自己向 stock_selector 查询池分层后自行制定。
@@ -800,6 +813,7 @@ mv tradesnake_new.db tradesnake.db
 
 | 版本 | 日期 | 更新 |
 |---|---|---|
+| v19.9.3 | 2026-04-17 | 🐛 DuckDB删除改为分批+ LIMIT；修复backup缓存路径(data/*.json)；修复restore方向错误；添加cp_history_store/prediction_store清理调度 |
 | v18.8 | 2026-04-15 | 概述补充「产品范围：仅沪深主板」及与全市场列表数据源的关系说明（与 `PROJECT_OVERVIEW` 对齐） |
 | v18.7 | 2026-04-15 | 与实现对齐：`StockSelectorCallback` 按 `SelectorCallback` 协议；`preload_cp_engine_from_history` 说明改为 `stocks` 表 + 可选 `allowed_codes`（核心+活跃池）；补充 `market_snapshot` / DuckDB 批量日均额、`pool_rebalance` 与 `trading_day_update` 触发说明 |
 | v18.6 | 2026-04-15 | 新增"数据源问题排查"章节：东方财富API不稳定、Baostock连接池、SQLite损坏、cp_engine预加载 |

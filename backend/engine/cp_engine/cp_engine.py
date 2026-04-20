@@ -2,6 +2,7 @@
 战力计算引擎 - Combat Power Engine
 """
 
+import threading
 import pandas as pd
 import numpy as np
 from typing import List, Optional, Dict, Any, Tuple
@@ -799,6 +800,7 @@ class CPEngine:
 
     def __init__(self):
         self.stocks: List[StockCP] = []
+        self._lock = threading.Lock()  # v19.9.3: 添加线程锁保护并发访问
 
     def add_stock(self, stock: StockCP):
         """添加股票（自动去重）"""

@@ -49,6 +49,12 @@ class StockCPData(BaseModel):
     current_ratio: float = 0  # 流动比率
     interest_coverage: float = 0  # 利息保障倍数
     deducted_net_profit: float = 0  # 扣非净利润(亿)
+    # v19.9.5 融合推荐字段
+    kelly_position: float = 0  # Kelly建议仓位比例（%）
+    predicted_gain_5d: float = 0  # 预测5日涨幅（%）
+    up_probability_5d: float = 0  # 5日上涨概率（0-1）
+    prediction_confidence: float = 0  # 预测置信度（0-1）
+    fused_score: float = 0  # 融合得分
 
 
 class CPListResponse(BaseModel):
@@ -129,6 +135,12 @@ class SingleStockResponse(BaseModel):
     current_ratio: float = 0  # 流动比率
     interest_coverage: float = 0  # 利息保障倍数
     deducted_net_profit: float = 0  # 扣非净利润(亿)
+    # v19.9.5 融合推荐字段
+    kelly_position: float = 0  # Kelly建议仓位比例（%）
+    predicted_gain_5d: float = 0  # 预测5日涨幅（%）
+    up_probability_5d: float = 0  # 5日上涨概率（0-1）
+    prediction_confidence: float = 0  # 预测置信度（0-1）
+    fused_score: float = 0  # 融合得分
 
 
 class Holding(BaseModel):

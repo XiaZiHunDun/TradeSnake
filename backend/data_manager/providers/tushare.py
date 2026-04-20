@@ -6,7 +6,6 @@ Tushare数据源提供者
 配置:
     - Token: d1548397f09fdff5c3a356326f018c0d8f84691ef94415735c33fc4a
     - 积分: 2000点 (200次/分钟)
-    - 代理: 从 HTTP_PROXY/HTTPS_PROXY 环境变量读取，或使用默认值 http://192.168.13.218:10808
 
 可用接口:
     - pro.daily() - 日线数据
@@ -24,10 +23,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
 
-# 设置代理（支持环境变量覆盖）
-_PROXY = os.environ.get('https_proxy') or os.environ.get('HTTPS_PROXY') or 'http://192.168.13.218:10808'
-os.environ['http_proxy'] = _PROXY
-os.environ['https_proxy'] = _PROXY
+# v19.9.6: 不再设置全局代理，因为Tushare SDK与代理不兼容
+# 如需使用代理，请单独在调用前设置
 
 import tushare as ts
 
@@ -79,9 +76,17 @@ class TushareProvider(BaseDataProvider):
             'points_used': 0,
         }
 
+    def _disable_proxy(self):
+        """v19.9.6: 禁用代理以解决Tushare SDK连接问题"""
+        for key in ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY']:
+            os.environ.pop(key, None)
+
     def _init_session(self):
         """初始化Tushare会话"""
         try:
+            # v19.9.6: 禁用代理解决Tushare SDK连接问题
+            self._disable_proxy()
+
             ts.set_token(self.TOKEN)
             self._pro = ts.pro_api()
         except Exception as e:

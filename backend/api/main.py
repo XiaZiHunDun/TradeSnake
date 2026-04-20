@@ -18,13 +18,15 @@ from backend.api.router import router, cp_engine, recommend_engine
 from backend.api.limits import limiter
 from backend.api.websocket import WebSocketManager
 
+# v19.9.3: 数据目录常量（提前定义供 RefreshState 使用）
+DATA_DIR = Path("/home/ailearn/projects/TradeSnake/data")
+
 
 def preload_cp_engine_from_cache():
     """从磁盘缓存预加载战力引擎数据（快速启动）"""
     from backend.engine.cp_engine import create_stock_from_raw
 
     print("[启动] 从本地缓存预加载战力数据...")
-    DATA_DIR = Path("/home/ailearn/projects/TradeSnake/data")
 
     # 1. 先从市场缓存构建价格映射表
     price_map = {}
@@ -213,26 +215,56 @@ def preload_cp_engine_from_history(allowed_codes: Optional[Set[str]] = None):
 
 class RefreshState:
     """差异化刷新的状态管理"""
+    # v19.9.3: 持久化状态文件路径
+    _STATE_FILE = DATA_DIR / ".refresh_state.json"
+
     def __init__(self):
         self.last_core_refresh = 0      # 上次核心池刷新时间
         self.last_active_refresh = 0     # 上次活跃池刷新时间
         self.core_stocks = []            # 核心池股票列表
         self.active_stocks = []          # 活跃池股票列表
         self.all_analysable_codes = set() # 所有可分析股票
+        # v19.9.3: 从文件加载上次预测保存日期
+        self.last_prediction_save_date = self._load_last_prediction_date()
+
+    def _load_last_prediction_date(self) -> Optional[str]:
+        """从文件加载上次预测保存日期"""
+        try:
+            if self._STATE_FILE.exists():
+                with open(self._STATE_FILE, 'r') as f:
+                    data = json.load(f)
+                    return data.get('last_prediction_save_date')
+        except Exception:
+            pass
+        return None
+
+    def save_prediction_date(self, date_str: str):
+        """保存预测日期到文件"""
+        try:
+            with open(self._STATE_FILE, 'w') as f:
+                json.dump({'last_prediction_save_date': date_str}, f)
+        except Exception:
+            pass
+        self.last_prediction_save_date = date_str
 
 _refresh_state = RefreshState()
+_cp_engine_lock = asyncio.Lock()  # v19.9.3: 保护 cp_engine.stocks 并发访问
 
 _scheduler_for_background = None
 last_pool_rebalance_date: Optional[date] = None
 
 
 def _normalize_code(raw_code: str) -> str:
-    """标准化股票代码"""
+    """标准化股票代码为6位格式（去掉sh/sz前缀和.SH/.SZ后缀）"""
     code = raw_code
+    # 去除前缀
     if code.startswith('sh'):
         code = code[2:]
     elif code.startswith('sz'):
         code = code[2:]
+    # 去除后缀（处理Tushare格式如 000001.SH）
+    if '.' in code:
+        code = code.split('.')[0]
     return code
 
 
@@ -343,7 +375,8 @@ async def background_refresh_task():
 
             print(f"[后台] 最终加载: {len(stocks_data)} 只", flush=True)
 
-            async with cp_engine._lock if hasattr(cp_engine, '_lock') else asyncio.Lock():
+            # v19.9.3: 使用 asyncio.Lock 保护 cp_engine.stocks 并发访问
+            async with _cp_engine_lock:
                 # 增量更新：仅保留「可分析池」内且本次未刷新的股票
                 stocks_to_keep = [
                     s for s in cp_engine.stocks
@@ -395,6 +428,43 @@ async def background_refresh_task():
                     )
                 except Exception as _e:
                     print(f"[后台] UpdateScheduler 批次更新跳过: {_e}", flush=True)
+
+            # 收盘后（15:00之后）且当日尚未保存预测时，计算并保存预测 v19.8
+            import time
+            current_struct = time.localtime()
+            current_hour = current_struct.tm_hour
+            today_date_str = time.strftime("%Y-%m-%d", current_struct)
+
+            if current_hour >= 16 and _refresh_state.last_prediction_save_date != today_date_str:
+                # 执行预测计算并保存
+                try:
+                    from backend.engine import gain_predictor, probability_predictor
+                    from backend.data_manager.manager import get_data_manager
+
+                    print(f"[后台] 开始收盘后预测计算并保存...", flush=True)
+
+                    # 获取K线数据
+                    dm = get_data_manager()
+                    codes_to_predict = [s.code for s in cp_engine.stocks][:500]  # 限制数量避免超时
+
+                    # 计算并保存涨幅预测
+                    try:
+                        gain_preds = gain_predictor.save_predictions_to_store(codes_to_predict, dm)
+                        print(f"[后台] 涨幅预测已保存: {gain_preds}", flush=True)
+                    except Exception as pred_e:
+                        print(f"[后台] 涨幅预测保存失败: {pred_e}", flush=True)
+
+                    # 计算并保存上涨概率预测
+                    try:
+                        prob_preds = probability_predictor.save_predictions_to_store(codes_to_predict, dm)
+                        print(f"[后台] 上涨概率预测已保存: {prob_preds}", flush=True)
+                    except Exception as prob_e:
+                        print(f"[后台] 上涨概率预测保存失败: {prob_e}", flush=True)
+
+                    _refresh_state.save_prediction_date(today_date_str)
+                    print(f"[后台] 收盘后预测保存完成，日期: {today_date_str}", flush=True)
+                except Exception as pred_err:
+                    print(f"[后台] 收盘后预测保存出错: {pred_err}", flush=True)
 
             print(f"[后台] 刷新完成，当前 {len(cp_engine.stocks)} 只股票", flush=True)
 

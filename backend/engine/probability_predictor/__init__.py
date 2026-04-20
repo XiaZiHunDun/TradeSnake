@@ -7,6 +7,7 @@ from .predictor import (
     ProbabilityPrediction,
     ProbabilityPredictionResult,
     get_probability_predictor,
+    save_predictions_to_store,
 )
 from .features import (
     calculate_features,
@@ -19,6 +20,7 @@ __all__ = [
     'ProbabilityPrediction',
     'ProbabilityPredictionResult',
     'get_probability_predictor',
+    'save_predictions_to_store',
     'calculate_features',
     'calculate_batch_features',
     'GLOBAL_AVG_VOLATILITY',
