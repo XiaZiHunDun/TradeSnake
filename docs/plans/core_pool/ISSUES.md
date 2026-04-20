@@ -6,31 +6,63 @@
 
 ## 一、待解决问题
 
-### P2: adj_factor 全为 1.0
+### P3: 部分股票 total_cp 未计算
 
-**描述**: DuckDB `daily_kline` 表中所有 `adj_factor` 字段值均为 1.0，未正确存储复权因子。
+**描述**: SQLite `stocks` 表中有 1536 只股票（44.8%）的 `total_cp = 0`，未参与战力计算。
 
 **影响**:
-- 复权价格计算不准确
-- 不影响核心池战力计算（战力计算不使用复权价格）
-- 仅影响需要精确复权价格的场景
+- 这些股票不会出现在战力榜中
+- 不影响核心池战力计算（核心池约200只股票）
 
 **解决方案**:
+- 检查 `background_refresh_task` 是否覆盖所有股票
+- 核心池股票应定期刷新
+
+**状态**: 待调查
+
+---
+
+### P2: adj_factor 数据不完整
+
+**描述**: DuckDB `daily_kline` 表的 `adj_factor` 部分缺失。
+
+**当前状态** (2026-04-17 晚):
+- 总行数: 2,398,525
+- 有效复权因子 (≠1.0): 585,770 行 ✅ (24.42%)
+- 无需调整 (=1.0): 1,812,755 行 ✅ (75.58%)
+- 缺失 (IS NULL): 0 行 ✅
+
+**数据来源**:
+- `ExRightFactorFiller` 从 Tushare `pro.adj_factor` API 获取数据
+- 存储在 SQLite `ex_right_factor` 表
+- 回填到 DuckDB `daily_kline`
+
+**修复方法**:
 ```python
-# 调用 backfill_adj_factor() 方法回填
-from backend.data_manager.duckdb_store import get_duckdb_store
-duckdb = get_duckdb_store()
-result = duckdb.backfill_adj_factor()
-print(result)
+# 使用 DuckDB SQLite 扩展直接 JOIN 回填
+duckdb_conn.execute('''
+    UPDATE daily_kline
+    SET adj_factor = ROUND(sf.factor, 6)
+    FROM sqlite_db.ex_right_factor sf
+    WHERE sf.adj_type = 'qfq'
+      AND sf.symbol = daily_kline.code
+      AND CAST(SUBSTR(sf.trade_date, 1, 4) || ... AS DATE) = daily_kline.trade_date
+      AND daily_kline.adj_factor IS NULL
+      AND sf.factor < 10000
+''')
 ```
 
-**状态**: 方案已实现，待手动执行
+**遗留问题**:
+- 3 只股票的 3 行因 SQLite 无对应日期或 factor>10000 而设为 1.0
+- 4,065 行 SQLite factor>=10000 无法存储 (DECIMAL(10,6) 上限)
+
+**状态**: ✅ 已修复 (v19.9.6)
 
 ---
 
 ### P2: DuckDB minute_kline 数据量有限
 
-**描述**: DuckDB `minute_kline` 表仅保留约5天数据（2.4M行），设计目标是保留14天。
+**描述**: DuckDB `minute_kline` 表仅保留约4天数据（2026-04-08 到 2026-04-13），设计目标是保留14天。
 
 **影响**:
 - 分钟级实时因子计算受限
@@ -41,7 +73,7 @@ print(result)
 - 数据源持续补充分钟K线数据
 - 或调整 `cleanup.py` 中的保留策略
 
-**状态**: 数据补充中
+**状态**: 待解决
 
 ---
 
@@ -67,6 +99,23 @@ print(result)
 ---
 
 ## 二、已解决问题
+
+### ✅ P1: prediction_store 预测数据不新鲜 (v19.9.6)
+
+**描述**: prediction_store 只保存了约1000只股票的预测，且最新日期为2026-04-14，不够新鲜。
+
+**影响**:
+- 融合推荐时无法获取最新预测数据
+- 融合得分可能不准确
+
+**修复**:
+- 批量预测生成，覆盖5053只股票（97.3%，5194只有K线数据）
+- 使用INSERT OR REPLACE保留历史数据
+- 141只股票因K线不足5根无法生成预测
+
+**状态**: ✅ 已修复 (2026-04-20)
+
+---
 
 ### ✅ P1: `/api/cp/recommend` 未使用预测融合 (v19.9.5)
 
@@ -155,6 +204,65 @@ except Exception as e:
 **修复**:
 - 在 `TradeCalendarFiller` 中实现懒加载
 - 如果表为空，自动从 Tushare 获取
+
+**状态**: ✅ 已修复 (2026-04-20) - 366行已填充
+
+---
+
+### ✅ P2: roe > 0 阻止负ROE股票保存 (v19.9.6)
+
+**描述**: `fetcher.py` 中 `if roe > 0:` 阻止了亏损公司（负ROE）的财务数据保存。
+
+**修复**:
+- 改为 `if roe != 0:` 允许负ROE公司有财务数据
+
+**状态**: ✅ 已修复 (2026-04-20)
+
+---
+
+### ✅ P2: adj_close = 0 未计算 (v19.9.6)
+
+**描述**: DuckDB `daily_kline` 表中部分 `adj_factor != 1.0` 的行 `adj_close = 0`。
+
+**修复**:
+```sql
+UPDATE daily_kline SET adj_close = close * adj_factor
+WHERE adj_factor != 1.0 AND adj_close = 0
+```
+
+**状态**: ✅ 已修复 (2026-04-20) - 3,578行已更新
+
+### ✅ P1: prediction_store 代码格式不一致 (v19.9.5)
+
+**描述**: `prediction_store` 中部分代码带 `sh/sz` 前缀，与 DuckDB/SQLite stocks 表不一致，导致融合推荐时查不到预测数据。
+
+**影响**:
+- 100 只股票的预测数据无法被匹配
+- 融合推荐时这些股票会退化为默认值
+
+**修复**:
+- 在 `record_gain_predictions()` 和 `record_probability_predictions()` 中添加代码标准化
+- 在 `get_gain_predictions()` 和 `get_probability_predictions()` 中添加代码标准化
+- 已修复历史数据：100 条带前缀记录已更正
+
+**修复文件**:
+- `data_manager/prediction_store.py`: 添加 `_normalize_code()` 函数，应用于所有读写接口
+
+---
+
+### ✅ P1: DuckDB 代码格式不一致 (v19.9.5)
+
+**描述**: DuckDB `daily_kline` 表中 90 只股票代码带 `sh/sz` 前缀，与标准格式不一致。
+
+**影响**:
+- 部分股票历史数据重复（同一股票既有 `sz002501` 又有 `002501`）
+- 代码查询可能匹配失败
+
+**修复**:
+- 删除重复的带前缀记录（保留标准格式）
+- 共删除 42,141 条重复记录
+
+**状态**: ✅ 已修复
 
 ---
 

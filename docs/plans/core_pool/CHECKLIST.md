@@ -166,6 +166,14 @@ python -m pytest backend/tests/test_recommender.py -v
 | 2026-04-17 | `PredictionFusion` 只查询 1 天预测 | `fusion.py` | 251,267 |
 | 2026-04-17 | `BacktestCompatibilityLayer` SQLite fallback | `backtest.py` | 748-758 |
 | 2026-04-17 | DuckDB `get_klines` 异常未记录 | `duckdb_store.py` | 373-374 |
+| 2026-04-17 | prediction_store 代码格式不一致 | `prediction_store.py` | 22-31, 162, 208, 241, 275 |
+| 2026-04-17 | DuckDB 代码格式不一致 | `duckdb_store.py` | - |
+| 2026-04-17 | prediction_store 预测数据不新鲜 | 手动批量预测 | - |
+| 2026-04-17 | adj_factor 数据不完整 | DuckDB + SQLite JOIN | ✅ 已修复：585,770 有效, 1,812,755=1.0, 0 NULL |
+| 2026-04-20 | roe > 0 阻止负ROE股票保存 | `fetcher.py` | `if roe > 0:` → `if roe != 0:` |
+| 2026-04-20 | adj_close = 0 未计算 | DuckDB UPDATE | 3,578 行已修复 |
+| 2026-04-20 | DuckDB trade_cal 为空 | Tushare填充 | 366行已填充 |
+| 2026-04-20 | prediction_store 覆盖率低 | 批量预测生成 | 5053/5194只 (97.3%) |
 
 ---
 
