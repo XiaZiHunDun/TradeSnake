@@ -22,6 +22,8 @@ class Position:
     avg_cost: float = 0.0
     buy_date: str = ''
     holding_days: int = 0
+    buy_amount: float = 0.0  # 买入金额（扣除费用前）
+    buy_commission: float = 0.0  # 买入佣金
 
 
 @dataclass
@@ -51,6 +53,7 @@ class BacktestStats:
     total_trades: int
     equity_curve: List[Dict] = field(default_factory=list)
     trades: List[Dict] = field(default_factory=list)
+    completed_pnls: List[float] = field(default_factory=list)  # 每笔平仓交易的盈亏
 
 
 class FullBacktestEngine:
@@ -114,6 +117,7 @@ class FullBacktestEngine:
         pending_bought: Set[str] = set()
         trades: List[BacktestTrade] = []
         equity_curve: List[Dict] = []
+        completed_pnls: List[float] = []  # 已平仓交易的盈亏列表
 
         # 按日期遍历
         for i in range(len(trading_dates) - 1):
@@ -133,7 +137,7 @@ class FullBacktestEngine:
             for code in list(positions.keys()):
                 positions[code].holding_days += 1
                 if positions[code].holding_days > 5:  # 最大持仓5天
-                    self._execute_sell(positions, cash, trades, code, trade_date, 'max_days')
+                    self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'max_days')
 
             # 调仓
             current_codes = set(positions.keys())
@@ -141,7 +145,7 @@ class FullBacktestEngine:
 
             # 卖出不在新目标中的持仓
             for code in current_codes - new_codes:
-                self._execute_sell(positions, cash, trades, code, trade_date, 'rebalance')
+                self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'rebalance')
 
             # 买入新目标
             for code in new_codes - current_codes:
@@ -164,7 +168,7 @@ class FullBacktestEngine:
 
         # 计算统计
         return self._calculate_stats(
-            initial_capital, cash['value'], positions, equity_curve, trades
+            initial_capital, cash['value'], positions, equity_curve, trades, completed_pnls
         )
 
     def _get_trading_dates(self, start_date: str, end_date: str) -> List[str]:
@@ -256,7 +260,9 @@ class FullBacktestEngine:
             quantity=max_qty,
             avg_cost=price,
             buy_date=date,
-            holding_days=0
+            holding_days=0,
+            buy_amount=gross_amount,
+            buy_commission=commission + transfer_fee
         )
         pending_bought.add(code)
 
@@ -272,7 +278,7 @@ class FullBacktestEngine:
         ))
 
     def _execute_sell(self, positions: Dict, cash: Dict, trades: List,
-                     code: str, date: str, reason: str):
+                     completed_pnls: List, code: str, date: str, reason: str):
         """执行卖出"""
         if code not in positions:
             return
@@ -292,6 +298,11 @@ class FullBacktestEngine:
         net_amount = gross_amount - total_cost
         cash['value'] += net_amount
 
+        # 计算平仓盈亏（成本 = 买入金额 + 买入佣金）
+        cost = pos.buy_amount + pos.buy_commission
+        pnl = net_amount - cost
+        completed_pnls.append(pnl)
+
         trades.append(BacktestTrade(
             date=date,
             action='sell',
@@ -308,7 +319,8 @@ class FullBacktestEngine:
 
     def _calculate_stats(self, initial_capital: float, final_cash: float,
                         positions: Dict, equity_curve: List[Dict],
-                        trades: List[BacktestTrade]) -> BacktestStats:
+                        trades: List[BacktestTrade],
+                        completed_pnls: List[float]) -> BacktestStats:
         """计算回测统计"""
         # 计算最终市值
         last_date = equity_curve[-1]['date'] if equity_curve else ''
@@ -350,13 +362,9 @@ class FullBacktestEngine:
                 if drawdown > max_drawdown:
                     max_drawdown = drawdown
 
-        # 胜率
-        sell_trades = [t for t in trades if t.action == 'sell']
-        win_count = 0
-        for t in sell_trades:
-            if t.amount > 0:  # 简化判断
-                win_count += 1
-        win_rate = win_count / len(sell_trades) if sell_trades else 0
+        # 胜率（基于真实平仓盈亏）
+        win_count = sum(1 for pnl in completed_pnls if pnl > 0)
+        win_rate = win_count / len(completed_pnls) if completed_pnls else 0
 
         return BacktestStats(
             initial_capital=initial_capital,
@@ -378,5 +386,6 @@ class FullBacktestEngine:
                 'amount': t.amount,
                 'commission': t.commission,
                 'reason': t.reason
-            } for t in trades]
+            } for t in trades],
+            completed_pnls=completed_pnls
         )
