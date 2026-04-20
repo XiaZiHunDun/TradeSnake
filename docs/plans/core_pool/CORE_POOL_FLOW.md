@@ -209,9 +209,10 @@ minute_kline (
 ```
 
 **数据量** (2026-04-20):
-- daily_kline: 2,398,525 行, 5194 只股票
+- daily_kline: 2,411,596 行, 5194 只股票 ✅
 - minute_kline: 2,421,863 行
 - trade_cal: 366 行
+- 日期范围: 2024-04-10 ~ 2026-04-17
 - 日期范围: 2024-04-10 ~ 2026-04-13
 
 ### 4.2 SQLite
@@ -322,6 +323,7 @@ def _normalize_code(raw_code: str) -> str:
 | prediction_store 覆盖率低 | MEDIUM | v19.9.6 | ✅ 已修复 (97.3%) |
 | roe > 0 阻止负ROE股票保存 | MEDIUM | v19.9.6 | ✅ 已修复 |
 | SQLite stocks表有sh/sz前缀重复记录 | MEDIUM | v19.9.6 | ✅ 已修复 (148条) |
+| DuckDB日K线缺少4月14-17日数据 | MEDIUM | v19.9.6 | ✅ 已修复 (+13,071行) |
 
 ### 7.2 已知问题
 

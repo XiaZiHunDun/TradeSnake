@@ -175,6 +175,7 @@ python -m pytest backend/tests/test_recommender.py -v
 | 2026-04-20 | DuckDB trade_cal 为空 | Tushare填充 | 366行已填充 |
 | 2026-04-20 | prediction_store 覆盖率低 | 批量预测生成 | 5053/5194只 (97.3%) |
 | 2026-04-20 | SQLite stocks表有148条sh/sz前缀重复 | DELETE WHERE code LIKE 'sh%' | 148条已删除 |
+| 2026-04-20 | DuckDB日K线缺少4月14-17日数据 | KlineFiller.fill_all批量补充 | +13,071行 |
 
 ---
 
