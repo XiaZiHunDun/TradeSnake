@@ -16,6 +16,7 @@ from backend.models.schemas import (
     MarketStatsResponse,
     GainPredictionResponse, GainPredictionItem,
     ProbabilityPredictionResponse, ProbabilityPredictionItem,
+    FullBacktestResponse, BacktestTradeResponse, EquityPointResponse,
 )
 
 # 线程池用于CPU密集型任务（如预测计算）
@@ -514,6 +515,55 @@ async def backtest_benchmark(
 ):
     """基准回测"""
     return _backtest_engine.calculate_benchmark_backtest(start_date, end_date, benchmark)
+
+
+@router.get("/api/backtest/full", response_model=FullBacktestResponse)
+async def full_backtest(
+    start_date: str = Query(..., regex="^\\d{4}-\\d{2}-\\d{2}$"),
+    end_date: str = Query(..., regex="^\\d{4}-\\d{2}-\\d{2}$"),
+    strategy: str = Query("top", pattern="^(top|value|growth|momentum|quality)$"),
+    top_n: int = Query(10, ge=1, le=50),
+    initial_capital: float = Query(20000, gt=0)
+):
+    """
+    完整回测
+
+    基于历史战力数据进行真实收益率回测，返回：
+    - 总收益率
+    - 年化收益率
+    - 夏普比率
+    - 最大回撤
+    - 胜率
+    - 每日净值曲线
+    - 交易记录
+    """
+    from backend.backtester.full_backtest import FullBacktestEngine
+
+    engine = FullBacktestEngine()
+    stats = engine.run(
+        start_date=start_date,
+        end_date=end_date,
+        strategy_name=strategy,
+        top_n=top_n,
+        initial_capital=initial_capital
+    )
+
+    return FullBacktestResponse(
+        start_date=start_date,
+        end_date=end_date,
+        strategy=strategy,
+        top_n=top_n,
+        initial_capital=stats.initial_capital,
+        final_value=stats.final_value,
+        total_return=round(stats.total_return, 2),
+        annualized_return=round(stats.annualized_return, 2),
+        sharpe_ratio=round(stats.sharpe_ratio, 2),
+        max_drawdown=round(stats.max_drawdown, 2),
+        win_rate=round(stats.win_rate, 2),
+        total_trades=stats.total_trades,
+        equity_curve=[EquityPointResponse(**eq) for eq in stats.equity_curve],
+        trades=[BacktestTradeResponse(**t) for t in stats.trades]
+    )
 
 
 # ==================== 风险 ====================

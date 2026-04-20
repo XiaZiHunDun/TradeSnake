@@ -176,7 +176,7 @@ class FullBacktestEngine:
             ORDER BY trade_date
         """)
         if result.success:
-            return result.data['trade_date'].tolist()
+            return result.data['trade_date'].dt.strftime('%Y-%m-%d').tolist()
         return []
 
     def _get_cp_at_date(self, date: str) -> List[Dict]:

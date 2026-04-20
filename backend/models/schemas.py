@@ -416,3 +416,44 @@ class ProbabilityPredictionResponse(BaseModel):
     calculated_at: str
     data_timestamp: str
     stock_count: int
+
+
+# ==================== 完整回测Schema ====================
+
+class BacktestTradeResponse(BaseModel):
+    """回测交易记录"""
+    date: str
+    action: str
+    code: str
+    name: str
+    price: float
+    quantity: int
+    amount: float
+    commission: float
+    reason: str = ""
+
+
+class EquityPointResponse(BaseModel):
+    """净值曲线数据点"""
+    date: str
+    total_value: float
+    cash: float
+    position_value: float
+
+
+class FullBacktestResponse(BaseModel):
+    """完整回测响应"""
+    start_date: str
+    end_date: str
+    strategy: str
+    top_n: int
+    initial_capital: float
+    final_value: float
+    total_return: float
+    annualized_return: float
+    sharpe_ratio: float
+    max_drawdown: float
+    win_rate: float
+    total_trades: int
+    equity_curve: List[EquityPointResponse]
+    trades: List[BacktestTradeResponse]
