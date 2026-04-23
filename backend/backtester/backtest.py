@@ -311,8 +311,8 @@ class Backtest:
             if factor.is_suspended:
                 continue
 
-            # 过滤涨跌停（买入时涨停不买）
-            if factor.change_pct >= 9.9:
+            # 过滤涨跌停（买入时涨停不买，跌停也不买）
+            if abs(factor.change_pct) >= 9.9:
                 continue
 
             filtered.append(code)

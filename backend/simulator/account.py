@@ -57,6 +57,9 @@ class Account:
 
     def get_market_value(self) -> float:
         """获取持仓总市值"""
+        import logging
+        logger = logging.getLogger(__name__)
+
         holdings = self.db.get_holdings()
         total = 0
         for h in holdings:
@@ -67,8 +70,8 @@ class Account:
                 stock = get_single_stock_data(code)
                 if stock:
                     total += stock.get('price', 0) * quantity
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"get_market_value: 获取 {code} 市价失败: {e}")
         return total
 
     def get_summary(self) -> Dict:

@@ -533,7 +533,7 @@ class StockCP:
                 pe_score = 7
             elif 30 < self.pe <= 50:
                 pe_score = 3
-            elif self.pe > 50:
+            elif 50 < self.pe <= 100:
                 pe_score = -5
             elif self.pe > 100:
                 pe_score = -10

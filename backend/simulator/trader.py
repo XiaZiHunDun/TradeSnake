@@ -4,12 +4,15 @@
 
 import time
 import threading
+import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from .database import get_db
 from .account import Account, COMMISSION_RATE, MIN_COMMISSION, STAMP_TAX_RATE, TRANSFER_FEE_RATE
 from .portfolio import Portfolio
 from .risk_control import RiskControl
+
+logger = logging.getLogger(__name__)
 
 
 class OrderError(Exception):
@@ -552,6 +555,6 @@ class Trader:
         while self._is_running:
             try:
                 self.check_pending_orders()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"_polling_loop: check_pending_orders failed: {e}")
             time.sleep(interval_sec)

@@ -149,21 +149,6 @@ class DuckDBStore:
         except Exception as e:
             print(f"Migration warning: Could not check columns: {e}")
 
-    def _get_conn(self) -> duckdb.DuckDBPyConnection:
-        """获取DuckDB连接（用于写入）"""
-        return duckdb.connect(self.db_path, read_only=False)
-
-    def _get_read_conn(self) -> duckdb.DuckDBPyConnection:
-        """获取DuckDB只读连接（避免与写入锁冲突）
-
-        注意：DuckDB的只读模式不会阻塞其他连接写入，
-        如果需要一致性快照，应使用 checkpoint() 后再查询。
-        设置 threads=1 确保查询结果确定性。
-        """
-        conn = duckdb.connect(self.db_path, read_only=True)
-        conn.execute("SET threads=1")
-        return conn
-
     def checkpoint(self):
         """强制checkpoint，确保所有写操作刷新到磁盘"""
         lock_fd = None
@@ -426,7 +411,8 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)  # 共享锁
-            conn = self._get_read_conn()
+            # DuckDB 不支持同时打开只读和读写连接，统一使用写连接
+            conn = self._get_conn()
             sql = "SELECT * FROM daily_kline WHERE code = ?"
             params = [code]
 
@@ -467,7 +453,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_read_conn()
+            conn = self._get_conn()
             row = conn.execute(
                 "SELECT MIN(trade_date), MAX(trade_date) FROM daily_kline WHERE code = ?",
                 [code]
@@ -501,7 +487,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_read_conn()
+            conn = self._get_conn()
             placeholders = ','.join(['?' for _ in codes])
             sql = f"""
                 SELECT * FROM daily_kline
@@ -546,7 +532,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_read_conn()
+            conn = self._get_conn()
             placeholders = ','.join(['?' for _ in codes])
             sql = f"""
                 SELECT * FROM daily_kline
@@ -584,7 +570,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_read_conn()
+            conn = self._get_conn()
             for i in range(0, len(unique), chunk_size):
                 chunk = unique[i : i + chunk_size]
                 placeholders = ",".join(["?" for _ in chunk])
@@ -617,7 +603,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_read_conn()
+            conn = self._get_conn()
             df = conn.execute("""
                 SELECT * FROM daily_kline
                 WHERE code = ?
@@ -662,7 +648,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_read_conn()
+            conn = self._get_conn()
             sql_field = field  # 已通过白名单验证
             if end_date:
                 df = conn.execute(f"""
@@ -706,7 +692,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_read_conn()
+            conn = self._get_conn()
             ma_sql_parts = []
             for d in ma_days:
                 ma_sql_parts.append(f"""
@@ -750,7 +736,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_read_conn()
+            conn = self._get_conn()
             df = conn.execute("""
                 SELECT volume FROM daily_kline
                 WHERE code = ?
@@ -786,7 +772,7 @@ class DuckDBStore:
             start_datetime = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
 
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_read_conn()
+            conn = self._get_conn()
             df = conn.execute("""
                 SELECT code, trade_date, trade_time, open, high, low, close, volume, amount
                 FROM minute_kline
@@ -823,7 +809,7 @@ class DuckDBStore:
             start_datetime = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
 
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_read_conn()
+            conn = self._get_conn()
             df = conn.execute("""
                 WITH ranked AS (
                     SELECT trade_time, close,
@@ -873,7 +859,7 @@ class DuckDBStore:
             placeholders = ','.join(['?' for _ in codes])
 
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_read_conn()
+            conn = self._get_conn()
             # 一次性获取所有股票的最新分钟数据
             df = conn.execute(f"""
                 WITH latest AS (
@@ -939,7 +925,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_read_conn()
+            conn = self._get_conn()
             df = conn.execute("""
                 SELECT DISTINCT trade_date FROM daily_kline
                 WHERE trade_date BETWEEN ? AND ?
@@ -957,7 +943,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_read_conn()
+            conn = self._get_conn()
             total = conn.execute("SELECT COUNT(*) as cnt FROM daily_kline").fetchone()[0]
             codes = conn.execute("SELECT COUNT(DISTINCT code) as cnt FROM daily_kline").fetchone()[0]
             date_range = conn.execute("""
@@ -1107,7 +1093,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_read_conn()
+            conn = self._get_conn()
             info = {}
 
             # daily_kline
