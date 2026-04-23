@@ -8,17 +8,35 @@
 
 ### P3: 部分股票 total_cp 未计算
 
-**描述**: SQLite `stocks` 表中有 1536 只股票（44.8%）的 `total_cp = 0`，未参与战力计算。
+**描述**: SQLite `stocks` 表中有 1484 只股票（45.2%）的 `total_cp = 0`。
 
-**影响**:
-- 这些股票不会出现在战力榜中
-- 不影响核心池战力计算（核心池约200只股票）
+**调查结论** (2026-04-22):
 
-**解决方案**:
-- 检查 `background_refresh_task` 是否覆盖所有股票
-- 核心池股票应定期刷新
+| 类别 | 数量 | 原因 |
+|------|------|------|
+| revenue > 0 且 total_cp > 0 | 1508只 | ✅ 数据完整 |
+| revenue = 0 且 total_cp > 0 | 293只 | ⚠️ revenue缺失，但PE/ROE正常 |
+| **revenue = 0 且 total_cp = 0** | **1484只** | ❌ 历史遗留（updated_at 在 2026-04-17之前） |
 
-**状态**: 待调查
+**关键发现**：
+- **战力榜前200只中，有55只 revenue = 0 但 total_cp > 0**（如格力电器000651、燕京啤酒000729等）
+- 这55只股票的 revenue 数据在东方财富/baostock 缺失，但 PE/ROE 正常，战力分合理
+- **核心池战力计算不受影响**
+
+**根因**：东方财富/baostock 的 revenue 数据对部分股票不可用，导致 growth_score 为0
+
+**状态**: ✅ 已优化（从 Tushare income API 获取 revenue 作为 fallback）
+
+**优化实现** (2026-04-22):
+- `tushare.py`: `get_fina_indicator_batch()` 添加 `revenue` 和 `revenue_yoy` 字段
+- `fetcher.py`: `get_financial_data()` 添加 Tushare revenue fallback 逻辑
+- 当 eastmoney/baostock 的 revenue 为 0 时，自动从 Tushare `income` API 补充
+
+**验证**:
+```python
+# Tushare 直接获取 格力电器 revenue
+provider.get_financial_data('000651')['revenue']  # = 1371.8 亿元
+```
 
 ---
 
@@ -69,11 +87,15 @@ duckdb_conn.execute('''
 - 盘中MA5/MA15变化率可能不准确
 - 不影响日线战力计算
 
-**解决方案**:
-- 数据源持续补充分钟K线数据
-- 或调整 `cleanup.py` 中的保留策略
+**解决方案** (v19.9.8):
+- 在 `background_refresh_task` 收盘后（16:30+）添加 `MinuteKlineFiller` 调用
+- 每天轮换填充核心池+活跃池的50只股票（约4天轮换完全部）
+- 每只股票获取最近1天数据
 
-**状态**: 待解决
+**修复文件**:
+- `backend/api/main.py`: RefreshState 类 + 收盘后分钟K线填充逻辑
+
+**状态**: ✅ 已修复 (2026-04-22)
 
 ---
 
@@ -303,23 +325,84 @@ DELETE FROM stocks WHERE code LIKE 'sh%' OR code LIKE 'sz%'
 
 ---
 
-## 三、架构建议
+### ✅ P3: `_merge_missing_days_to_gaps` 类型错误 (v19.9.7)
 
-### 建议: Pool 状态持久化
+**描述**: `filler.py` 中 `_merge_missing_days_to_gaps` 期望 `datetime.date` 对象，但 `strptime()` 需要字符串参数，导致类型错误。
 
-**当前状态**: `PoolManager` 完全在内存中，重启后根据市场数据重新划分。
+**影响**:
+- 缺口检测在某些情况下会抛出异常，回退到简单检测
+- 不影响核心功能（回退机制正常工作）
 
-**问题**: 如果 Tushare/akshare 数据临时不可用，池划分可能与之前不同。
+**修复**:
+- 添加 `to_date()` 函数统一处理字符串和 `datetime.date` 对象
+- 确保返回的 `gap_start` 和 `gap_end` 都是字符串格式
 
-**建议**: 将池状态定期保存到 SQLite，重启时优先读取持久化状态。
+**修复文件**:
+- `backend/data_manager/filler.py`: 775-819 行
+
+**状态**: ✅ 已修复 (2026-04-20)
 
 ---
 
-### 建议: adj_factor 集成到数据管道
+### ✅ P2: KlineFiller 不在自动更新流程中 (v19.9.7)
 
-**当前状态**: `adj_factor` 需要手动调用 `backfill_adj_factor()` 回填。
+**描述**: KlineFiller 不会自动触发，需要手动调用。收盘后 `background_refresh_task` 只保存预测，不更新 K 线数据。
 
-**建议**: 在每日数据同步流程中自动获取并存储复权因子。
+**影响**:
+- 新交易日 K 线数据不会自动获取
+- completed 股票的 last_date 不会更新
+
+**修复**:
+- 在 `background_refresh_task` 收盘后逻辑中添加 KlineFiller 调用
+- 使用 `fill_incremental(days_back=7)` 增量填充
+- 添加 `_refresh_state.last_kline_fill_date` 状态跟踪
+
+**修复文件**:
+- `backend/api/main.py`: RefreshState 类 + 488-499 行
+
+**状态**: ✅ 已修复 (2026-04-20)
+
+---
+
+## 三、架构建议
+
+### ✅ 已实现: Pool 状态持久化 (v19.9.9)
+
+**功能**:
+- `PoolStateStore` 类管理池状态持久化（SQLite）
+- `PoolManager.save_state()` 每次 `refresh_pools` 后自动保存
+- `PoolManager.load_state()` 启动时恢复池组成（如果24小时内）
+- 表结构: `pool_state (pool_tier TEXT PRIMARY KEY, codes TEXT, updated_at TEXT)`
+
+**实现文件**:
+- `backend/data_manager/pool_state_store.py` - 持久化存储
+- `backend/stock_selector/pool_manager.py` - save_state/load_state 方法
+- `backend/api/main.py` - 集成到启动和再平衡流程
+
+**状态**: ✅ 已实现 (2026-04-22)
+
+---
+
+### ✅ 已实现: adj_factor 集成到数据管道 (v19.9.9)
+
+**功能**:
+- 收盘后 (16:00+) 自动从 Tushare 获取 `adj_factor` 数据
+- KlineFiller 完成后自动回填 `adj_factor` 到 DuckDB
+- 使用 `RefreshState.last_adj_factor_fill_date` 避免重复填充
+
+**实现位置**:
+- `main.py`: 在 KlineFiller 流程中添加 `ExRightFactorFiller` 和 `backfill_adj_factor` 调用
+- `RefreshState`: 添加 `last_adj_factor_fill_date` 状态跟踪
+
+**流程**:
+```
+收盘后 (16:00+)
+  → ExRightFactorFiller.fill_all()  # 从 Tushare 获取 adj_factor 到 SQLite
+  → KlineFiller.fill_incremental()   # 填充 K 线
+  → duckdb.backfill_adj_factor()     # 回填 adj_factor 到 DuckDB
+```
+
+**状态**: ✅ 已实现 (2026-04-22)
 
 ---
 

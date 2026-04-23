@@ -521,7 +521,7 @@ async def backtest_benchmark(
 async def full_backtest(
     start_date: str = Query(..., regex="^\\d{4}-\\d{2}-\\d{2}$"),
     end_date: str = Query(..., regex="^\\d{4}-\\d{2}-\\d{2}$"),
-    strategy: str = Query("top", pattern="^(top|value|growth|momentum|quality)$"),
+    strategy: str = Query("top", pattern="^(top|value|growth|momentum|quality|rising_cp|hybrid)$"),
     top_n: int = Query(10, ge=1, le=50),
     initial_capital: float = Query(20000, gt=0)
 ):

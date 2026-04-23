@@ -706,7 +706,7 @@ class TushareProvider(BaseDataProvider):
                 df = self.pro.fina_indicator(
                     ts_code=ts_codes_str,
                     start_date=f'{start_year}0101',
-                    fields='ts_code,ann_date,roe,net_profit_growth,gross_margin,debt_ratio,current_ratio'
+                    fields='ts_code,ann_date,roe,net_profit_growth,gross_margin,debt_ratio,current_ratio,revenue,revenue_yoy'
                 )
 
                 if df is not None and len(df) > 0:
@@ -733,6 +733,8 @@ class TushareProvider(BaseDataProvider):
                                 'gross_margin': round(_safe_float(latest.get('gross_margin')), 2),
                                 'debt_ratio': round(_safe_float(latest.get('debt_ratio')), 2),
                                 'current_ratio': round(_safe_float(latest.get('current_ratio')), 2),
+                                'revenue': round(_safe_float(latest.get('revenue')) / 100000000, 2) if latest.get('revenue') else 0,  # 亿元
+                                'revenue_yoy': round(_safe_float(latest.get('revenue_yoy')), 2),
                             }
 
                 time.sleep(0.1)  # 避免超过Tushare限制

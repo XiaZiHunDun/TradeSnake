@@ -176,6 +176,13 @@ python -m pytest backend/tests/test_recommender.py -v
 | 2026-04-20 | prediction_store 覆盖率低 | 批量预测生成 | 5053/5194只 (97.3%) |
 | 2026-04-20 | SQLite stocks表有148条sh/sz前缀重复 | DELETE WHERE code LIKE 'sh%' | 148条已删除 |
 | 2026-04-20 | DuckDB日K线缺少4月14-17日数据 | KlineFiller.fill_all批量补充 | +13,071行 |
+| 2026-04-20 | `_merge_missing_days_to_gaps` 类型错误 | `filler.py` | 775-819 |
+| 2026-04-20 | KlineFiller 不在自动更新流程中 | `main.py` | 488-499 |
+| 2026-04-22 | DuckDB minute_kline 数据量有限 | `main.py` | 507-527 |
+| 2026-04-22 | DuckDB 跨进程访问不稳定 | `duckdb_store.py` | 文件锁+单连接复用 |
+| 2026-04-22 | P3 revenue=0 问题优化 | `tushare.py` + `fetcher.py` | 添加 Tushare revenue fallback |
+| 2026-04-22 | 架构建议: Pool 状态持久化 | `pool_state_store.py` + `pool_manager.py` | save/load_state + 启动恢复 |
+| 2026-04-22 | 架构建议: adj_factor 自动集成 | `main.py` | ExRightFactorFiller + backfill_adj_factor |
 
 ---
 

@@ -225,27 +225,60 @@ class RefreshState:
         self.active_stocks = []          # 活跃池股票列表
         self.all_analysable_codes = set() # 所有可分析股票
         # v19.9.3: 从文件加载上次预测保存日期
-        self.last_prediction_save_date = self._load_last_prediction_date()
+        self.last_prediction_save_date = self._load_state_value('last_prediction_save_date')
+        # v19.9.7: 从文件加载上次K线填充日期
+        self.last_kline_fill_date = self._load_state_value('last_kline_fill_date')
+        # v19.9.8: 从文件加载上次分钟K线填充日期
+        self.last_minute_kline_fill_date = self._load_state_value('last_minute_kline_fill_date')
+        # v19.9.9: 从文件加载上次adj_factor填充日期
+        self.last_adj_factor_fill_date = self._load_state_value('last_adj_factor_fill_date')
 
-    def _load_last_prediction_date(self) -> Optional[str]:
-        """从文件加载上次预测保存日期"""
+    def _load_state_value(self, key: str) -> Optional[str]:
+        """从文件加载指定状态值"""
         try:
             if self._STATE_FILE.exists():
                 with open(self._STATE_FILE, 'r') as f:
                     data = json.load(f)
-                    return data.get('last_prediction_save_date')
+                    return data.get(key)
         except Exception:
             pass
         return None
 
-    def save_prediction_date(self, date_str: str):
-        """保存预测日期到文件"""
+    def _save_state_value(self, key: str, value: str):
+        """保存状态值到文件"""
         try:
+            data = {}
+            if self._STATE_FILE.exists():
+                try:
+                    with open(self._STATE_FILE, 'r') as f:
+                        data = json.load(f)
+                except Exception:
+                    pass
+            data[key] = value
             with open(self._STATE_FILE, 'w') as f:
-                json.dump({'last_prediction_save_date': date_str}, f)
+                json.dump(data, f)
         except Exception:
             pass
+
+    def save_prediction_date(self, date_str: str):
+        """保存预测日期到文件"""
+        self._save_state_value('last_prediction_save_date', date_str)
         self.last_prediction_save_date = date_str
+
+    def save_kline_fill_date(self, date_str: str):
+        """保存K线填充日期到文件"""
+        self._save_state_value('last_kline_fill_date', date_str)
+        self.last_kline_fill_date = date_str
+
+    def save_minute_kline_fill_date(self, date_str: str):
+        """保存分钟K线填充日期到文件"""
+        self._save_state_value('last_minute_kline_fill_date', date_str)
+        self.last_minute_kline_fill_date = date_str
+
+    def save_adj_factor_fill_date(self, date_str: str):
+        """保存adj_factor填充日期到文件 v19.9.9"""
+        self._save_state_value('last_adj_factor_fill_date', date_str)
+        self.last_adj_factor_fill_date = date_str
 
 _refresh_state = RefreshState()
 _cp_engine_lock = asyncio.Lock()  # v19.9.3: 保护 cp_engine.stocks 并发访问
@@ -466,7 +499,72 @@ async def background_refresh_task():
                 except Exception as pred_err:
                     print(f"[后台] 收盘后预测保存出错: {pred_err}", flush=True)
 
-            print(f"[后台] 刷新完成，当前 {len(cp_engine.stocks)} 只股票", flush=True)
+            # 收盘后（16:00之后）且当日尚未填充K线时，执行增量填充 v19.9.7
+            if current_hour >= 16 and _refresh_state.last_kline_fill_date != today_date_str:
+                try:
+                    # v19.9.9: 先获取 Tushare adj_factor 数据到 SQLite
+                    if _refresh_state.last_adj_factor_fill_date != today_date_str:
+                        try:
+                            from backend.data_manager.filler import ExRightFactorFiller
+                            print("[后台] 开始收盘后adj_factor填充...", flush=True)
+                            adj_filler = ExRightFactorFiller(rate_limit_sleep=0.3)
+                            adj_result = adj_filler.fill_all(limit=200)
+                            print(f"[后台] adj_factor填充完成: 成功{adj_result.success}, 失败{adj_result.failed}", flush=True)
+                            _refresh_state.save_adj_factor_fill_date(today_date_str)
+                        except Exception as adj_err:
+                            print(f"[后台] adj_factor填充失败: {adj_err}", flush=True)
+
+                    from backend.data_manager.filler import KlineFiller
+                    print("[后台] 开始收盘后K线填充...", flush=True)
+                    kf = KlineFiller()
+                    # 增量填充最近7天的数据
+                    result = kf.fill_incremental(days_back=7)
+                    print(f"[后台] K线填充完成: 成功{result.success}, 失败{result.failed}, 记录{result.total_records}", flush=True)
+                    _refresh_state.save_kline_fill_date(today_date_str)
+
+                    # v19.9.9: KlineFiller 完成后，回填 adj_factor 到 DuckDB
+                    try:
+                        from backend.data_manager.duckdb_store import get_duckdb_store
+                        d = get_duckdb_store()
+                        bf_result = d.backfill_adj_factor(batch_size=500)
+                        print(f"[后台] adj_factor回填完成: 处理{bf_result.get('symbols_processed', 0)}只, 更新{bf_result.get('rows_updated', 0)}行", flush=True)
+                    except Exception as bf_err:
+                        print(f"[后台] adj_factor回填失败: {bf_err}", flush=True)
+                except Exception as kline_err:
+                    print(f"[后台] K线填充失败: {kline_err}", flush=True)
+
+            # 收盘后（16:30之后）且当日尚未填充分钟K线时，执行核心池+活跃池分钟K线填充 v19.9.8
+            # 注意：分钟K线获取较慢（每只约2秒），所以限制数量避免阻塞
+            if current_hour >= 16 and _refresh_state.last_minute_kline_fill_date != today_date_str:
+                try:
+                    from backend.data_manager.filler import get_minute_kline_filler
+                    from backend.stock_selector.enums import PoolTier
+                    print("[后台] 开始收盘后分钟K线填充...", flush=True)
+                    minute_filler = get_minute_kline_filler()
+                    # 获取核心池+活跃池股票（每天轮换50只，避免耗时过长）
+                    selector = get_stock_selector()
+                    core_codes = selector.get_pool(PoolTier.CORE)
+                    active_codes = selector.get_pool(PoolTier.ACTIVE)
+                    # 合并并去重
+                    all_pool_codes = list(set(core_codes + active_codes))
+                    # 根据日期选择不同的子集（每天约50只，约4天轮换完全部）
+                    day_index = datetime.now().timetuple().tm_yday
+                    subset_size = 50
+                    start_idx = (day_index * subset_size) % len(all_pool_codes) if all_pool_codes else 0
+                    # 简单轮换选择
+                    codes_to_fill = []
+                    remaining = all_pool_codes
+                    while len(codes_to_fill) < subset_size and remaining:
+                        idx = (start_idx + len(codes_to_fill)) % len(remaining)
+                        codes_to_fill.append(remaining[idx])
+                    if codes_to_fill:
+                        result = minute_filler.fill_all(codes=codes_to_fill, days_back=1)
+                        print(f"[后台] 分钟K线填充完成: 成功{result.success}, 失败{result.failed}, 记录{result.total_records}", flush=True)
+                    else:
+                        print("[后台] 分钟K线填充跳过: 无可填充的股票", flush=True)
+                    _refresh_state.save_minute_kline_fill_date(today_date_str)
+                except Exception as minute_err:
+                    print(f"[后台] 分钟K线填充失败: {minute_err}", flush=True)
 
             # 更新全局可分析代码集合
             _refresh_state.all_analysable_codes = analysable_codes
@@ -540,6 +638,12 @@ async def pool_rebalance_background_task():
                 return sel.refresh_pools(md)
 
             stats = await loop.run_in_executor(None, _run_rebalance)
+
+            # 保存池状态到 SQLite (v19.9.9)
+            def _save_pool_state():
+                sel._pm.save_state()
+            await loop.run_in_executor(None, _save_pool_state)
+
             print(f"[池再平衡] {today} 完成: {stats}", flush=True)
             last_pool_rebalance_date = today
         except asyncio.CancelledError:
@@ -661,6 +765,14 @@ async def lifespan(app: FastAPI):
         if formatted_stock_list:
             selector.initialize(formatted_stock_list, market_data, financial_data)
             print(f"[启动] StockSelector 初始化完成: {selector.get_pool_stats()}")
+
+            # 尝试从持久化状态恢复池组成 (v19.9.9)
+            # 如果持久化状态比市场数据更新（24小时内），优先使用持久化状态
+            if selector._pm.has_persistent_state():
+                print("[启动] 检测到新鲜的池状态，尝试恢复...")
+                loaded = selector._pm.load_state()
+                if loaded:
+                    print(f"[启动] 池状态已从持久化恢复: {selector.get_pool_stats()}")
         else:
             print(f"[启动] StockSelector 初始化跳过: stock_list={len(formatted_stock_list)}")
 

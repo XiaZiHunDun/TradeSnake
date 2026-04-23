@@ -539,6 +539,18 @@ class FinancialDataFetcher:
         else:
             result = None
 
+        # Tushare revenue fallback：当 eastmoney/baostock 的 revenue 为 0 时，从 Tushare 补充
+        if result and result.get('revenue', 0) == 0:
+            try:
+                from .providers.tushare import get_tushare_provider
+                ts_provider = get_tushare_provider()
+                ts_fin = ts_provider.get_financial_data(symbol)
+                if ts_fin and ts_fin.get('revenue', 0) > 0:
+                    result['revenue'] = ts_fin['revenue']
+                    print(f"  Tushare补充revenue {symbol}: {ts_fin['revenue']:.2f}亿元")
+            except Exception as e:
+                print(f"  Tushare revenue fallback失败 {symbol}: {e}")
+
         try:
             df_ak = ak.stock_financial_analysis_indicator(symbol=symbol, start_year='2023')
             if df_ak is not None and len(df_ak) > 0:

@@ -23,6 +23,7 @@ class StockFactor:
     is_limit_up: bool             # 是否涨停
     is_limit_down: bool           # 是否跌停
     is_suspended: bool            # 是否停牌
+    cp_change: float = 0.0        # 战力日变化（昨日战力 - 今日战力）
 
     @classmethod
     def from_dict(cls, data: Dict) -> 'StockFactor':
@@ -309,5 +310,136 @@ class MultiFactorStrategy(Strategy):
             scored.append((code, composite_score))
 
         # 按综合评分排序
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [code for code, _ in scored[:n]]
+
+
+class RisingCPStrategy(Strategy):
+    """战力上升策略 - 选战力正在上升的股票 v1.0
+
+    改进点：基于验证结果（战力上升组平均涨幅+0.39% vs 下降组-0.10%），
+    优先选择战力相比昨日上升的股票。
+    """
+
+    def __init__(self, n: int = 10, max_days: int = 5, min_cp_change: float = 0.0):
+        """
+        Args:
+            n: 最大持仓数量
+            max_days: 最大持仓天数
+            min_cp_change: 最小战力变化阈值（只选战力变化大于此值的股票）
+        """
+        self.n = n
+        self._max_days = max_days
+        self.min_cp_change = min_cp_change
+
+    @property
+    def name(self) -> str:
+        return f"战力上升TOP{self.n}"
+
+    @property
+    def max_position_days(self) -> int:
+        return self._max_days
+
+    @property
+    def max_positions(self) -> int:
+        return self.n
+
+    def select_stocks(self, date: str, stock_factors: Dict[str, StockFactor],
+                      rank: int = None) -> List[str]:
+        """选战力上升的TOP N股票
+
+        排序规则：
+        1. 只选 cp_change > 0 的股票（战力上升）
+        2. 按 cp_change 降序排列
+        3. 取TOP N
+        """
+        n = rank or self.n
+
+        # 过滤条件：非停牌，且战力上升
+        rising_stocks = [
+            (code, factor) for code, factor in stock_factors.items()
+            if not factor.is_suspended and factor.cp_change > self.min_cp_change
+        ]
+
+        # 按战力变化降序排序
+        rising_stocks.sort(key=lambda x: x[1].cp_change, reverse=True)
+
+        return [code for code, _ in rising_stocks[:n]]
+
+
+class HybridRisingStrategy(Strategy):
+    """混合策略 - 综合战力绝对值和战力变化 v1.0
+
+    综合排名 = 战力绝对值排名 * 0.4 + 战力变化排名 * 0.6
+    战力变化权重更高（根据验证结果）
+    """
+
+    def __init__(self, n: int = 10, max_days: int = 5,
+                 abs_weight: float = 0.4, change_weight: float = 0.6):
+        """
+        Args:
+            n: 最大持仓数量
+            max_days: 最大持仓天数
+            abs_weight: 战力绝对值权重
+            change_weight: 战力变化权重
+        """
+        self.n = n
+        self._max_days = max_days
+        self.abs_weight = abs_weight
+        self.change_weight = change_weight
+
+    @property
+    def name(self) -> str:
+        return f"混合策略TOP{self.n}"
+
+    @property
+    def max_position_days(self) -> int:
+        return self._max_days
+
+    @property
+    def max_positions(self) -> int:
+        return self.n
+
+    def select_stocks(self, date: str, stock_factors: Dict[str, StockFactor],
+                      rank: int = None) -> List[str]:
+        """综合战力绝对值和战力变化选股"""
+        n = rank or self.n
+
+        valid_stocks = [
+            factor for code, factor in stock_factors.items()
+            if not factor.is_suspended
+        ]
+
+        if not valid_stocks:
+            return []
+
+        # 计算排名
+        valid_stocks.sort(key=lambda x: x.total_cp, reverse=True)
+        cp_ranks = {s.code: i for i, s in enumerate(valid_stocks)}
+
+        valid_stocks.sort(key=lambda x: x.cp_change, reverse=True)
+        change_ranks = {s.code: i for i, s in enumerate(valid_stocks)}
+
+        # 计算综合排名
+        scored = []
+        for code, factor in stock_factors.items():
+            if factor.is_suspended:
+                continue
+
+            cp_rank = cp_ranks.get(code, len(valid_stocks))
+            change_rank = change_ranks.get(code, len(valid_stocks))
+
+            # 归一化（越小排名越高）
+            n_stocks = len(valid_stocks)
+            normalized_cp_rank = cp_rank / n_stocks
+            normalized_change_rank = change_rank / n_stocks
+
+            composite_score = (
+                normalized_cp_rank * self.abs_weight +
+                normalized_change_rank * self.change_weight
+            )
+            # 综合分数越高越好（排名越低越好）
+            scored.append((code, -composite_score))
+
         scored.sort(key=lambda x: x[1], reverse=True)
         return [code for code, _ in scored[:n]]

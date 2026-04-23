@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import math
 
 from .strategies import Strategy, TopNStrategy, ValueStrategy, GrowthStrategy, MomentumStrategy
+from .strategies import RisingCPStrategy, HybridRisingStrategy
 from .metrics import BacktestResult, Trade
 
 
@@ -78,6 +79,8 @@ class FullBacktestEngine:
             'value': ValueStrategy(n=10),
             'growth': GrowthStrategy(n=10),
             'momentum': MomentumStrategy(n=10),
+            'rising_cp': RisingCPStrategy(n=10),
+            'hybrid': HybridRisingStrategy(n=10),
         }
 
     def run(
@@ -86,7 +89,11 @@ class FullBacktestEngine:
         end_date: str,
         strategy_name: str = 'top',
         top_n: int = 10,
-        initial_capital: float = 20000.0
+        initial_capital: float = 20000.0,
+        weight_config: Dict = None,
+        stop_loss_pct: float = -3.0,
+        max_holding_days: int = 5,
+        market_filter_pct: float = -2.0
     ) -> BacktestStats:
         """
         执行完整回测
@@ -97,79 +104,120 @@ class FullBacktestEngine:
             strategy_name: 策略名称 (top/value/growth/momentum)
             top_n: 持仓数量
             initial_capital: 初始资金
+            weight_config: 战力权重配置，如 {'growth': 0.35, 'momentum': 0.15}
+                          如果为None，使用默认权重
+            stop_loss_pct: 止损阈值（负数，如-3.0表示亏损3%止损）
+            max_holding_days: 最大持仓天数
+            market_filter_pct: 市场过滤阈值（负数，如-2.0表示大盘平均跌幅超过2%时减半持仓）
 
         Returns:
             BacktestStats: 回测统计结果
         """
-        # 获取策略
-        strategy = self.strategies.get(strategy_name, TopNStrategy(n=top_n))
-        if hasattr(strategy, 'n'):
-            strategy.n = top_n
+        # 临时调整权重
+        from backend.engine.cp_engine.constants import WEIGHTS
+        original_weights = WEIGHTS.copy()
+        if weight_config:
+            WEIGHTS.update(weight_config)
 
-        # 获取交易日列表
-        trading_dates = self._get_trading_dates(start_date, end_date)
-        if len(trading_dates) < 2:
-            raise ValueError("交易日数据不足")
+        try:
+            # 确保DuckDB数据一致性
+            self.duckdb.checkpoint()
+            # 获取策略
+            strategy = self.strategies.get(strategy_name, TopNStrategy(n=top_n))
+            if hasattr(strategy, 'n'):
+                strategy.n = top_n
 
-        # 初始化状态
-        cash = {'value': initial_capital}
-        positions: Dict[str, Position] = {}
-        pending_bought: Set[str] = set()
-        trades: List[BacktestTrade] = []
-        equity_curve: List[Dict] = []
-        completed_pnls: List[float] = []  # 已平仓交易的盈亏列表
+            # 获取交易日列表
+            trading_dates = self._get_trading_dates(start_date, end_date)
+            if len(trading_dates) < 2:
+                raise ValueError("交易日数据不足")
 
-        # 按日期遍历
-        for i in range(len(trading_dates) - 1):
-            signal_date = trading_dates[i]
-            trade_date = trading_dates[i + 1]
+            # 初始化状态
+            cash = {'value': initial_capital}
+            positions: Dict[str, Position] = {}
+            pending_bought: Set[str] = set()
+            trades: List[BacktestTrade] = []
+            equity_curve: List[Dict] = []
+            completed_pnls: List[float] = []  # 已平仓交易的盈亏列表
 
-            # 获取信号日的战力数据
-            cp_data = self._get_cp_at_date(signal_date)
-            if not cp_data:
-                continue
+            # 按日期遍历
+            for i in range(len(trading_dates) - 1):
+                signal_date = trading_dates[i]
+                trade_date = trading_dates[i + 1]
 
-            # 策略选股 - 按战力排序取top_n
-            stock_factors = self._build_stock_factors(cp_data)
-            target_codes = strategy.select_stocks(signal_date, stock_factors, top_n)
+                # 获取信号日的战力数据（今日）
+                cp_data = self._get_cp_at_date(signal_date)
+                if not cp_data:
+                    continue
 
-            # 检查持仓超时
-            for code in list(positions.keys()):
-                positions[code].holding_days += 1
-                if positions[code].holding_days > 5:  # 最大持仓5天
-                    self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'max_days')
+                # 市场环境过滤：计算市场平均涨跌幅
+                market_change = sum(item.get('change_pct', 0) for item in cp_data) / len(cp_data) if cp_data else 0
+                # 大盘下跌超过阈值时，减少一半仓位
+                reduce_positions = market_change < market_filter_pct
+                actual_top_n = top_n // 2 if reduce_positions else top_n
 
-            # 调仓
-            current_codes = set(positions.keys())
-            new_codes = set(target_codes[:top_n])
+                # 获取昨日的战力数据（用于计算战力变化）
+                prev_cp_data = None
+                if i > 0:
+                    prev_signal_date = trading_dates[i - 1]
+                    prev_cp_data = self._get_cp_at_date(prev_signal_date)
 
-            # 卖出不在新目标中的持仓
-            for code in current_codes - new_codes:
-                self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'rebalance')
+                # 策略选股 - 按战力排序取actual_top_n（市场大跌时减半）
+                stock_factors = self._build_stock_factors(cp_data, prev_cp_data)
+                target_codes = strategy.select_stocks(signal_date, stock_factors, actual_top_n)
 
-            # 买入新目标
-            for code in new_codes - current_codes:
-                self._execute_buy(positions, cash, trades, pending_bought, code, trade_date)
+                # 检查止损（亏损超过3%立即卖出）
+                for code in list(positions.keys()):
+                    current_price = self._get_price(code, trade_date)
+                    if current_price > 0:
+                        pos = positions[code]
+                        # 计算持仓盈亏：当前市值 - 成本（含佣金）
+                        cost = pos.buy_amount + pos.buy_commission
+                        current_value = current_price * pos.quantity
+                        pnl_pct = (current_value - cost) / cost * 100
+                        if pnl_pct <= stop_loss_pct:  # 止损
+                            self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'stop_loss')
 
-            # 记录净值
-            total_value = cash['value'] + sum(
-                pos.quantity * self._get_price(pos.code, trade_date)
-                for pos in positions.values()
+                # 检查持仓超时
+                for code in list(positions.keys()):
+                    positions[code].holding_days += 1
+                    if positions[code].holding_days > max_holding_days:
+                        self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'max_days')
+
+                # 调仓
+                current_codes = set(positions.keys())
+                new_codes = set(target_codes[:actual_top_n])
+
+                # 卖出不在新目标中的持仓
+                for code in current_codes - new_codes:
+                    self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'rebalance')
+
+                # 买入新目标
+                for code in new_codes - current_codes:
+                    self._execute_buy(positions, cash, trades, pending_bought, code, trade_date)
+
+                # 记录净值
+                total_value = cash['value'] + sum(
+                    pos.quantity * self._get_price(pos.code, trade_date)
+                    for pos in positions.values()
+                )
+                equity_curve.append({
+                    'date': trade_date,
+                    'total_value': total_value,
+                    'cash': cash['value'],
+                    'position_value': total_value - cash['value']
+                })
+
+                # 清除当日买入记录
+                pending_bought.clear()
+
+            # 计算统计
+            return self._calculate_stats(
+                initial_capital, cash['value'], positions, equity_curve, trades, completed_pnls
             )
-            equity_curve.append({
-                'date': trade_date,
-                'total_value': total_value,
-                'cash': cash['value'],
-                'position_value': total_value - cash['value']
-            })
-
-            # 清除当日买入记录
-            pending_bought.clear()
-
-        # 计算统计
-        return self._calculate_stats(
-            initial_capital, cash['value'], positions, equity_curve, trades, completed_pnls
-        )
+        finally:
+            # 恢复原始权重
+            WEIGHTS.update(original_weights)
 
     def _get_trading_dates(self, start_date: str, end_date: str) -> List[str]:
         """获取交易日列表"""
@@ -194,26 +242,43 @@ class FullBacktestEngine:
             return float(result.data.iloc[0]['close'])
         return 0.0
 
-    def _build_stock_factors(self, cp_data: List[Dict]) -> Dict[str, 'StockFactor']:
-        """将战力数据转换为 StockFactor 字典"""
+    def _build_stock_factors(self, cp_data: List[Dict], prev_cp_data: List[Dict] = None) -> Dict[str, 'StockFactor']:
+        """将战力数据转换为 StockFactor 字典
+
+        Args:
+            cp_data: 今日战力数据
+            prev_cp_data: 昨日战力数据（用于计算战力变化）
+        """
         from .strategies import StockFactor
+
+        # 构建昨日战力字典
+        prev_cp_dict = {}
+        if prev_cp_data:
+            for item in prev_cp_data:
+                prev_cp_dict[item.get('code', '')] = item.get('total_cp', 0)
 
         result = {}
         for item in cp_data:
+            code = item.get('code', '')
+            total_cp = item.get('total_cp', 0)
+            prev_cp = prev_cp_dict.get(code, total_cp)
+            cp_change = total_cp - prev_cp
+
             factor = StockFactor(
-                code=item.get('code', ''),
+                code=code,
                 name=item.get('name', ''),
                 date=item.get('recorded_at', ''),
                 close=item.get('price', 0) or item.get('close', 0),
                 change_pct=item.get('change_pct', 0),
-                total_cp=item.get('total_cp', 0),
+                total_cp=total_cp,
                 growth_score=item.get('growth_score', 0),
                 value_score=item.get('value_score', 0),
                 momentum_score=item.get('momentum_score', 0),
                 quality_score=item.get('quality_score', 0),
                 is_limit_up=item.get('change_pct', 0) >= 9.9,
                 is_limit_down=item.get('change_pct', 0) <= -9.9,
-                is_suspended=False
+                is_suspended=False,
+                cp_change=cp_change
             )
             result[factor.code] = factor
         return result

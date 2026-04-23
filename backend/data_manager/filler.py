@@ -2062,17 +2062,24 @@ class CPHistoryBatchCalculator:
         start_dt = end_dt - timedelta(days=70)  # 多取几天确保有足够数据
         start_date = start_dt.strftime('%Y-%m-%d')
 
-        # 获取K线数据
+        # 获取K线数据（使用批量查询 v19.9）
         klines_dict = {}
-        for code in codes:
-            result = self.duckdb.get_klines(
-                code,
-                start_date=start_date,
-                end_date=date,
-                limit=100
-            )
-            if result.success and result.data is not None and not result.data.empty:
-                klines_dict[code] = result.data.to_dict('records')
+        try:
+            klines_df_dict = self.duckdb.get_klines_bulk_for_date(codes, end_date=date, days=70)
+            for code, df in klines_df_dict.items():
+                if df is not None and not df.empty:
+                    klines_dict[code] = df.to_dict('records')
+        except Exception as e:
+            print(f"批量获取K线失败，回退到逐只查询: {e}")
+            for code in codes:
+                result = self.duckdb.get_klines(
+                    code,
+                    start_date=start_date,
+                    end_date=date,
+                    limit=100
+                )
+                if result.success and result.data is not None and not result.data.empty:
+                    klines_dict[code] = result.data.to_dict('records')
 
         # 获取财务数据
         financials = self._get_stock_financials(codes)

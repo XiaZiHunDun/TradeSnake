@@ -815,7 +815,7 @@ class CPEngine:
 
         改进：对于小数据集（< 20），使用IQR方法避免百分位不准确
         """
-        if not values:
+        if len(values) == 0:
             return []
 
         arr = np.array(values, dtype=float)
@@ -1054,16 +1054,60 @@ class CPEngine:
         momentum_values = [s.momentum_score for s in self.stocks]
         quality_values = [s.quality_score for s in self.stocks]
 
-        # 稳健归一化（使用95%百分位裁剪）
-        norm_growth_list = self._robust_normalize(growth_values, clip_percentile=0.95)
-        norm_value_list = self._robust_normalize(value_values, clip_percentile=0.95)
-        norm_momentum_list = self._robust_normalize(momentum_values, clip_percentile=0.95)
+        # 稳健归一化（使用97.5百分位裁剪，避免归一化后分数集中）
+        # clip_percentile=0.95 时：裁剪范围 [2.5%, 97.5%]，即 clip 5% 的极值
+        # 改为 clip_percentile=0.975：裁剪范围 [1.25%, 98.75%]，裁剪 2.5% 极值，减少分数集中
+        norm_growth_list = self._robust_normalize(growth_values, clip_percentile=0.975)
+        norm_value_list = self._robust_normalize(value_values, clip_percentile=0.975)
+        norm_momentum_list = self._robust_normalize(momentum_values, clip_percentile=0.975)
 
         MIN_QUALITY_BASELINE = 10
 
+        # v19.9: 批量获取实时数据，避免N+1查询问题
+        # 一次查询所有股票，内存中计算MA
+        bulk_data = {}
+        try:
+            from backend.data_manager import get_bulk_minute_data
+            from .trading_time import is_trading_time
+            if is_trading_time():  # 仅在交易时间计算实时因子
+                all_codes = [s.code for s in self.stocks]
+                bulk_data = get_bulk_minute_data(all_codes, minutes=5, days=1)
+        except Exception:
+            pass  # 降级到逐股票计算
+
         for i, stock in enumerate(self.stocks):
-            # 计算实时因子 v19.6（仅核心池需要，已在外部调用时过滤）
-            stock.real_time_score = self.calculate_real_time_score(stock.code, stock.price)
+            # 计算实时因子 v19.9: 优先使用批量数据，否则降级
+            if stock.code in bulk_data:
+                data = bulk_data[stock.code]
+                ma5 = data.get('ma5')
+                ma15 = data.get('ma15')
+                current_price = data.get('latest_price', stock.price)
+                avg_volume = data.get('avg_volume', 0)
+                current_volume = data.get('current_volume', 0)
+
+                if ma5 and current_price:
+                    ma5_change = (current_price - ma5) / ma5 * 100
+                else:
+                    ma5_change = 0.0
+
+                if ma15 and current_price:
+                    ma15_change = (current_price - ma15) / ma15 * 100
+                else:
+                    ma15_change = 0.0
+
+                volume_ratio = 1.0
+                if avg_volume > 0:
+                    volume_ratio = current_volume / avg_volume if current_volume > 0 else 1.0
+
+                real_time = (
+                    ma5_change * 0.5 +
+                    ma15_change * 0.3 +
+                    (volume_ratio - 1) * 10 * 0.2
+                )
+                stock.real_time_score = max(-10, min(10, real_time))
+            else:
+                # 降级：逐股票计算
+                stock.real_time_score = self.calculate_real_time_score(stock.code, stock.price)
 
             # 使用稳健归一化后的分数
             norm_growth = norm_growth_list[i]
@@ -1082,7 +1126,7 @@ class CPEngine:
             stock.momentum_score = norm_momentum
             stock.quality_score = norm_quality
 
-            # real_time_score 已在 calculate_real_time_score() 中计算
+            # real_time_score 已在上面计算
             norm_real_time = max(-10, min(10, stock.real_time_score))
 
             base_cp = (

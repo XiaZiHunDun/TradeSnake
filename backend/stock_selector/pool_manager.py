@@ -566,3 +566,102 @@ class PoolManager:
     def get_pool_stats(self) -> Dict[str, int]:
         """获取各池统计"""
         return {tier.value: len(stocks) for tier, stocks in self._pools.items()}
+
+    # -------------------- 状态持久化 (v19.9.9) --------------------
+
+    def save_state(self) -> bool:
+        """
+        保存池状态到 SQLite
+
+        Returns:
+            是否保存成功
+        """
+        try:
+            from backend.data_manager.pool_state_store import get_pool_state_store
+            store = get_pool_state_store()
+
+            # 只保存核心池和活跃池（最重要）
+            pools_to_save = {
+                PoolTier.CORE.value: self.get_pool(PoolTier.CORE),
+                PoolTier.ACTIVE.value: self.get_pool(PoolTier.ACTIVE),
+                PoolTier.OBSERVE.value: self.get_pool(PoolTier.OBSERVE),
+            }
+
+            success = store.save_all_pools(pools_to_save)
+            if success:
+                logger.info(f"池状态已保存: CORE={len(self._pools[PoolTier.CORE])} 只, ACTIVE={len(self._pools[PoolTier.ACTIVE])} 只")
+            return success
+        except Exception as e:
+            logger.error(f"保存池状态失败: {e}")
+            return False
+
+    def load_state(self) -> bool:
+        """
+        从 SQLite 加载池状态
+
+        Returns:
+            是否加载成功（有状态被加载）
+        """
+        try:
+            from backend.data_manager.pool_state_store import get_pool_state_store
+            store = get_pool_state_store()
+
+            loaded_pools = store.load_all_pools()
+            if not loaded_pools:
+                logger.info("没有找到持久化的池状态")
+                return False
+
+            # 检查状态是否新鲜（24小时内）
+            if not store.is_pool_state_fresh(PoolTier.CORE.value, max_age_hours=24):
+                logger.info("池状态已过期，不加载")
+                return False
+
+            # 恢复池状态
+            for tier_str, codes in loaded_pools.items():
+                try:
+                    tier = PoolTier(tier_str)
+                except ValueError:
+                    logger.warning(f"未知的池层级: {tier_str}")
+                    continue
+
+                # 清空现有池并重新填充
+                self._pools[tier] = {}
+                for code in codes:
+                    # 尝试从其他池获取股票信息
+                    info = self._code_to_tier.get(code)
+                    if info is None:
+                        # 如果没有 StockInfo，创建一个基础信息
+                        from .types import StockInfo
+                        info = StockInfo(
+                            code=code,
+                            name=code,  # 名称稍后填充
+                            tier=tier,
+                            tier_entry_date=date.today(),
+                            tier_reason="从持久化状态恢复",
+                        )
+                    else:
+                        # 更新池层级
+                        info.tier = tier
+
+                    self._pools[tier][code] = info
+                    self._code_to_tier[code] = tier
+
+            logger.info(f"池状态已恢复: {list(loaded_pools.keys())}")
+            return True
+        except Exception as e:
+            logger.error(f"加载池状态失败: {e}")
+            return False
+
+    def has_persistent_state(self) -> bool:
+        """
+        检查是否有持久化的池状态
+
+        Returns:
+            是否有可用的持久化状态
+        """
+        try:
+            from backend.data_manager.pool_state_store import get_pool_state_store
+            store = get_pool_state_store()
+            return store.is_pool_state_fresh(PoolTier.CORE.value, max_age_hours=24)
+        except Exception:
+            return False

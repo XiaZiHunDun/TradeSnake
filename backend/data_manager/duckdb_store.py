@@ -21,6 +21,7 @@ import sqlite3
 import duckdb
 import json
 import logging
+import fcntl
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
@@ -82,7 +83,44 @@ class DuckDBStore:
     def __init__(self, db_path: str = None):
         self.db_path = str(db_path or DUCKDB_PATH)
         self._lock = threading.Lock()
+        self._lock_path = self.db_path + ".lock"
+
+        # 单连接复用（跨进程文件锁保护）
+        self._write_conn = None
+        self._read_conn = None
+        self._conn_lock = threading.Lock()  # 保护连接创建
+
         self._ensure_tables()
+
+    def _acquire_lock(self, exclusive: bool = True):
+        """获取文件锁（跨进程互斥）"""
+        lock_fd = open(self._lock_path, 'w')
+        lock_type = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+        fcntl.flock(lock_fd.fileno(), lock_type)
+        return lock_fd
+
+    def _release_lock(self, lock_fd):
+        """释放文件锁"""
+        if lock_fd:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            lock_fd.close()
+
+    def _get_conn(self) -> duckdb.DuckDBPyConnection:
+        """获取写连接（单例，复用）"""
+        if self._write_conn is None:
+            with self._conn_lock:
+                if self._write_conn is None:
+                    self._write_conn = duckdb.connect(self.db_path, read_only=False)
+        return self._write_conn
+
+    def _get_read_conn(self) -> duckdb.DuckDBPyConnection:
+        """获取读连接（单例，复用）"""
+        if self._read_conn is None:
+            with self._conn_lock:
+                if self._read_conn is None:
+                    self._read_conn = duckdb.connect(self.db_path, read_only=True)
+                    self._read_conn.execute("SET threads=1")
+        return self._read_conn
 
     def _migrate_columns(self, conn):
         """
@@ -116,106 +154,135 @@ class DuckDBStore:
         return duckdb.connect(self.db_path, read_only=False)
 
     def _get_read_conn(self) -> duckdb.DuckDBPyConnection:
-        """获取DuckDB只读连接（用于查询，避免与写入锁冲突）"""
-        return duckdb.connect(self.db_path, read_only=True)
+        """获取DuckDB只读连接（避免与写入锁冲突）
+
+        注意：DuckDB的只读模式不会阻塞其他连接写入，
+        如果需要一致性快照，应使用 checkpoint() 后再查询。
+        设置 threads=1 确保查询结果确定性。
+        """
+        conn = duckdb.connect(self.db_path, read_only=True)
+        conn.execute("SET threads=1")
+        return conn
+
+    def checkpoint(self):
+        """强制checkpoint，确保所有写操作刷新到磁盘"""
+        lock_fd = None
+        try:
+            lock_fd = self._acquire_lock(exclusive=True)
+            conn = self._get_conn()
+            conn.execute("CHECKPOINT")
+        except Exception as e:
+            print(f"Checkpoint warning: {e}")
+        finally:
+            self._release_lock(lock_fd)
 
     def _ensure_tables(self):
         """确保表存在"""
         # 如果数据库已被锁定（另一个进程持有写锁），跳过表创建
         # 因为只读连接无法执行DDL，这只在首次初始化时需要
         try:
-            with self._get_conn() as conn:
-                # 日K线表
-                conn.execute("""
-                    CREATE SEQUENCE IF NOT EXISTS kline_id START 1
-                """)
+            # 注意：这里不使用 with self._get_conn() 因为 _ensure_tables 在 __init__ 中调用，
+            # 此时 singleton 连接还未创建，我们需要在初始化后保持连接可用
+            conn = self._get_conn()
 
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS daily_kline (
-                        id BIGINT DEFAULT nextval('kline_id'),
-                        code VARCHAR(6) NOT NULL,
-                        trade_date DATE NOT NULL,
-                        open DECIMAL(10, 2) NOT NULL,
-                        high DECIMAL(10, 2) NOT NULL,
-                        low DECIMAL(10, 2) NOT NULL,
-                        close DECIMAL(10, 2) NOT NULL,
-                        volume BIGINT NOT NULL,
-                        amount DECIMAL(20, 2) DEFAULT 0,
-                        change_pct DECIMAL(10, 2) DEFAULT 0,
-                        adj_close DECIMAL(10, 2) DEFAULT 0,
-                        adj_factor DECIMAL(10, 6) DEFAULT 1.0,  -- 复权因子
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        PRIMARY KEY (code, trade_date)
-                    )
-                """)
+            # 日K线表
+            conn.execute("""
+                CREATE SEQUENCE IF NOT EXISTS kline_id START 1
+            """)
 
-                # 迁移：检查并添加缺失的列（针对已存在的表）
-                self._migrate_columns(conn)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS daily_kline (
+                    id BIGINT DEFAULT nextval('kline_id'),
+                    code VARCHAR(6) NOT NULL,
+                    trade_date DATE NOT NULL,
+                    open DECIMAL(10, 2) NOT NULL,
+                    high DECIMAL(10, 2) NOT NULL,
+                    low DECIMAL(10, 2) NOT NULL,
+                    close DECIMAL(10, 2) NOT NULL,
+                    volume BIGINT NOT NULL,
+                    amount DECIMAL(20, 2) DEFAULT 0,
+                    change_pct DECIMAL(10, 2) DEFAULT 0,
+                    adj_close DECIMAL(10, 2) DEFAULT 0,
+                    adj_factor DECIMAL(10, 6) DEFAULT 1.0,  -- 复权因子
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (code, trade_date)
+                )
+            """)
 
-                # 创建索引
-                conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_daily_code_date
-                    ON daily_kline(code, trade_date DESC)
-                """)
+            # 迁移：检查并添加缺失的列（针对已存在的表）
+            self._migrate_columns(conn)
 
-                conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_daily_date
-                    ON daily_kline(trade_date DESC)
-                """)
+            # 创建索引
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_daily_code_date
+                ON daily_kline(code, trade_date DESC)
+            """)
 
-                # 迁移：检查并添加缺失的列
-                self._migrate_columns(conn)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_daily_date
+                ON daily_kline(trade_date DESC)
+            """)
 
-                # 分钟K线表（预留）
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS minute_kline (
-                        id BIGINT DEFAULT nextval('kline_id'),
-                        code VARCHAR(6) NOT NULL,
-                        trade_date DATE NOT NULL,
-                        trade_time TIMESTAMP NOT NULL,
-                        open DECIMAL(10, 2) NOT NULL,
-                        high DECIMAL(10, 2) NOT NULL,
-                        low DECIMAL(10, 2) NOT NULL,
-                        close DECIMAL(10, 2) NOT NULL,
-                        volume BIGINT NOT NULL,
-                        amount DECIMAL(20, 2) DEFAULT 0,
-                        interval_type VARCHAR(10) DEFAULT '1min',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        PRIMARY KEY (code, trade_time, interval_type)
-                    )
-                """)
+            # 迁移：检查并添加缺失的列
+            self._migrate_columns(conn)
+
+            # 分钟K线表（预留）
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS minute_kline (
+                    id BIGINT DEFAULT nextval('kline_id'),
+                    code VARCHAR(6) NOT NULL,
+                    trade_date DATE NOT NULL,
+                    trade_time TIMESTAMP NOT NULL,
+                    open DECIMAL(10, 2) NOT NULL,
+                    high DECIMAL(10, 2) NOT NULL,
+                    low DECIMAL(10, 2) NOT NULL,
+                    close DECIMAL(10, 2) NOT NULL,
+                    volume BIGINT NOT NULL,
+                    amount DECIMAL(20, 2) DEFAULT 0,
+                    interval_type VARCHAR(10) DEFAULT '1min',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (code, trade_time, interval_type)
+                )
+            """)
         except (duckdb.IOException, OSError) as e:
             if "Could not set lock" in str(e) or "locked" in str(e).lower():
                 print(f"[DuckDB] 数据库被锁定 ({e})，跳过表创建（表可能已存在）")
-                pass  # 表已存在，跳过
             else:
                 raise
+        except Exception as e:
+            # 其他异常打印但不阻止初始化
+            print(f"[DuckDB] 表创建警告: {e}")
 
     def insert_daily_kline(self, record: KlineRecord) -> bool:
         """插入单条日K线"""
+        lock_fd = None
         try:
-            with self._get_conn() as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO daily_kline
-                    (code, trade_date, open, high, low, close, volume, amount, change_pct, adj_close, adj_factor)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    record.code,
-                    record.trade_date,
-                    record.open,
-                    record.high,
-                    record.low,
-                    record.close,
-                    record.volume,
-                    record.amount,
-                    record.change_pct,
-                    record.adj_close,
-                    getattr(record, 'adj_factor', 1.0),
-                ))
+            lock_fd = self._acquire_lock(exclusive=True)
+            conn = self._get_conn()
+            conn.execute("""
+                INSERT OR REPLACE INTO daily_kline
+                (code, trade_date, open, high, low, close, volume, amount, change_pct, adj_close, adj_factor)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                record.code,
+                record.trade_date,
+                record.open,
+                record.high,
+                record.low,
+                record.close,
+                record.volume,
+                record.amount,
+                record.change_pct,
+                record.adj_close,
+                getattr(record, 'adj_factor', 1.0),
+            ))
+            conn.commit()
             return True
         except Exception as e:
             print(f"Insert daily kline error: {e}")
             return False
+        finally:
+            self._release_lock(lock_fd)
 
     def insert_daily_klines_batch(self, records: List[KlineRecord], batch_size: int = 1000) -> Tuple[int, int]:
         """
@@ -238,53 +305,58 @@ class DuckDBStore:
 
         total_success = 0
         total_errors = 0
+        lock_fd = None
 
         try:
-            with self._get_conn() as conn:
-                # SQL语句
-                sql = """
-                    INSERT OR REPLACE INTO daily_kline
-                    (code, trade_date, open, high, low, close, volume, amount, change_pct, adj_close, adj_factor)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
+            lock_fd = self._acquire_lock(exclusive=True)
+            conn = self._get_conn()
 
-                # 分批处理
-                for batch_start in range(0, len(records), batch_size):
-                    batch_end = min(batch_start + batch_size, len(records))
-                    batch = records[batch_start:batch_end]
+            # SQL语句
+            sql = """
+                INSERT OR REPLACE INTO daily_kline
+                (code, trade_date, open, high, low, close, volume, amount, change_pct, adj_close, adj_factor)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
 
-                    # 准备批量数据
-                    batch_data = [
-                        (
-                            r.code, r.trade_date, r.open, r.high, r.low, r.close,
-                            r.volume, r.amount, r.change_pct, r.adj_close,
-                            getattr(r, 'adj_factor', 1.0),
-                        )
-                        for r in batch
-                    ]
+            # 分批处理
+            for batch_start in range(0, len(records), batch_size):
+                batch_end = min(batch_start + batch_size, len(records))
+                batch = records[batch_start:batch_end]
 
-                    try:
-                        # 使用 executemany 批量插入
-                        conn.executemany(sql, batch_data)
-                        total_success += len(batch)
-                    except Exception as e:
-                        # 如果批量失败，尝试逐条插入
-                        for r in batch:
-                            try:
-                                conn.execute(sql, (
-                                    r.code, r.trade_date, r.open, r.high, r.low, r.close,
-                                    r.volume, r.amount, r.change_pct, r.adj_close,
-                                    getattr(r, 'adj_factor', 1.0),
-                                ))
-                                total_success += 1
-                            except Exception:
-                                total_errors += 1
+                # 准备批量数据
+                batch_data = [
+                    (
+                        r.code, r.trade_date, r.open, r.high, r.low, r.close,
+                        r.volume, r.amount, r.change_pct, r.adj_close,
+                        getattr(r, 'adj_factor', 1.0),
+                    )
+                    for r in batch
+                ]
 
-                # 提交事务
-                conn.commit()
+                try:
+                    # 使用 executemany 批量插入
+                    conn.executemany(sql, batch_data)
+                    total_success += len(batch)
+                except Exception as e:
+                    # 如果批量失败，尝试逐条插入
+                    for r in batch:
+                        try:
+                            conn.execute(sql, (
+                                r.code, r.trade_date, r.open, r.high, r.low, r.close,
+                                r.volume, r.amount, r.change_pct, r.adj_close,
+                                getattr(r, 'adj_factor', 1.0),
+                            ))
+                            total_success += 1
+                        except Exception:
+                            total_errors += 1
+
+            # 提交事务
+            conn.commit()
 
         except Exception as e:
             return 0, len(records)
+        finally:
+            self._release_lock(lock_fd)
 
         return total_success, total_errors
 
@@ -313,20 +385,24 @@ class DuckDBStore:
         if missing:
             raise ValueError(f"Missing columns: {missing}")
 
+        lock_fd = None
         try:
-            with self._get_conn() as conn:
-                # 先删除已存在的记录
-                unique_codes = df['code'].unique().tolist()
-                if unique_codes:
-                    placeholders = ','.join([f"'{c}'" for c in unique_codes])
-                    conn.execute(f"DELETE FROM {table} WHERE code IN ({placeholders})")
+            lock_fd = self._acquire_lock(exclusive=True)
+            conn = self._get_conn()
+            # 先删除已存在的记录
+            unique_codes = df['code'].unique().tolist()
+            if unique_codes:
+                placeholders = ','.join([f"'{c}'" for c in unique_codes])
+                conn.execute(f"DELETE FROM {table} WHERE code IN ({placeholders})")
 
-                # 批量插入
-                conn.execute(f"INSERT INTO {table} BY NAME SELECT * FROM df")
-                return len(df)
+            # 批量插入
+            conn.execute(f"INSERT INTO {table} BY NAME SELECT * FROM df")
+            return len(df)
         except Exception as e:
             print(f"Insert from DataFrame error: {e}")
             return 0
+        finally:
+            self._release_lock(lock_fd)
 
     def get_klines(
         self,
@@ -347,32 +423,36 @@ class DuckDBStore:
         Returns:
             QueryResult with DataFrame
         """
+        lock_fd = None
         try:
-            with self._get_read_conn() as conn:
-                sql = "SELECT * FROM daily_kline WHERE code = ?"
-                params = [code]
+            lock_fd = self._acquire_lock(exclusive=False)  # 共享锁
+            conn = self._get_read_conn()
+            sql = "SELECT * FROM daily_kline WHERE code = ?"
+            params = [code]
 
-                if start_date:
-                    sql += " AND trade_date >= ?"
-                    params.append(start_date)
+            if start_date:
+                sql += " AND trade_date >= ?"
+                params.append(start_date)
 
-                if end_date:
-                    sql += " AND trade_date <= ?"
-                    params.append(end_date)
+            if end_date:
+                sql += " AND trade_date <= ?"
+                params.append(end_date)
 
-                sql += " ORDER BY trade_date DESC LIMIT ?"
-                params.append(limit)
+            sql += " ORDER BY trade_date DESC, id DESC LIMIT ?"
+            params.append(limit)
 
-                df = conn.execute(sql, params).df()
+            df = conn.execute(sql, params).df()
 
-                return QueryResult(
-                    success=True,
-                    data=df,
-                    row_count=len(df)
-                )
+            return QueryResult(
+                success=True,
+                data=df,
+                row_count=len(df)
+            )
         except Exception as e:
             logger.warning(f"get_klines 查询失败 code={code}: {e}")
             return QueryResult(success=False, error=str(e))
+        finally:
+            self._release_lock(lock_fd)
 
     def get_date_range(self, code: str) -> Tuple[Optional[str], Optional[str]]:
         """
@@ -384,17 +464,21 @@ class DuckDBStore:
         Returns:
             (min_date, max_date) 格式为 YYYY-MM-DD 字符串，或 (None, None)
         """
+        lock_fd = None
         try:
-            with self._get_read_conn() as conn:
-                row = conn.execute(
-                    "SELECT MIN(trade_date), MAX(trade_date) FROM daily_kline WHERE code = ?",
-                    [code]
-                ).fetchone()
-                if row and row[0] and row[1]:
-                    return str(row[0]), str(row[1])
+            lock_fd = self._acquire_lock(exclusive=False)
+            conn = self._get_read_conn()
+            row = conn.execute(
+                "SELECT MIN(trade_date), MAX(trade_date) FROM daily_kline WHERE code = ?",
+                [code]
+            ).fetchone()
+            if row and row[0] and row[1]:
+                return str(row[0]), str(row[1])
+            return None, None
         except Exception:
-            pass
-        return None, None
+            return None, None
+        finally:
+            self._release_lock(lock_fd)
 
     def get_klines_bulk(self, codes: List[str], days: int = 60) -> Dict[str, pd.DataFrame]:
         """批量获取多只股票的K线数据（单次连接）
@@ -414,18 +498,20 @@ class DuckDBStore:
         from datetime import datetime, timedelta
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+        lock_fd = None
         try:
-            with self._get_read_conn() as conn:
-                placeholders = ','.join(['?' for _ in codes])
-                sql = f"""
-                    SELECT * FROM daily_kline
-                    WHERE code IN ({placeholders})
-                      AND trade_date >= ?
-                      AND trade_date <= ?
-                    ORDER BY code, trade_date DESC
-                """
-                params = list(codes) + [start_date, end_date]
-                df = conn.execute(sql, params).df()
+            lock_fd = self._acquire_lock(exclusive=False)
+            conn = self._get_read_conn()
+            placeholders = ','.join(['?' for _ in codes])
+            sql = f"""
+                SELECT * FROM daily_kline
+                WHERE code IN ({placeholders})
+                  AND trade_date >= ?
+                  AND trade_date <= ?
+                ORDER BY code, trade_date DESC
+            """
+            params = list(codes) + [start_date, end_date]
+            df = conn.execute(sql, params).df()
 
             result: Dict[str, pd.DataFrame] = {}
             if not df.empty:
@@ -435,6 +521,53 @@ class DuckDBStore:
         except Exception as e:
             print(f"get_klines_bulk error: {e}")
             return {}
+        finally:
+            self._release_lock(lock_fd)
+
+    def get_klines_bulk_for_date(
+        self, codes: List[str], end_date: str, days: int = 70
+    ) -> Dict[str, pd.DataFrame]:
+        """批量获取多只股票在指定日期范围内的K线数据 v19.9
+
+        用于历史战力计算，避免逐只查询造成的N+1问题。
+
+        Args:
+            codes: 股票代码列表
+            end_date: 结束日期 (YYYY-MM-DD)
+            days: 获取多少天的数据
+
+        Returns:
+            Dict[code -> DataFrame]
+        """
+        if not codes:
+            return {}
+        from datetime import datetime, timedelta
+        start_date = (datetime.strptime(end_date, '%Y-%m-%d') - timedelta(days=days)).strftime('%Y-%m-%d')
+        lock_fd = None
+        try:
+            lock_fd = self._acquire_lock(exclusive=False)
+            conn = self._get_read_conn()
+            placeholders = ','.join(['?' for _ in codes])
+            sql = f"""
+                SELECT * FROM daily_kline
+                WHERE code IN ({placeholders})
+                  AND trade_date >= ?
+                  AND trade_date <= ?
+                ORDER BY code, trade_date DESC
+            """
+            params = list(codes) + [start_date, end_date]
+            df = conn.execute(sql, params).df()
+
+            result: Dict[str, pd.DataFrame] = {}
+            if not df.empty:
+                for code, group in df.groupby('code'):
+                    result[code] = group.reset_index(drop=True)
+            return result
+        except Exception as e:
+            print(f"get_klines_bulk_for_date error: {e}")
+            return {}
+        finally:
+            self._release_lock(lock_fd)
 
     def get_avg_daily_amount_20d_bulk(
         self, codes: List[str], chunk_size: int = 400
@@ -448,49 +581,58 @@ class DuckDBStore:
         if not codes:
             return result
         unique = list({str(c).strip() for c in codes if c})
+        lock_fd = None
         try:
-            with self._get_read_conn() as conn:
-                for i in range(0, len(unique), chunk_size):
-                    chunk = unique[i : i + chunk_size]
-                    placeholders = ",".join(["?" for _ in chunk])
-                    sql = f"""
-                        SELECT code, AVG(amount) AS avg_amt
-                        FROM (
-                            SELECT code, amount,
-                                ROW_NUMBER() OVER (
-                                    PARTITION BY code ORDER BY trade_date DESC
-                                ) AS rn
-                            FROM daily_kline
-                            WHERE code IN ({placeholders})
-                        ) t
-                        WHERE rn <= 20
-                        GROUP BY code
-                    """
-                    rows = conn.execute(sql, chunk).fetchall()
-                    for row in rows:
-                        if row[0] is not None:
-                            result[str(row[0])] = float(row[1] or 0)
+            lock_fd = self._acquire_lock(exclusive=False)
+            conn = self._get_read_conn()
+            for i in range(0, len(unique), chunk_size):
+                chunk = unique[i : i + chunk_size]
+                placeholders = ",".join(["?" for _ in chunk])
+                sql = f"""
+                    SELECT code, AVG(amount) AS avg_amt
+                    FROM (
+                        SELECT code, amount,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY code ORDER BY trade_date DESC, id DESC
+                            ) AS rn
+                        FROM daily_kline
+                        WHERE code IN ({placeholders})
+                    ) t
+                    WHERE rn <= 20
+                    GROUP BY code
+                """
+                rows = conn.execute(sql, chunk).fetchall()
+                for row in rows:
+                    if row[0] is not None:
+                        result[str(row[0])] = float(row[1] or 0)
+            return result
         except Exception as e:
             logger.debug("get_avg_daily_amount_20d_bulk failed: %s", e)
-        return result
+            return result
+        finally:
+            self._release_lock(lock_fd)
 
     def get_latest_kline(self, code: str) -> Optional[Dict]:
         """获取最新一条K线"""
+        lock_fd = None
         try:
-            with self._get_read_conn() as conn:
-                df = conn.execute("""
-                    SELECT * FROM daily_kline
-                    WHERE code = ?
-                    ORDER BY trade_date DESC
-                    LIMIT 1
-                """, [code]).df()
+            lock_fd = self._acquire_lock(exclusive=False)
+            conn = self._get_read_conn()
+            df = conn.execute("""
+                SELECT * FROM daily_kline
+                WHERE code = ?
+                ORDER BY trade_date DESC, id DESC
+                LIMIT 1
+            """, [code]).df()
 
-                if df.empty:
-                    return None
+            if df.empty:
+                return None
 
-                return df.iloc[0].to_dict()
+            return df.iloc[0].to_dict()
         except Exception:
             return None
+        finally:
+            self._release_lock(lock_fd)
 
     def get_ma(
         self,
@@ -517,36 +659,40 @@ class DuckDBStore:
         if field not in ALLOWED_FIELDS:
             return QueryResult(success=False, error=f"Invalid field: {field}")
 
+        lock_fd = None
         try:
-            with self._get_read_conn() as conn:
-                sql_field = field  # 已通过白名单验证
-                if end_date:
-                    df = conn.execute(f"""
-                        WITH ranked AS (
-                            SELECT code, trade_date, {sql_field},
-                                   ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_date DESC) as rn
-                            FROM daily_kline
-                            WHERE code = ? AND trade_date <= ?
-                        )
-                        SELECT AVG({sql_field}) as ma FROM ranked WHERE rn <= ?
-                    """, [code, end_date, days]).df()
-                else:
-                    df = conn.execute(f"""
-                        WITH ranked AS (
-                            SELECT code, trade_date, {sql_field},
-                                   ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_date DESC) as rn
-                            FROM daily_kline
-                            WHERE code = ?
-                        )
-                        SELECT AVG({sql_field}) as ma FROM ranked WHERE rn <= ?
-                    """, [code, days]).df()
+            lock_fd = self._acquire_lock(exclusive=False)
+            conn = self._get_read_conn()
+            sql_field = field  # 已通过白名单验证
+            if end_date:
+                df = conn.execute(f"""
+                    WITH ranked AS (
+                        SELECT code, trade_date, {sql_field},
+                               ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_date DESC, id DESC) as rn
+                        FROM daily_kline
+                        WHERE code = ? AND trade_date <= ?
+                    )
+                    SELECT AVG({sql_field}) as ma FROM ranked WHERE rn <= ?
+                """, [code, end_date, days]).df()
+            else:
+                df = conn.execute(f"""
+                    WITH ranked AS (
+                        SELECT code, trade_date, {sql_field},
+                               ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_date DESC, id DESC) as rn
+                        FROM daily_kline
+                        WHERE code = ?
+                    )
+                    SELECT AVG({sql_field}) as ma FROM ranked WHERE rn <= ?
+                """, [code, days]).df()
 
-                if df.empty or df.iloc[0]['ma'] is None:
-                    return QueryResult(success=True, data=pd.DataFrame({'ma': [None]}), row_count=1)
+            if df.empty or df.iloc[0]['ma'] is None:
+                return QueryResult(success=True, data=pd.DataFrame({'ma': [None]}), row_count=1)
 
-                return QueryResult(success=True, data=df, row_count=1)
+            return QueryResult(success=True, data=df, row_count=1)
         except Exception as e:
             return QueryResult(success=False, error=str(e))
+        finally:
+            self._release_lock(lock_fd)
 
     def get_klines_with_ma(
         self,
@@ -557,39 +703,43 @@ class DuckDBStore:
         limit: int = 100
     ) -> QueryResult:
         """获取K线及均线"""
+        lock_fd = None
         try:
-            with self._get_read_conn() as conn:
-                ma_sql_parts = []
-                for d in ma_days:
-                    ma_sql_parts.append(f"""
-                        AVG(t.close) OVER (ORDER BY t.trade_date ROWS BETWEEN {d-1} PRECEDING AND CURRENT ROW) as ma_{d}
-                    """)
+            lock_fd = self._acquire_lock(exclusive=False)
+            conn = self._get_read_conn()
+            ma_sql_parts = []
+            for d in ma_days:
+                ma_sql_parts.append(f"""
+                    AVG(t.close) OVER (ORDER BY t.trade_date ROWS BETWEEN {d-1} PRECEDING AND CURRENT ROW) as ma_{d}
+                """)
 
-                sql = f"""
-                    SELECT t.*, {', '.join(ma_sql_parts)}
-                    FROM (
-                        SELECT * FROM daily_kline
-                        WHERE code = ?
-                        {'AND trade_date >= ?' if start_date else ''}
-                        {'AND trade_date <= ?' if end_date else ''}
-                        ORDER BY trade_date DESC
-                        LIMIT ?
-                    ) t
-                    ORDER BY t.trade_date ASC
-                """
+            sql = f"""
+                SELECT t.*, {', '.join(ma_sql_parts)}
+                FROM (
+                    SELECT * FROM daily_kline
+                    WHERE code = ?
+                    {'AND trade_date >= ?' if start_date else ''}
+                    {'AND trade_date <= ?' if end_date else ''}
+                    ORDER BY trade_date DESC, id DESC
+                    LIMIT ?
+                ) t
+                ORDER BY t.trade_date ASC
+            """
 
-                params = [code]
-                if start_date:
-                    params.append(start_date)
-                if end_date:
-                    params.append(end_date)
-                params.append(limit)
+            params = [code]
+            if start_date:
+                params.append(start_date)
+            if end_date:
+                params.append(end_date)
+            params.append(limit)
 
-                df = conn.execute(sql, params).df()
+            df = conn.execute(sql, params).df()
 
-                return QueryResult(success=True, data=df, row_count=len(df))
+            return QueryResult(success=True, data=df, row_count=len(df))
         except Exception as e:
             return QueryResult(success=False, error=str(e))
+        finally:
+            self._release_lock(lock_fd)
 
     def get_volume_history(
         self,
@@ -597,18 +747,22 @@ class DuckDBStore:
         days: int = 20
     ) -> List[float]:
         """获取成交量历史"""
+        lock_fd = None
         try:
-            with self._get_read_conn() as conn:
-                df = conn.execute("""
-                    SELECT volume FROM daily_kline
-                    WHERE code = ?
-                    ORDER BY trade_date DESC
-                    LIMIT ?
-                """, [code, days]).df()
+            lock_fd = self._acquire_lock(exclusive=False)
+            conn = self._get_read_conn()
+            df = conn.execute("""
+                SELECT volume FROM daily_kline
+                WHERE code = ?
+                ORDER BY trade_date DESC, id DESC
+                LIMIT ?
+            """, [code, days]).df()
 
-                return df['volume'].tolist() if not df.empty else []
+            return df['volume'].tolist() if not df.empty else []
         except Exception:
             return []
+        finally:
+            self._release_lock(lock_fd)
 
     def get_minute_klines(
         self,
@@ -626,22 +780,26 @@ class DuckDBStore:
         Returns:
             QueryResult，包含minute_kline表的数据
         """
+        lock_fd = None
         try:
             from datetime import datetime, timedelta
             start_datetime = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
 
-            with self._get_read_conn() as conn:
-                df = conn.execute("""
-                    SELECT code, trade_date, trade_time, open, high, low, close, volume, amount
-                    FROM minute_kline
-                    WHERE code = ? AND trade_time >= ?
-                    ORDER BY trade_time DESC
-                    LIMIT ?
-                """, [code, start_datetime, limit]).df()
+            lock_fd = self._acquire_lock(exclusive=False)
+            conn = self._get_read_conn()
+            df = conn.execute("""
+                SELECT code, trade_date, trade_time, open, high, low, close, volume, amount
+                FROM minute_kline
+                WHERE code = ? AND trade_time >= ?
+                ORDER BY trade_time DESC
+                LIMIT ?
+            """, [code, start_datetime, limit]).df()
 
-                return QueryResult(success=True, data=df, row_count=len(df))
+            return QueryResult(success=True, data=df, row_count=len(df))
         except Exception as e:
             return QueryResult(success=False, error=str(e))
+        finally:
+            self._release_lock(lock_fd)
 
     def get_minute_ma(
         self,
@@ -659,27 +817,118 @@ class DuckDBStore:
         Returns:
             均线值
         """
+        lock_fd = None
         try:
             from datetime import datetime, timedelta
             start_datetime = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
 
-            with self._get_read_conn() as conn:
-                df = conn.execute("""
-                    WITH ranked AS (
-                        SELECT trade_time, close,
-                               ROW_NUMBER() OVER (ORDER BY trade_time DESC) as rn
-                        FROM minute_kline
-                        WHERE code = ? AND trade_time >= ?
-                    )
-                    SELECT AVG(close) as ma FROM ranked WHERE rn <= ?
-                """, [code, start_datetime, minutes]).df()
+            lock_fd = self._acquire_lock(exclusive=False)
+            conn = self._get_read_conn()
+            df = conn.execute("""
+                WITH ranked AS (
+                    SELECT trade_time, close,
+                           ROW_NUMBER() OVER (ORDER BY trade_time DESC) as rn
+                    FROM minute_kline
+                    WHERE code = ? AND trade_time >= ?
+                )
+                SELECT AVG(close) as ma FROM ranked WHERE rn <= ?
+            """, [code, start_datetime, minutes]).df()
 
-                if df.empty or df.iloc[0]['ma'] is None:
-                    return None
+            if df.empty or df.iloc[0]['ma'] is None:
+                return None
 
-                return float(df.iloc[0]['ma'])
+            return float(df.iloc[0]['ma'])
         except Exception:
             return None
+        finally:
+            self._release_lock(lock_fd)
+
+    def get_bulk_minute_data(
+        self,
+        codes: List[str],
+        minutes: int = 5,
+        days: int = 1
+    ) -> Dict[str, Dict[str, float]]:
+        """批量获取多个股票的分钟MA数据 v19.9
+
+        一次查询所有股票，内存中计算MA，避免N+1查询问题
+
+        Args:
+            codes: 股票代码列表
+            minutes: 均线分钟数
+            days: 获取天数
+
+        Returns:
+            {code: {'ma5': float, 'ma15': float, 'latest_price': float, 'avg_volume': float}}
+        """
+        lock_fd = None
+        try:
+            from datetime import datetime, timedelta
+            start_datetime = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+
+            if not codes:
+                return {}
+
+            # 构造IN子句的占位符
+            placeholders = ','.join(['?' for _ in codes])
+
+            lock_fd = self._acquire_lock(exclusive=False)
+            conn = self._get_read_conn()
+            # 一次性获取所有股票的最新分钟数据
+            df = conn.execute(f"""
+                WITH latest AS (
+                    SELECT code, trade_time, close, volume,
+                           ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_time DESC) as rn
+                    FROM minute_kline
+                    WHERE code IN ({placeholders}) AND trade_time >= ?
+                ),
+                ma5 AS (
+                    SELECT code, AVG(close) as ma5
+                    FROM (SELECT code, trade_time, close, ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_time DESC) as rn
+                          FROM minute_kline WHERE code IN ({placeholders}) AND trade_time >= ?)
+                    WHERE rn <= {minutes}
+                    GROUP BY code
+                ),
+                ma15 AS (
+                    SELECT code, AVG(close) as ma15
+                    FROM (SELECT code, trade_time, close, ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_time DESC) as rn
+                          FROM minute_kline WHERE code IN ({placeholders}) AND trade_time >= ?)
+                    WHERE rn <= {minutes * 3}
+                    GROUP BY code
+                ),
+                volume_stats AS (
+                    SELECT code, AVG(volume) as avg_volume
+                    FROM (SELECT code, trade_time, volume, ROW_NUMBER() OVER (PARTITION BY code ORDER BY trade_time DESC) as rn
+                          FROM minute_kline WHERE code IN ({placeholders}) AND trade_time >= ?)
+                    WHERE rn <= 10
+                    GROUP BY code
+                ),
+                latest_price AS (
+                    SELECT code, close as price
+                    FROM latest WHERE rn = 1
+                )
+                SELECT l.code, l.price, m5.ma5, m15.ma15, vs.avg_volume
+                FROM latest_price l
+                LEFT JOIN ma5 m5 ON l.code = m5.code
+                LEFT JOIN ma15 m15 ON l.code = m15.code
+                LEFT JOIN volume_stats vs ON l.code = vs.code
+            """, codes * 5 + [start_datetime] * 5).df()
+
+            result = {}
+            for _, row in df.iterrows():
+                code = row['code']
+                result[code] = {
+                    'ma5': float(row['ma5']) if row['ma5'] is not None else None,
+                    'ma15': float(row['ma15']) if row['ma15'] is not None else None,
+                    'latest_price': float(row['price']) if row['price'] is not None else 0.0,
+                    'avg_volume': float(row['avg_volume']) if row['avg_volume'] is not None else 0.0,
+                    'current_volume': 0.0  # 将在调用处填充
+                }
+            return result
+        except Exception:
+            return {}
+        finally:
+            self._release_lock(lock_fd)
 
     def get_trade_dates(
         self,
@@ -687,54 +936,66 @@ class DuckDBStore:
         end_date: str
     ) -> List[str]:
         """获取交易日列表"""
+        lock_fd = None
         try:
-            with self._get_read_conn() as conn:
-                df = conn.execute("""
-                    SELECT DISTINCT trade_date FROM daily_kline
-                    WHERE trade_date BETWEEN ? AND ?
-                    ORDER BY trade_date
-                """, [start_date, end_date]).df()
+            lock_fd = self._acquire_lock(exclusive=False)
+            conn = self._get_read_conn()
+            df = conn.execute("""
+                SELECT DISTINCT trade_date FROM daily_kline
+                WHERE trade_date BETWEEN ? AND ?
+                ORDER BY trade_date
+            """, [start_date, end_date]).df()
 
-                return [str(d) for d in df['trade_date'].tolist()]
+            return [str(d) for d in df['trade_date'].tolist()]
         except Exception:
             return []
+        finally:
+            self._release_lock(lock_fd)
 
     def get_stats(self) -> Dict:
         """获取统计信息"""
+        lock_fd = None
         try:
-            with self._get_read_conn() as conn:
-                total = conn.execute("SELECT COUNT(*) as cnt FROM daily_kline").fetchone()[0]
-                codes = conn.execute("SELECT COUNT(DISTINCT code) as cnt FROM daily_kline").fetchone()[0]
-                date_range = conn.execute("""
-                    SELECT MIN(trade_date), MAX(trade_date) FROM daily_kline
-                """).fetchone()
+            lock_fd = self._acquire_lock(exclusive=False)
+            conn = self._get_read_conn()
+            total = conn.execute("SELECT COUNT(*) as cnt FROM daily_kline").fetchone()[0]
+            codes = conn.execute("SELECT COUNT(DISTINCT code) as cnt FROM daily_kline").fetchone()[0]
+            date_range = conn.execute("""
+                SELECT MIN(trade_date), MAX(trade_date) FROM daily_kline
+            """).fetchone()
 
-                # 表大小
-                size_bytes = Path(self.db_path).stat().st_size if Path(self.db_path).exists() else 0
+            # 表大小
+            size_bytes = Path(self.db_path).stat().st_size if Path(self.db_path).exists() else 0
 
-                return {
-                    'total_rows': total,
-                    'total_codes': codes,
-                    'date_from': str(date_range[0]) if date_range[0] else None,
-                    'date_to': str(date_range[1]) if date_range[1] else None,
-                    'size_bytes': size_bytes,
-                    'size_mb': round(size_bytes / 1024 / 1024, 2),
-                }
+            return {
+                'total_rows': total,
+                'total_codes': codes,
+                'date_from': str(date_range[0]) if date_range[0] else None,
+                'date_to': str(date_range[1]) if date_range[1] else None,
+                'size_bytes': size_bytes,
+                'size_mb': round(size_bytes / 1024 / 1024, 2),
+            }
         except Exception as e:
             return {'error': str(e)}
+        finally:
+            self._release_lock(lock_fd)
 
     def query(self, sql: str, params: List = None) -> QueryResult:
         """执行自定义SQL查询"""
+        lock_fd = None
         try:
-            with self._get_conn() as conn:
-                if params:
-                    df = conn.execute(sql, params).df()
-                else:
-                    df = conn.execute(sql).df()
+            lock_fd = self._acquire_lock(exclusive=True)
+            conn = self._get_conn()
+            if params:
+                df = conn.execute(sql, params).df()
+            else:
+                df = conn.execute(sql).df()
 
-                return QueryResult(success=True, data=df, row_count=len(df))
+            return QueryResult(success=True, data=df, row_count=len(df))
         except Exception as e:
             return QueryResult(success=False, error=str(e))
+        finally:
+            self._release_lock(lock_fd)
 
     def close(self):
         """关闭连接（ DuckDB是嵌入式，不需要显式关闭）"""
@@ -762,23 +1023,25 @@ class DuckDBStore:
                 'cutoff_date': str,
             }
         """
+        lock_fd = None
         try:
             from datetime import datetime, timedelta
             cutoff_date = (datetime.now() - timedelta(days=keep_days)).strftime('%Y-%m-%d')
 
-            with self._get_conn() as conn:
-                # 删除前统计
-                before_count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            lock_fd = self._acquire_lock(exclusive=True)
+            conn = self._get_conn()
+            # 删除前统计
+            before_count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
-                # 删除超过保留期的数据
-                conn.execute(
-                    f"DELETE FROM {table} WHERE trade_date < ?",
-                    [cutoff_date]
-                )
+            # 删除超过保留期的数据
+            conn.execute(
+                f"DELETE FROM {table} WHERE trade_date < ?",
+                [cutoff_date]
+            )
 
-                # 删除后统计
-                after_count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                deleted = before_count - after_count
+            # 删除后统计
+            after_count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            deleted = before_count - after_count
 
             return {
                 'success': True,
@@ -789,6 +1052,8 @@ class DuckDBStore:
             }
         except Exception as e:
             return {'success': False, 'error': str(e)}
+        finally:
+            self._release_lock(lock_fd)
 
     def cleanup_old_minute_klines(
         self,
@@ -803,20 +1068,22 @@ class DuckDBStore:
         Returns:
             清理结果
         """
+        lock_fd = None
         try:
             from datetime import datetime, timedelta
             cutoff_datetime = (datetime.now() - timedelta(days=keep_days)).strftime('%Y-%m-%d %H:%M:%S')
 
-            with self._get_conn() as conn:
-                before_count = conn.execute("SELECT COUNT(*) FROM minute_kline").fetchone()[0]
+            lock_fd = self._acquire_lock(exclusive=True)
+            conn = self._get_conn()
+            before_count = conn.execute("SELECT COUNT(*) FROM minute_kline").fetchone()[0]
 
-                conn.execute(
-                    "DELETE FROM minute_kline WHERE trade_time < ?",
-                    [cutoff_datetime]
-                )
+            conn.execute(
+                "DELETE FROM minute_kline WHERE trade_time < ?",
+                [cutoff_datetime]
+            )
 
-                after_count = conn.execute("SELECT COUNT(*) FROM minute_kline").fetchone()[0]
-                deleted = before_count - after_count
+            after_count = conn.execute("SELECT COUNT(*) FROM minute_kline").fetchone()[0]
+            deleted = before_count - after_count
 
             return {
                 'success': True,
@@ -827,6 +1094,8 @@ class DuckDBStore:
             }
         except Exception as e:
             return {'success': False, 'error': str(e)}
+        finally:
+            self._release_lock(lock_fd)
 
     def get_retention_info(self) -> Dict:
         """
@@ -835,45 +1104,49 @@ class DuckDBStore:
         Returns:
             各表的数据保留情况
         """
+        lock_fd = None
         try:
-            with self._get_read_conn() as conn:
-                info = {}
+            lock_fd = self._acquire_lock(exclusive=False)
+            conn = self._get_read_conn()
+            info = {}
 
-                # daily_kline
-                daily_stats = conn.execute("""
-                    SELECT
-                        COUNT(*) as total,
-                        MIN(trade_date) as oldest,
-                        MAX(trade_date) as newest,
-                        COUNT(DISTINCT code) as codes
-                    FROM daily_kline
-                """).fetchone()
-                info['daily_kline'] = {
-                    'total_rows': daily_stats[0],
-                    'oldest_date': str(daily_stats[1]) if daily_stats[1] else None,
-                    'newest_date': str(daily_stats[2]) if daily_stats[2] else None,
-                    'stock_count': daily_stats[3],
-                }
+            # daily_kline
+            daily_stats = conn.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    MIN(trade_date) as oldest,
+                    MAX(trade_date) as newest,
+                    COUNT(DISTINCT code) as codes
+                FROM daily_kline
+            """).fetchone()
+            info['daily_kline'] = {
+                'total_rows': daily_stats[0],
+                'oldest_date': str(daily_stats[1]) if daily_stats[1] else None,
+                'newest_date': str(daily_stats[2]) if daily_stats[2] else None,
+                'stock_count': daily_stats[3],
+            }
 
-                # minute_kline
-                minute_stats = conn.execute("""
-                    SELECT
-                        COUNT(*) as total,
-                        MIN(trade_time) as oldest,
-                        MAX(trade_time) as newest
-                    FROM minute_kline
-                """).fetchone()
-                info['minute_kline'] = {
-                    'total_rows': minute_stats[0],
-                    'oldest_time': str(minute_stats[1]) if minute_stats[1] else None,
-                    'newest_time': str(minute_stats[2]) if minute_stats[2] else None,
-                }
+            # minute_kline
+            minute_stats = conn.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    MIN(trade_time) as oldest,
+                    MAX(trade_time) as newest
+                FROM minute_kline
+            """).fetchone()
+            info['minute_kline'] = {
+                'total_rows': minute_stats[0],
+                'oldest_time': str(minute_stats[1]) if minute_stats[1] else None,
+                'newest_time': str(minute_stats[2]) if minute_stats[2] else None,
+            }
 
-                return info
+            return info
         except Exception as e:
             return {'error': str(e)}
+        finally:
+            self._release_lock(lock_fd)
 
-    def backfill_adj_factor(self, batch_size: int = 1000) -> Dict:
+    def backfill_adj_factor(self, batch_size: int = 1000, offset: int = 0) -> Dict:
         """
         v19.9.4: 从 ex_right_factor 表回填 adj_factor 和 adj_close
 
@@ -886,12 +1159,13 @@ class DuckDBStore:
         """
         # 注意：这需要 SQLite ex_right_factor 表有数据
         # 如果表为空，先调用 ExRightFactorFiller.fetch_from_tushare()
+        lock_fd = None
         try:
             import sqlite3
             sqlite_path = str(Path("/home/ailearn/projects/TradeSnake/data/tradesnake.db"))
-            sqlite_conn = sqlite3.connect(sqlite_path)
 
             # 获取需要回填的股票
+            sqlite_conn = sqlite3.connect(sqlite_path)
             cursor = sqlite_conn.execute("""
                 SELECT DISTINCT symbol FROM ex_right_factor
                 WHERE adj_type = 'qfq'
@@ -899,44 +1173,92 @@ class DuckDBStore:
             symbols = [row[0] for row in cursor.fetchall()]
             sqlite_conn.close()
 
-            total_updated = 0
-            for symbol in symbols[:100]:  # 限制处理数量
+            if not symbols:
+                return {'success': True, 'symbols_processed': 0, 'rows_updated': 0}
+
+            # 获取文件锁（跨进程保护）
+            lock_fd = self._acquire_lock(exclusive=True)
+
+            # 如果已有读连接，关闭它（避免 DuckDB 连接配置冲突）
+            if self._read_conn is not None:
                 try:
-                    # 获取该股票的所有因子
-                    sqlite_conn = sqlite3.connect(sqlite_path)
-                    cursor = sqlite_conn.execute("""
-                        SELECT trade_date, factor FROM ex_right_factor
-                        WHERE symbol = ? AND adj_type = 'qfq'
-                        ORDER BY trade_date
-                    """, (symbol,))
-                    factors = {row[0]: row[1] for row in cursor.fetchall()}
-                    sqlite_conn.close()
-
-                    if not factors:
-                        continue
-
-                    # 更新 DuckDB 中该股票的 adj_factor
-                    # 由于 DuckDB 不支持直接 UPDATE ... JOIN，需要逐条处理
-                    for trade_date, factor in factors.items():
-                        try:
-                            self._get_conn().execute("""
-                                UPDATE daily_kline
-                                SET adj_factor = ?, adj_close = close * ?
-                                WHERE code = ? AND trade_date = ?
-                            """, [factor, factor, symbol, trade_date])
-                        except Exception:
-                            pass
-                    total_updated += len(factors)
+                    self._read_conn.close()
                 except Exception:
                     pass
+                self._read_conn = None
+
+            # 如果已有写连接，先关闭它（确保干净的连接状态）
+            if self._write_conn is not None:
+                try:
+                    self._write_conn.close()
+                except Exception:
+                    pass
+                self._write_conn = None
+
+            # 创建新连接（避免配置冲突）
+            import duckdb
+            conn = duckdb.connect(self.db_path, read_only=False)
+
+            total_updated = 0
+
+            # 限制处理数量，每批50只股票，每只股票只处理最近500条因子
+            # 使用 offset 参数支持分批处理
+            limit_symbols = 50
+            max_factors_per_symbol = 500
+
+            # 应用 offset 来支持分批处理
+            symbols_subset = symbols[offset:offset + limit_symbols]
+
+            for i, symbol in enumerate(symbols_subset):
+                if i % 10 == 0:
+                    print(f"backfill_adj_factor: processing {offset + i}/{len(symbols)}, total_updated={total_updated}")
+                    try:
+                        # 获取该股票的因子（限制数量避免超时）
+                        sqlite_conn = sqlite3.connect(sqlite_path)
+                        cursor = sqlite_conn.execute("""
+                            SELECT trade_date, factor FROM ex_right_factor
+                            WHERE symbol = ? AND adj_type = 'qfq' AND factor < 10000
+                            ORDER BY trade_date DESC
+                            LIMIT ?
+                        """, (symbol, max_factors_per_symbol))
+                        factors = {row[0]: row[1] for row in cursor.fetchall()}
+                        sqlite_conn.close()
+
+                        if not factors:
+                            continue
+
+                        # 批量更新该股票的 adj_factor
+                        for trade_date, factor in factors.items():
+                            try:
+                                # 转换日期格式：20260417 -> 2026-04-17
+                                formatted_date = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:8]}"
+                                conn.execute("""
+                                    UPDATE daily_kline
+                                    SET adj_factor = ?, adj_close = close * ?
+                                    WHERE code = ? AND trade_date = ?
+                                """, [factor, factor, symbol, formatted_date])
+                            except Exception:
+                                pass
+                        total_updated += len(factors)
+                    except Exception:
+                        pass
+
+            # 提交事务
+            conn.commit()
+            print(f"backfill_adj_factor: done, total_updated={total_updated}")
 
             return {
                 'success': True,
-                'symbols_processed': min(len(symbols), 100),
+                'symbols_processed': len(symbols_subset),
                 'rows_updated': total_updated
             }
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return {'success': False, 'error': str(e)}
+        finally:
+            if lock_fd:
+                self._release_lock(lock_fd)
 
 
 # ==================== SQLite历史数据迁移 ====================
@@ -1151,6 +1473,22 @@ def get_minute_klines(code: str, days: int = 1, limit: int = 500) -> QueryResult
 def get_minute_ma(code: str, minutes: int = 5, days: int = 1) -> Optional[float]:
     """计算分钟级均线"""
     return get_duckdb_store().get_minute_ma(code, minutes, days)
+
+
+def get_bulk_minute_data(codes: List[str], minutes: int = 5, days: int = 1) -> Dict[str, Dict[str, float]]:
+    """批量获取多个股票的分钟MA数据 v19.9
+
+    一次查询所有股票，内存中计算MA，避免N+1查询问题
+
+    Args:
+        codes: 股票代码列表
+        minutes: 均线分钟数
+        days: 获取天数
+
+    Returns:
+        {code: {'ma5': float, 'ma15': float, 'latest_price': float, 'avg_volume': float, 'current_volume': float}}
+    """
+    return get_duckdb_store().get_bulk_minute_data(codes, minutes, days)
 
 
 # ==================== 数据清理便捷函数 ====================
