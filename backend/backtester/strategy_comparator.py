@@ -26,7 +26,10 @@ class BacktestConfig:
 
 @dataclass
 class StrategyComparisonResult:
-    """策略对比结果"""
+    """策略对比结果
+
+    Note: quarterly_returns is populated for future use (quarterly analysis).
+    """
     strategy_name: str
     annual_return: float
     max_drawdown: float
@@ -37,11 +40,22 @@ class StrategyComparisonResult:
     win_rate: float
     profit_loss_ratio: float
     total_trades: int
-    quarterly_returns: List[Dict] = field(default_factory=list)
+    quarterly_returns: List[Dict] = field(default_factory=list)  # Future: quarterly performance analysis
 
 
 class StrategyComparator:
     """策略对比器 v1.0"""
+
+    # 策略类名到引擎策略名的显式映射
+    STRATEGY_NAME_MAP = {
+        'TopNStrategy': 'top',
+        'MultiFactorStrategy': 'multifactor',
+        'MomentumStrategy': 'momentum',
+        'GrowthStrategy': 'growth',
+        'LowVolatilityStrategy': 'lowvolatility',
+        'HighDividendStrategy': 'highdividend',
+        'ValueGrowthBalanced': 'valuegrowthbalanced',
+    }
 
     def __init__(self, config: BacktestConfig = None):
         self.config = config or BacktestConfig()
@@ -95,17 +109,24 @@ class StrategyComparator:
 
             print(f"  Running {name}...")
 
-            # 使用 engine.run 进行回测
-            stats = self.engine.run(
-                start_date=start_date,
-                end_date=end_date,
-                strategy_name=name.lower().replace('strategy', ''),
-                top_n=self.config.top_n,
-                initial_capital=self.config.initial_capital,
-                stop_loss_pct=self.config.stop_loss,
-                max_holding_days=self.config.max_holding_days,
-                market_filter_pct=self.config.market_filter
-            )
+            # 使用显式映射获取引擎策略名
+            engine_strategy_name = self.STRATEGY_NAME_MAP.get(name, name.lower())
+
+            # 使用 engine.run 进行回测，带错误处理
+            try:
+                stats = self.engine.run(
+                    start_date=start_date,
+                    end_date=end_date,
+                    strategy_name=engine_strategy_name,
+                    top_n=self.config.top_n,
+                    initial_capital=self.config.initial_capital,
+                    stop_loss_pct=self.config.stop_loss,
+                    max_holding_days=self.config.max_holding_days,
+                    market_filter_pct=self.config.market_filter
+                )
+            except Exception as e:
+                print(f"  WARNING: {name} failed: {e}")
+                continue
 
             # 转换为对比结果格式
             result = self._convert_to_comparison_result(name, stats, benchmark_result)
@@ -137,7 +158,9 @@ class StrategyComparator:
         # 计算超额收益
         excess_return = stats.annualized_return - benchmark.annualized_return
 
-        # 计算信息比率（简化版）
+        # 计算信息比率（简化版：超额收益/跟踪误差）
+        # 标准信息比率 = excess_return / tracking_error_std (日收益差分标准差)
+        # 此处用最大回撤差分简化替代
         excess_volatility = abs(stats.max_drawdown - benchmark.max_drawdown) / 2
         information_ratio = excess_return / excess_volatility if excess_volatility > 0 else 0
 
@@ -155,7 +178,14 @@ class StrategyComparator:
         )
 
     def get_best_strategy(self, results: Dict[str, StrategyComparisonResult]) -> str:
-        """获取最优策略（综合评分）"""
+        """获取最优策略（综合评分）
+
+        Raises:
+            ValueError: 如果没有可用的策略结果
+        """
+        if not results:
+            raise ValueError("No strategy results available for comparison")
+
         best_name = None
         best_score = -float('inf')
 
