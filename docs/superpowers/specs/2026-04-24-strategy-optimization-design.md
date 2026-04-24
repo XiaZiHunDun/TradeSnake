@@ -1,10 +1,12 @@
-# 策略优化设计文档
+# 策略优化设计文档（v2）
 
-> **目标**：建立系统的策略评测和优化流程，验证稳健型策略（集中持仓、高胜率）在 2024-2025 年数据上的表现。
+> **版本**：v2（基于专家评审修订）
+> **目标**：建立系统的策略评测和优化流程，验证稳健型策略（集中持仓、高胜率）在多市场环境下的表现。
+> **回测区间**：2024-2025（2年数据，阶段1严格在2024训练集上做）
 
 ---
 
-## 一、策略现状
+## 一、策略现状与问题定义
 
 ### 1.1 战力公式权重（v19.6）
 
@@ -17,245 +19,488 @@
 | real_time | 2% | 实时因子 |
 | risk_penalty | 10% | 风险惩罚 |
 
+> **注**：权重总和为 95%，剩余 5% 为设计预留空间，不影响相对排序。
+
 ### 1.2 融合公式（PredictionFusion）
 
 ```
 fused_score = 0.4 * cp_score + 0.35 * gain_score + 0.25 * prob_score
 ```
 
-风控偏好（balanced）：
-- cp=0.4, gain=0.35, prob=0.25
+- `cp_score` = total_cp / 100（归一化到 0-1）
+- `gain_score` = predicted_gain_5d / 50（归一化）
+- `prob_score` = up_probability_5d（归一化到 0-1）
+- 各子分数已通过除以基准值归一化，权重可直接加权
 
-### 1.3 回测参数
+### 1.3 当前回测参数
 
 | 参数 | 当前值 |
 |------|--------|
 | 止损线 | -3% |
 | 最大持仓天数 | 5 |
-| 大盘过滤阈值 | -2% |
 | 最小交易金额 | 50,000 |
 
-### 1.4 现有策略类型
+### 1.4 专家评审指出的核心问题
 
-| 策略 | 逻辑 |
-|------|------|
-| TopNStrategy | 按战力总分排序取 TOP N |
-| MultiFactorStrategy | 多因子加权: growth×0.3 + value×0.25 + momentum×0.25 + quality×0.2 |
-| MomentumStrategy | 按动量分排序 |
-| GrowthStrategy | 按成长分排序 |
-| RisingCPStrategy | 只选 cp_change > 0 的股票 |
-| HybridRisingStrategy | cp_rank×0.4 + change_rank×0.6 |
+| 问题 | 优先级 | 解决方案 |
+|------|--------|----------|
+| 交易成本模型缺失 | 🔴 高 | 补充佣金+印花税+滑点 |
+| 因子共线性 | 🔴 高 | 因子归因改用 IC + 分组单调性验证 |
+| 过拟合风险 | 🔴 高 | 贝叶斯优化 + 滚动交叉验证 |
+| 选股域未定义 | 🔴 高 | 明确选股域 + 流动性门槛 |
+| 信息泄露 | 🟡 中 | 严格训练/测试数据隔离 |
+| 仓位管理规则不清 | 🟡 中 | 等权分配 + 明确空仓规则 |
+| 绩效指标定义不清 | 🟡 中 | 明确交易胜率 + 截尾处理 |
 
 ---
 
 ## 二、优化目标
 
 **类型**：稳健型策略
-**持仓**：5-8 只，集中持仓（单只仓位 8-15%）
-**止损**：-10%
+**持仓**：5-8 只，集中持仓
+**单只仓位**：等权分配（单只上限 15%）
+**总仓位**：满仓（允许空仓极端市场下）
+**止损线**：-10%
 **最大回撤容忍**：15%
-**核心指标**：胜率、盈亏比
+**核心指标**：交易胜率、盈亏比
 
 ---
 
-## 三、优化流程
+## 三、交易成本模型
 
-### 阶段 1：策略对比
+**强制计入回测成本**：
 
-**目标**：在相同参数条件下（集中持仓、止损-10%），对比 6 种策略的表现。
+| 成本项 | 费率 | 征收方式 |
+|--------|------|----------|
+| 佣金 | 万 1（最低 5 元） | 双向收取 |
+| 印花税 | 千 0.5 | 仅卖出时收取 |
+| 滑点 | 0.1% | 买入和卖出均计入 |
 
-**回测配置**：
-- 持仓数量：5-8 只
-- 止损：-10%
-- 最大持仓天数：5
-- 资金：初始 100 万
-- 基准：沪深300
-
-**测试策略**：
-1. TopNStrategy（纯战力）
-2. MultiFactorStrategy（多因子加权）
-3. MomentumStrategy（纯动量）
-4. GrowthStrategy（纯成长）
-5. RisingCPStrategy（战力变化）
-6. HybridRisingStrategy（混合）
-
-**评估指标**：
-- 年化收益率
-- 最大回撤
-- 夏普比率
-- 卡玛比率
-- 胜率
-- 盈亏比
-- 总交易次数
-
-**输出**：最优策略类型 + 各策略排名
+> **注**：最优参数必须在扣除摩擦成本后重新评估。
 
 ---
 
-### 阶段 2：参数扫描
+## 四、选股域定义
 
-**目标**：对阶段 1 最优策略进行参数网格搜索。
+**选股范围**：A 股主板（沪深两市主板），剔除以下股票：
 
-**扫描维度**：
+| 剔除类型 | 规则 |
+|----------|------|
+| ST / PT | 名称含 ST / *ST / PT |
+| 上市不满 1 年 | 上市日期距调仓日 < 250 交易日 |
+| 停牌 | 调仓日处于停牌状态 |
+| 涨跌停 | 涨跌停无法买入/卖出时跳过 |
 
-1. **融合权重**（保守/均衡/积极）：
-   - conservative: cp=0.5, gain=0.3, prob=0.2
-   - balanced: cp=0.4, gain=0.35, prob=0.25
-   - aggressive: cp=0.3, gain=0.4, prob=0.3
+**流动性门槛**（硬性过滤）：
 
-2. **持仓天数**：3 / 5 / 7 / 10
+```
+过去 20 个交易日日均成交额 > 5000 万元
+```
 
-3. **止损阈值**：-5% / -8% / -10% / -15%
+> **注**：单只仓位 8-15%（约 8-15 万元/只），日均成交额需远大于仓位量才能有效进出。
 
-4. **大盘过滤阈值**：-1% / -2% / -3% / 关闭
+---
 
-**验证方式**：
-- 训练集：2024 年数据
-- 测试集：2025 年数据（预留）
-- 最终评估：2024+2025 全区间
+## 五、数据划分与信息隔离
+
+### 5.1 严格数据隔离流程
+
+```
+阶段1（策略对比）
+  → 仅使用 2024 年训练集数据
+  → 在 2024 年上选出最优策略
+
+阶段2（参数扫描）
+  → 仅使用 2024 年训练集数据
+  → 在 2024 年上搜索最优参数
+
+阶段3（因子分析）
+  → 仅使用 2024 年训练集数据
+
+最终评估（2025 测试集）
+  → 使用阶段1选出的策略 + 阶段2搜索的参数
+  → 在 2025 年测试集上一次性评估
+  → 不得在测试集上做任何选择或调整
+```
+
+### 5.2 滚动交叉验证（增强稳健性）
+
+按月滚动，训练 6 个月、验证 3 个月：
+
+```
+滚动窗口 1：2024-01 ~ 2024-06（训练）→ 2024-07 ~ 2024-09（验证）
+滚动窗口 2：2024-04 ~ 2024-09（训练）→ 2024-10 ~ 2024-12（验证）
+滚动窗口 3：2024-07 ~ 2024-12（训练）→ 2025-01 ~ 2025-03（验证）
+```
+
+取各窗口验证集表现的均值作为稳健性评估依据。
+
+---
+
+## 六、阶段 1：策略对比
+
+### 6.1 回测配置
+
+| 参数 | 值 |
+|------|---|
+| 持仓数量 | 5-8 只 |
+| 单只仓位 | 等权分配（单只上限 15%） |
+| 总仓位 | 满仓（可空仓） |
+| 止损 | -10% |
+| 最大持仓天数 | 5 |
+| 初始资金 | 100 万 |
+| 交易成本 | 佣金万1 + 印花税千0.5 + 滑点0.1% |
+| 选股域 | 主板 + 流动性门槛 > 5000万 |
+| 大盘过滤 | 关闭（避免复杂交互） |
+
+### 6.2 测试策略
+
+| 策略 | 逻辑 |
+|------|------|
+| TopNStrategy | 按战力总分排序取 TOP 5/6/8 |
+| MultiFactorStrategy | growth×0.3 + value×0.25 + momentum×0.25 + quality×0.2 |
+| MomentumStrategy | 按动量分排序 |
+| GrowthStrategy | 按成长分排序 |
+| LowVolatilityStrategy | 按波动率排序，选取波动最低的股票（新增） |
+| HighDividendStrategy | 按股息率排序（新增） |
+| ValueGrowthBalanced | growth×0.25 + value×0.25 + quality×0.3 + momentum×0.2（新增） |
+
+### 6.3 基准策略
+
+| 基准 | 逻辑 |
+|------|------|
+| 买入持有沪深300 | 等权持有沪深300成分股，每日再平衡 |
+| 等权持有选股域 | 等权持有选股池内所有股票 |
+
+> **目的**：证明策略 α 存在，而非仅捕获市场 β。
+
+### 6.4 评估指标
+
+| 指标 | 定义 |
+|------|------|
+| 年化收益率 | 总收益 / 年化 |
+| 最大回撤 | 历史峰值到谷底最大值 |
+| 年化超额收益 | 策略收益 - 基准收益 |
+| 信息比率 | 超额收益 / 超额收益波动率 |
+| 夏普比率 | (年化收益 - 无风险利率) / 年化波动率（Rf = 3%） |
+| 卡玛比率 | 年化收益 / 最大回撤 |
+| 交易胜率 | 盈利交易次数 / 总交易次数 |
+| 盈亏比 | 平均盈利额 / 平均亏损额（截尾 5% 极端值） |
+| 总交易次数 | 2 年内全部买卖交易对 |
 
 **筛选条件**（必须同时满足）：
+
 - 最大回撤 ≤ 15%
 - 年化收益 > 10%
-- 交易次数 ≥ 50（样本量足够）
-
-**输出**：最优参数组合 + 训练集/测试集对比
-
----
-
-### 阶段 3：因子贡献分析
-
-**目标**：量化各因子对收益的边际贡献。
-
-**方法**：逐步剔除法
-- 每次剔除一个因子，计算组合收益变化
-- 贡献 = 基准收益 - 剔除后收益
-
-**分析因子**：
-1. 战力因子（total_cp）
-2. 预测涨幅因子（predicted_gain_5d）
-3. 上涨概率因子（up_probability_5d）
-4. 动量因子（change_pct）
-5. 风险因子（risk_penalty）
-
-**输出**：因子贡献排行榜 + 优化建议
+- 交易次数 ≥ 50
+- 信息比率 > 0.3
 
 ---
 
-## 四、实施方案
+## 七、阶段 2：参数扫描
 
-### 4.1 新增文件
+### 7.1 搜索方法：贝叶斯优化
+
+替代网格搜索，从 192 组降至 30-50 组有效搜索。
+
+**参数空间**：
+
+| 参数 | 搜索范围 | 步长 |
+|------|----------|------|
+| 融合权重 | cp=0.3~0.5, gain=0.2~0.4, prob=0.15~0.35 | 连续 |
+| 持仓天数 | 3 / 5 / 7 / 10 | 离散 |
+| 止损阈值 | -5% / -8% / -10% / -15% | 离散 |
+| 持仓数量 | 5 / 6 / 8 | 离散 |
+
+**参数联动约束**：
+
+- 止损 -5% 优先配合持仓天数 ≤ 5
+- 止损 -15% 可配合持仓天数 ≥ 7
+
+### 7.2 大盘过滤（固定，不扫描）
+
+```
+当日大盘跌幅 > -2% 时，减半持仓
+当日大盘跌幅 > -4% 时，空仓
+```
+
+> **注**：大盘过滤阈值固定为 -2%，不纳入搜索空间，减少过拟合风险。
+
+### 7.3 滚动验证
+
+使用 5.2 节的滚动窗口验证，每个参数组合跑 3 个滚动窗口，取验证集表现均值。
+
+### 7.4 稳健域分析
+
+不仅输出"最优参数"，还输出**最优参数附近的稳健域**：
+
+- 如果止损 -10% 和 -8% 的收益差异 < 1%，优先选 -8%（更早认错）
+- 参数敏感度分析：各参数变化对收益的影响程度
+
+### 7.5 筛选条件
+
+| 条件 | 阈值 |
+|------|------|
+| 最大回撤 | ≤ 15% |
+| 年化收益 | > 10% |
+| 交易次数 | ≥ 50 |
+| 滚动验证稳定性 | 各窗口收益标准差 < 5% |
+
+---
+
+## 八、阶段 3：因子贡献分析
+
+### 8.1 分析框架
+
+采用 **IC（信息系数）分析 + 分组单调性验证**，替代有共线性问题的逐步剔除法。
+
+**因子层级**：
+
+```
+底层因子：growth, value, quality, momentum, risk_penalty
+     ↓
+合成因子：cp_score, gain_score, prob_score
+     ↓
+融合因子：fused_score
+```
+
+> **注**：阶段 3 分析底层因子贡献，不在合成因子层面剔除（避免共线性）。
+
+### 8.2 IC 分析
+
+计算各因子与 T+5 日收益的相关系数（RankIC）：
+
+```
+IC(t) = corr(rank(factor_t), rank(return_t+5))
+```
+
+评估：
+
+- IC 均值：因子预测能力
+- IC 标准差：稳定性
+- IR（IC均值 / IC标准差）：信息比率
+
+### 8.3 分组单调性验证
+
+按因子值分 5 组，回测各组收益：
+
+```
+Q1（因子最低）→ Q5（因子最高）
+```
+
+验证单调性：Q5 应持续优于 Q1。若 Q3 > Q5，则因子存在非线性或反转特性。
+
+### 8.4 因子相关性矩阵
+
+输出 Pearson 相关系数矩阵，识别冗余因子（如 momentum 与 change_pct 高度相关时择一保留）。
+
+---
+
+## 九、仓位管理规则
+
+### 9.1 分配规则
+
+- **等权分配**：选中的 N 只股票每只分配 1/N 的仓位
+- **单只上限**：任何股票仓位不超过 15%
+- **超限处理**：若等权分配后单只超过 15%，按比例压缩至 15%
+
+### 9.2 现金管理
+
+- 允许极端市场下空仓（大盘跌幅 > -4%）
+- 空仓期间资金配置货币基金（年化 2% 计入每日收益）
+
+### 9.3 组合止损
+
+- **总仓位止损**：当日亏损 > 3%，次日开盘减仓至 50%
+- **连续亏损保护**：连续 3 日亏损，强制进入空仓观望 2 日
+
+---
+
+## 十、风险控制机制
+
+### 10.1 硬性风控
+
+| 规则 | 触发条件 | 动作 |
+|------|----------|------|
+| 个股止损 | 单只亏损 -10% | 次日开盘清仓 |
+| 组合止损 | 单日亏损 -3% | 次日开盘减仓 50% |
+| 连续亏损 | 连续 3 日亏损 | 空仓观望 2 日 |
+| 大盘过滤 | 大盘跌幅 > -2% | 减半持仓 |
+| 大盘过滤 | 大盘跌幅 > -4% | 空仓 |
+| 流动性门槛 | 日均成交额 < 5000万 | 不纳入选股池 |
+
+### 10.2 极端场景压力测试
+
+回测中模拟以下场景：
+
+- 单日大盘跌 5% 时止损触发效果
+- 持仓股票连续 3 跌停时的流动性
+- 持仓股票停牌 1 个月的模拟处理
+
+---
+
+## 十一、实施方案
+
+### 11.1 新增文件
 
 | 文件 | 职责 |
 |------|------|
-| `backend/backtester/strategy_optimizer.py` | 策略对比 + 参数扫描核心逻辑 |
-| `backend/backtester/factor_analyzer.py` | 因子贡献分析 |
-| `tests/backtester/test_strategy_optimizer.py` | 单元测试 |
+| `backend/backtester/strategy_comparator.py` | 策略对比（阶段1） |
+| `backend/backtester/parameter_scanner.py` | 参数扫描 + 贝叶斯优化（阶段2） |
+| `backend/backtester/factor_attributor.py` | 因子归因（阶段3） |
+| `backend/backtester/cost_model.py` | 交易成本模型 |
+| `backend/backtester/risk_controller.py` | 风控机制 |
+| `tests/backtester/test_cost_model.py` | 成本模型测试 |
+| `tests/backtester/test_factor_attributor.py` | 因子归因测试 |
 
-### 4.2 修改文件
+### 11.2 修改文件
 
 | 文件 | 修改内容 |
 |------|----------|
-| `backend/backtester/strategies.py` | 添加集中持仓参数支持 |
-| `backend/backtester/full_backtest.py` | 支持参数化回测 |
+| `backend/backtester/full_backtest.py` | 支持参数化回测 + 交易成本扣除 |
+| `backend/backtester/strategies.py` | 添加低波动/高股息/价值成长平衡策略 |
+| `backend/backtester/metrics.py` | 补充 IC/IR 计算 + 交易胜率截尾处理 |
 
-### 4.3 API 扩展
+### 11.3 API 扩展
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/backtest/optimize` | POST | 触发策略优化流程 |
-| `/api/backtest/compare` | GET | 策略对比结果 |
-| `/api/backtest/scan` | POST | 参数扫描 |
+| `/api/backtest/optimize` | POST | 异步任务，返回 task_id |
+| `/api/backtest/status/{task_id}` | GET | 查询任务进度 |
+| `/api/backtest/compare` | GET | 策略对比报告 |
+| `/api/backtest/scan` | POST | 参数扫描（异步） |
 | `/api/backtest/factor_analysis` | GET | 因子贡献报告 |
 
----
+**异步任务规范**：
 
-## 五、测试验证
+```json
+// POST /api/backtest/optimize
+Request: { "period": "2024-2025" }
+Response: { "task_id": "xxx", "status": "running" }
 
-### 5.1 单元测试
-
-```python
-def test_topn_strategy_concentrated():
-    # 5-8只持仓，验证选股逻辑
-
-def test_stop_loss_threshold():
-    # 止损-10%验证
-
-def test_parameter_scan_grid():
-    # 参数组合数量验证
-```
-
-### 5.2 集成测试
-
-```bash
-# 完整优化流程
-python -m pytest tests/backtester/test_strategy_optimizer.py -v
-
-# 2年数据回测（预期运行时间 < 5分钟）
-pytest tests/backtester/test_full_backtest.py -k "test_2year" -v
+// GET /api/backtest/status/{task_id}
+Response: {
+  "task_id": "xxx",
+  "status": "running",
+  "progress": "stage 1/3",
+  "current": "2024-01 ~ 2024-12 backtest"
+}
 ```
 
 ---
 
-## 六、预期输出格式
+## 十二、预期输出格式
 
-### 策略对比报告
+### 12.1 策略对比报告
 
 ```json
 {
-  "period": "2024-01-01 to 2025-12-31",
+  "period": "2024-01-01 to 2024-12-31 (train)",
+  "universe": "main_board, avg_volume_20d > 50M",
   "strategies": [
     {
-      "name": "TopNStrategy",
-      "annual_return": 18.5,
-      "max_drawdown": 12.3,
-      "sharpe": 1.45,
-      "calmar": 1.50,
-      "win_rate": 62.5,
-      "profit_loss_ratio": 1.85,
-      "total_trades": 87
+      "name": "MultiFactorStrategy",
+      "annual_return": 16.2,
+      "max_drawdown": 11.5,
+      "excess_return": 8.3,
+      "information_ratio": 1.15,
+      "sharpe": 1.42,
+      "calmar": 1.41,
+      "win_rate": 64.2,
+      "profit_loss_ratio": 1.92,
+      "total_trades": 87,
+      "quarterly_returns": [
+        {"quarter": "Q1", "return": 3.2},
+        {"quarter": "Q2", "return": 4.1}
+      ]
     }
+  ],
+  "benchmarks": [
+    { "name": "hs300", "annual_return": 7.9, "max_drawdown": 18.2 },
+    { "name": "equal_weight_universe", "annual_return": 9.5, "max_drawdown": 14.1 }
   ],
   "best_strategy": "MultiFactorStrategy"
 }
 ```
 
-### 参数扫描报告
+### 12.2 参数扫描报告
 
 ```json
 {
   "best_params": {
-    "fusion_weight": "balanced",
+    "fusion_weight": { "cp": 0.4, "gain": 0.35, "prob": 0.25 },
     "max_holding_days": 5,
     "stop_loss": -0.10,
-    "market_filter": -0.02
+    "top_n": 6
   },
-  "train_metrics": { "annual_return": 16.2, "max_drawdown": 11.5 },
-  "test_metrics": { "annual_return": 14.8, "max_drawdown": 13.2 },
-  "stability_score": 0.91
+  "robust_domain": {
+    "stop_loss": [-0.10, -0.08],
+    "max_holding_days": [5, 7]
+  },
+  "train_metrics": {
+    "annual_return": 15.8,
+    "max_drawdown": 12.3,
+    "sharpe": 1.38
+  },
+  "test_metrics_2025": {
+    "annual_return": 13.2,
+    "max_drawdown": 14.1,
+    "sharpe": 1.21,
+    "information_ratio": 0.95
+  },
+  "walk_forward": [
+    { "window": "2024-01~2024-06→07~09", "val_return": 4.2, "val_max_drawdown": 5.1 },
+    { "window": "2024-04~2024-09→10~12", "val_return": 3.8, "val_max_drawdown": 4.3 }
+  ],
+  "stability_score": 0.93
 }
 ```
 
-### 因子贡献报告
+### 12.3 因子贡献报告
 
 ```json
 {
-  "factors": [
-    { "name": "cp_score", "contribution": 0.32, "direction": "positive" },
-    { "name": "predicted_gain", "contribution": 0.28, "direction": "positive" },
-    { "name": "up_probability", "contribution": 0.15, "direction": "positive" },
-    { "name": "momentum", "contribution": 0.08, "direction": "positive" },
-    { "name": "risk_penalty", "contribution": -0.02, "direction": "negative" }
+  "ic_analysis": [
+    { "factor": "growth", "ic_mean": 0.08, "ic_std": 0.04, "ir": 2.0, "direction": "positive" },
+    { "factor": "value", "ic_mean": 0.05, "ic_std": 0.03, "ir": 1.67, "direction": "positive" },
+    { "factor": "quality", "ic_mean": 0.04, "ic_std": 0.05, "ir": 0.8, "direction": "positive" },
+    { "factor": "momentum", "ic_mean": 0.06, "ic_std": 0.06, "ir": 1.0, "direction": "positive" }
   ],
-  "recommendation": "增加预测涨幅因子权重，减少风险惩罚权重"
+  "group_returns": {
+    "growth": { "Q1": 2.1, "Q3": 4.5, "Q5": 6.2, "monotonic": true },
+    "value": { "Q1": 2.8, "Q3": 4.2, "Q5": 5.8, "monotonic": true }
+  },
+  "correlation_matrix": {
+    "growth-value": 0.45,
+    "growth-quality": 0.32,
+    "momentum-change_pct": 0.78
+  },
+  "recommendation": "growth 因子 IR 最高(2.0)，建议增加权重；momentum 与 change_pct 高度相关(0.78)，可考虑合并"
 }
 ```
 
 ---
 
-## 七、里程碑
+## 十三、里程碑
 
-1. **M1**：阶段1完成，6种策略对比报告
-2. **M2**：阶段2完成，最优参数组合 + 训练/测试对比
-3. **M3**：阶段3完成，因子贡献分析 + 优化建议
-4. **M4**：API 集成 + 前端展示优化报告
+| 阶段 | 里程碑 | 交付物 |
+|------|--------|--------|
+| M1 | 策略对比完成 | 7 策略 + 2 基准对比报告，最优策略类型 |
+| M2 | 参数扫描完成 | 最优参数 + 稳健域 + 滚动验证结果 |
+| M3 | 因子分析完成 | IC/IR 分析 + 分组单调性 + 相关性矩阵 |
+| M4 | 最终评估 | 2025 测试集报告 + 实盘参数建议 |
+| M5 | API 集成 | 异步优化接口 + 前端报告展示 |
+
+---
+
+## 十四、关键设计决策记录
+
+| 决策 | 理由 |
+|------|------|
+| 贝叶斯优化替代网格搜索 | 减少过拟合，192→30-50 组有效搜索 |
+| 滚动交叉验证 | 避免单一时段过拟合 |
+| IC + 分组单调性替代逐步剔除 | 避免因子共线性问题 |
+| 大盘过滤固定不扫描 | 减少搜索维度，降低过拟合风险 |
+| 交易成本强制计入 | 避免回测收益高估，实盘可落地 |
+| 流动性门槛 5000 万 | 集中持仓策略对流动性更敏感 |
+| 等权分配 + 单只上限 15% | 简单透明，避免复杂分配规则 |
