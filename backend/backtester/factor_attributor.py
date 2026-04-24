@@ -31,6 +31,11 @@ class FactorAttributor:
     使用 IC（信息系数）分析 + 分组单调性验证。
     """
 
+    # IC 方向判断阈值：|IC| > 此值认为因子方向明确
+    DIRECTION_THRESHOLD = 0.02
+    # 高相关性阈值：|相关系数| >= 此值认为因子高度相关
+    HIGH_CORR_THRESHOLD = 0.7
+
     def __init__(self, n_groups: int = 5):
         self.n_groups = n_groups
 
@@ -98,9 +103,12 @@ class FactorAttributor:
             ic_result = ICResult(
                 factor_name=factor_name,
                 ic_mean=round(ic, 4) if not np.isnan(ic) else 0,
-                ic_std=0.0,  # 简化：需要多期数据计算
+                # NOTE: ic_std 需要多期 IC 观测才能计算（时序滚动窗口）。
+                # 当前单次 IC 计算无法提供标准差，IR = IC_mean / IC_std 需要
+                # 多次观察才能稳定。此处设为 0.0，真实场景建议用滚动窗口估算。
+                ic_std=0.0,
                 ir=round(abs(ic) / 0.05, 2) if ic != 0 else 0,  # 简化 IR
-                direction='positive' if ic > 0.02 else ('negative' if ic < -0.02 else 'neutral'),
+                direction='positive' if ic > self.DIRECTION_THRESHOLD else ('negative' if ic < -self.DIRECTION_THRESHOLD else 'neutral'),
                 p_value=round(p_value, 4) if not np.isnan(p_value) else 1.0
             )
             results.append(ic_result)
@@ -121,9 +129,9 @@ class FactorAttributor:
             factor_values = []
             return_values = []
 
-            for date, factor_values_dict in factor_data.items():
-                if date in return_data and factor_name in factor_values_dict:
-                    factor_values.append(factor_values_dict[factor_name])
+            for date, factor_dict in factor_data.items():
+                if date in return_data and factor_name in factor_dict:
+                    factor_values.append(factor_dict[factor_name])
                     return_values.append(return_data[date])
 
             if len(factor_values) < self.n_groups * 2:
@@ -228,9 +236,8 @@ class FactorAttributor:
             )
 
         # 相关性建议
-        high_corr_threshold = 0.7
         for pair, corr in correlation_matrix.items():
-            if abs(corr) >= high_corr_threshold:
+            if abs(corr) >= self.HIGH_CORR_THRESHOLD:
                 recommendations.append(
                     f"{pair} 高度相关({corr})，可考虑合并"
                 )
