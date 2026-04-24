@@ -5,7 +5,7 @@ import os
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from backend.backtester.cost_model import CostModel, calculate_total_cost, CostResult
+from backend.backtester.cost_model import CostModel, calculate_total_cost, CostResult, apply_cost_to_capital
 
 
 def test_buy_commission():
@@ -63,3 +63,25 @@ def test_cost_result_total():
     """CostResult.total()方法"""
     cost = calculate_total_cost(amount=100000, action='buy')
     assert cost.total() == cost.total_cost
+
+
+def test_apply_cost_to_capital():
+    """apply_cost_to_capital扣成本后资金计算"""
+    # 买入：资本100000，买入金额50000，成本约150元，扣减后约49950
+    capital = 100000.0
+    result = apply_cost_to_capital(capital, amount=50000, action='buy', is_shanghai=True)
+    # 佣金5元(最低) + 过户费0.5 + 滑点50 = 55.5
+    # 实际成本: 55.5元
+    expected_cost = calculate_total_cost(50000, action='buy', is_shanghai=True)
+    assert result == capital - 50000 - expected_cost.total_cost
+
+    # 卖出：资本100000，卖出金额50000，成本约105元（多了印花税）
+    result = apply_cost_to_capital(capital, amount=50000, action='sell', is_shanghai=True)
+    expected_cost = calculate_total_cost(50000, action='sell', is_shanghai=True)
+    assert result == capital + 50000 - expected_cost.total_cost
+
+
+def test_invalid_action():
+    """无效action应抛出ValueError"""
+    with pytest.raises(ValueError, match="Invalid action"):
+        calculate_total_cost(amount=100000, action='hold')

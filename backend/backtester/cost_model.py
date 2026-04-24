@@ -12,7 +12,7 @@ class CostResult:
     total_cost: float      # 总成本
 
     def total(self) -> float:
-        return self.commission + self.stamp_tax + self.transfer_fee + self.slippage
+        return self.total_cost
 
 
 # 费率配置
@@ -84,7 +84,12 @@ def calculate_total_cost(amount: float, action: str, is_shanghai: bool = True) -
 
     Returns:
         CostResult: 各成本明细
+
+    Raises:
+        ValueError: action 不是 'buy' 或 'sell'
     """
+    if action not in ('buy', 'sell'):
+        raise ValueError(f"Invalid action: {action}. Must be 'buy' or 'sell'.")
     model = CostModel()
     return model.calculate(amount, action, is_shanghai)
 
