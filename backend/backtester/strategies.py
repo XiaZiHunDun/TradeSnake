@@ -443,3 +443,122 @@ class HybridRisingStrategy(Strategy):
 
         scored.sort(key=lambda x: x[1], reverse=True)
         return [code for code, _ in scored[:n]]
+
+
+class LowVolatilityStrategy(Strategy):
+    """低波动策略 - 选波动率最低的股票 v1.0
+
+    波动率低的股票更稳定，适合防御性投资。
+    按 volatility_score 升序排序（最低波动 = 最高优先级）。
+    """
+
+    def __init__(self, n: int = 10, max_days: int = 5):
+        """
+        Args:
+            n: 最大持仓数量
+            max_days: 最大持仓天数
+        """
+        self.n = n
+        self._max_days = max_days
+
+    @property
+    def name(self) -> str:
+        return f"低波动TOP{self.n}"
+
+    @property
+    def max_position_days(self) -> int:
+        return self._max_days
+
+    @property
+    def max_positions(self) -> int:
+        return self.n
+
+    def select_stocks(self, date: str, stock_factors: Dict[str, StockFactor],
+                      rank: int = None) -> List[str]:
+        """按波动率升序排序取TOP N（波动率越低越靠前）"""
+        n = rank or self.n
+
+        valid_stocks = {
+            code: factor for code, factor in stock_factors.items()
+            if not factor.is_suspended
+        }
+
+        # 使用 getattr 安全获取 volatility_score，缺失时当作最低优先级（0）
+        sorted_stocks = sorted(
+            valid_stocks.items(),
+            key=lambda x: getattr(x[1], 'volatility_score', 0) or float('inf'),
+            reverse=False  # 升序：低波动在前
+        )
+        return [code for code, _ in sorted_stocks[:n]]
+
+
+class HighDividendStrategy(Strategy):
+    """高股息策略 - 选股息率最高的股票 v1.0
+
+    高股息股票通常是成熟稳定的公司，适合防御性投资。
+    按 dividend_yield 降序排序（最高股息率 = 最高优先级）。
+    """
+
+    def __init__(self, n: int = 10, max_days: int = 5):
+        """
+        Args:
+            n: 最大持仓数量
+            max_days: 最大持仓天数
+        """
+        self.n = n
+        self._max_days = max_days
+
+    @property
+    def name(self) -> str:
+        return f"高股息TOP{self.n}"
+
+    @property
+    def max_position_days(self) -> int:
+        return self._max_days
+
+    @property
+    def max_positions(self) -> int:
+        return self.n
+
+    def select_stocks(self, date: str, stock_factors: Dict[str, StockFactor],
+                      rank: int = None) -> List[str]:
+        """按股息率降序排序取TOP N（股息率越高越靠前）"""
+        n = rank or self.n
+
+        valid_stocks = {
+            code: factor for code, factor in stock_factors.items()
+            if not factor.is_suspended
+        }
+
+        # 使用 getattr 安全获取 dividend_yield，缺失时当作0（最低优先级）
+        sorted_stocks = sorted(
+            valid_stocks.items(),
+            key=lambda x: getattr(x[1], 'dividend_yield', 0) or 0,
+            reverse=True  # 降序：高股息在前
+        )
+        return [code for code, _ in sorted_stocks[:n]]
+
+
+class ValueGrowthBalancedStrategy(MultiFactorStrategy):
+    """价值成长平衡策略 - 多因子均衡配置 v1.0
+
+    权重配置：growth=0.25, value=0.25, quality=0.3, momentum=0.2
+    相比 MultiFactorStrategy 更注重质量和价值，成长和动量为辅助因子。
+    """
+
+    def __init__(self, n: int = 10, max_days: int = 5):
+        """
+        Args:
+            n: 最大持仓数量
+            max_days: 最大持仓天数
+        """
+        super().__init__(n=n, max_days=max_days, weights={
+            'growth': 0.25,
+            'value': 0.25,
+            'quality': 0.3,
+            'momentum': 0.2
+        })
+
+    @property
+    def name(self) -> str:
+        return f"价值成长平衡TOP{self.n}"
