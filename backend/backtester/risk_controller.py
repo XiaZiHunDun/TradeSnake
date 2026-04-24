@@ -48,8 +48,13 @@ class RiskController:
         return 'normal'
 
     def record_daily_return(self, daily_return: float):
-        """记录每日收益，用于连续亏损检测"""
+        """记录每日收益，用于连续亏损检测
+
+        当日亏损超过 max_daily_loss 时触发保护机制
+        """
         self.daily_returns.append(daily_return)
+        if daily_return <= self.config.max_daily_loss:
+            self.activate_protection()
         if daily_return < 0:
             self.consecutive_loss_count += 1
         else:
@@ -85,6 +90,11 @@ class RiskController:
 
         Returns:
             仓位比例 (0.0 ~ 1.0)
+
+        Note:
+            single_position_limit (单只仓位上限) 是独立配置项，由调用方在
+            构建持仓时自行约束，不在本方法范围内。本方法仅根据大盘状态
+            返回仓位比例。
         """
         if market_action == 'exit':
             return 0.0

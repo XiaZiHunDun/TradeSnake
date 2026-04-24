@@ -38,3 +38,30 @@ def test_stop_loss_record():
     controller = RiskController()
     controller.record_trade_result(profit_pct=-0.12)
     assert controller.total_loss >= 0.12
+
+def test_should_stop_loss():
+    controller = RiskController()
+    # 跌幅达到止损线
+    assert controller.should_stop_loss(-0.10) is True
+    # 跌幅未达止损线
+    assert controller.should_stop_loss(-0.05) is False
+    # 正收益不触发止损
+    assert controller.should_stop_loss(0.05) is False
+
+def test_reset():
+    controller = RiskController()
+    # 设置一些状态
+    controller.record_daily_return(-0.01)
+    controller.record_daily_return(-0.02)
+    controller.activate_protection()
+    controller.record_trade_result(profit_pct=-0.05)
+    assert controller.consecutive_loss_count > 0
+    assert controller.protection_active is True
+    assert controller.total_loss > 0
+    # 重置
+    controller.reset()
+    assert controller.consecutive_loss_count == 0
+    assert controller.daily_returns == []
+    assert controller.total_loss == 0.0
+    assert controller.protection_active is False
+    assert controller.protection_remaining_days == 0
