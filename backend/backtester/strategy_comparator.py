@@ -7,8 +7,7 @@ from datetime import datetime
 
 from .strategies import (
     Strategy, TopNStrategy, ValueStrategy, GrowthStrategy, MomentumStrategy,
-    LowVolatilityStrategy, HighDividendStrategy, ValueGrowthBalancedStrategy,
-    RisingCPStrategy, HybridRisingStrategy
+    LowVolatilityStrategy, HighDividendStrategy, ValueGrowthBalancedStrategy
 )
 from .full_backtest import FullBacktestEngine, BacktestStats
 

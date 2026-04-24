@@ -30,3 +30,9 @@ def test_get_best_strategy():
     }
     best = comparator.get_best_strategy(results)
     assert best == 'StrategyA'  # Higher score
+
+def test_get_best_strategy_empty_raises():
+    """get_best_strategy with empty results raises ValueError"""
+    comparator = StrategyComparator()
+    with pytest.raises(ValueError):
+        comparator.get_best_strategy({})
