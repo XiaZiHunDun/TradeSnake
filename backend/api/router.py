@@ -590,6 +590,126 @@ async def full_backtest(
     )
 
 
+# ==================== 策略优化 ====================
+
+import uuid
+from backend.backtester.strategy_comparator import StrategyComparator, BacktestConfig
+from backend.backtester.parameter_scanner import ParameterScanner
+from backend.backtester.factor_attributor import FactorAttributor
+
+# 存储异步任务状态
+_optimization_tasks: Dict[str, dict] = {}
+
+
+@router.post("/api/backtest/optimize")
+async def optimize_strategy(request: dict):
+    """
+    触发策略优化流程（异步）
+
+    Request body:
+    {
+        "start_date": "2024-01-01",
+        "end_date": "2024-12-31",
+        "val_start": "2025-01-01",
+        "val_end": "2025-06-30"
+    }
+
+    Returns:
+    {"task_id": "xxx", "status": "running"}
+    """
+    task_id = str(uuid.uuid4())
+    _optimization_tasks[task_id] = {
+        'status': 'running',
+        'progress': 'initializing',
+        'result': None,
+        'error': None
+    }
+
+    # 异步执行（不阻塞）
+    asyncio.create_task(_run_optimization(task_id, request))
+
+    return {"task_id": task_id, "status": "running"}
+
+
+async def _run_optimization(task_id: str, request: dict):
+    """后台执行优化流程"""
+    from backend.backtester.strategy_comparator import StrategyComparisonResult
+    from backend.backtester.parameter_scanner import ScanResult
+
+    try:
+        start_date = request.get('start_date', '2024-01-01')
+        end_date = request.get('end_date', '2024-12-31')
+        val_start = request.get('val_start', '2025-01-01')
+        val_end = request.get('val_end', '2025-06-30')
+
+        # 阶段1：策略对比
+        _optimization_tasks[task_id]['progress'] = 'stage 1/3 - comparing strategies'
+        comparator = StrategyComparator()
+        compare_results = comparator.compare_strategies(
+            start_date=start_date,
+            end_date=end_date
+        )
+        best_strategy = comparator.get_best_strategy(compare_results)
+
+        # 阶段2：参数扫描
+        _optimization_tasks[task_id]['progress'] = 'stage 2/3 - parameter scanning'
+        scanner = ParameterScanner()
+        scan_result = scanner.optimize(
+            strategy_name=best_strategy,
+            train_start=start_date,
+            train_end=end_date,
+            val_start=val_start,
+            val_end=val_end
+        )
+
+        # 阶段3：因子分析
+        _optimization_tasks[task_id]['progress'] = 'stage 3/3 - factor analysis'
+        attributor = FactorAttributor()
+        factor_result = attributor.analyze(
+            factor_data={},  # TODO: 需要传入实际的因子数据
+            return_data={},
+            factor_names=['growth_score', 'value_score', 'momentum_score', 'quality_score']
+        )
+
+        _optimization_tasks[task_id]['status'] = 'completed'
+        _optimization_tasks[task_id]['progress'] = 'completed'
+        _optimization_tasks[task_id]['result'] = {
+            'best_strategy': best_strategy,
+            'compare_results': {k: v.__dict__ for k, v in compare_results.items()},
+            'scan_result': scan_result.__dict__ if scan_result else None,
+            'factor_result': factor_result
+        }
+
+    except Exception as e:
+        _optimization_tasks[task_id]['status'] = 'failed'
+        _optimization_tasks[task_id]['error'] = str(e)
+
+
+@router.get("/api/backtest/status/{task_id}")
+async def get_optimization_status(task_id: str):
+    """查询优化任务状态"""
+    if task_id not in _optimization_tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return _optimization_tasks[task_id]
+
+
+@router.get("/api/backtest/factor_analysis")
+async def get_factor_analysis(
+    start_date: str = Query(..., regex="^\\d{4}-\\d{2}-\\d{2}$"),
+    end_date: str = Query(..., regex="^\\d{4}-\\d{2}-\\d{2}$")
+):
+    """获取因子归因分析"""
+    from backend.backtester.factor_attributor import FactorAttributor
+    attributor = FactorAttributor()
+    # TODO: 需要从数据层获取实际的因子数据和收益数据
+    return {
+        'ic_analysis': [],
+        'group_returns': {},
+        'correlation_matrix': {},
+        'recommendation': '需要传入因子数据才能进行分析'
+    }
+
+
 # ==================== 风险 ====================
 
 @router.get("/api/risk/report")
