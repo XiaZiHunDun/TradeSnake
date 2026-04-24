@@ -68,7 +68,7 @@ class BacktestResult:
     losing_trades: int = 0         # 亏损次数
     win_rate: float = 0            # 交易胜率%
     profit_loss_ratio: float = 0   # 盈亏比
-    avg_holding_days: float = 0    # 平均持仓天数
+    trimmed_profit_loss_ratio: float = 0  # 截尾盈亏比（去除5%极端值）
 
     # 交易记录
     trades: List[Trade] = field(default_factory=list)
@@ -107,6 +107,7 @@ class BacktestResult:
             'losing_trades': self.losing_trades,
             'win_rate': round(self.win_rate, 2),
             'profit_loss_ratio': round(self.profit_loss_ratio, 2),
+            'trimmed_profit_loss_ratio': round(self.trimmed_profit_loss_ratio, 2),
             'avg_holding_days': round(self.avg_holding_days, 1),
 
             # 交易记录
@@ -119,6 +120,59 @@ class Metrics:
 
     RISK_FREE_RATE = 0.03  # 无风险利率 3%
     TRADING_DAYS = 250  # 年化交易日
+
+    @classmethod
+    def _trim_extremes(cls, values: List[float], trim_pct: float = 0.05) -> List[float]:
+        """截尾处理：去除极端值（前后各trim_pct）
+
+        Args:
+            values: 数值列表
+            trim_pct: 截尾比例（默认5%，即前后各去除5%）
+
+        Returns:
+            截尾后的列表
+        """
+        if not values or len(values) < 4:
+            return values
+        n = len(values)
+        trim_count = max(1, int(n * trim_pct))
+        sorted_vals = sorted(values)
+        # 确保不会切掉太多
+        if trim_count >= n // 2:
+            return values
+        return sorted_vals[trim_count:-trim_count]
+
+    @classmethod
+    def calculate_trimmed_profit_loss_ratio(cls, trades: List[Trade], trim_pct: float = 0.05) -> float:
+        """计算截尾后的盈亏比（去除极端值）
+
+        Args:
+            trades: 交易记录列表
+            trim_pct: 截尾比例（默认5%）
+
+        Returns:
+            截尾后的盈亏比
+        """
+        if not trades:
+            return 0.0
+
+        profits = [t.profit for t in trades if t.profit > 0]
+        losses = [abs(t.profit) for t in trades if t.profit < 0]
+
+        if not profits or not losses:
+            return 0.0
+
+        # 截尾处理
+        trimmed_profits = cls._trim_extremes(profits, trim_pct)
+        trimmed_losses = cls._trim_extremes(losses, trim_pct)
+
+        if not trimmed_profits or not trimmed_losses:
+            return 0.0
+
+        avg_profit = sum(trimmed_profits) / len(trimmed_profits)
+        avg_loss = sum(trimmed_losses) / len(trimmed_losses)
+
+        return avg_profit / avg_loss if avg_loss > 0 else 0.0
 
     @classmethod
     def calculate_metrics(cls, equity_curve: Dict[str, float],
@@ -196,8 +250,11 @@ class Metrics:
             avg_profit = sum(t.profit for t in trades if t.profit > 0) / winning_trades if winning_trades > 0 else 0
             avg_loss = abs(sum(t.profit for t in trades if t.profit < 0) / losing_trades) if losing_trades > 0 else 0
             profit_loss_ratio = avg_profit / avg_loss if avg_loss > 0 else 0
+            # 截尾盈亏比
+            trimmed_profit_loss_ratio = cls.calculate_trimmed_profit_loss_ratio(trades)
         else:
             profit_loss_ratio = 0
+            trimmed_profit_loss_ratio = 0
 
         return {
             'total_return': total_return,
@@ -215,6 +272,7 @@ class Metrics:
             'losing_trades': losing_trades,
             'win_rate': win_rate,
             'profit_loss_ratio': profit_loss_ratio,
+            'trimmed_profit_loss_ratio': trimmed_profit_loss_ratio,
         }
 
     @staticmethod
