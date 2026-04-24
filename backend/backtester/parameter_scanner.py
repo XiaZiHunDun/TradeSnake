@@ -6,6 +6,18 @@ import numpy as np
 
 from .strategy_comparator import StrategyComparator, BacktestConfig, StrategyComparisonResult
 
+# 过滤阈值常量
+MAX_DRAWDOWN_THRESHOLD = 15.0  # 最大回撤 <= 15%
+MIN_ANNUAL_RETURN = 10.0  # 年化收益 > 10%
+MIN_TOTAL_TRADES = 50  # 交易次数 >= 50
+INVALID_SCORE = -1000.0  # 无效参数组合的评分
+
+# 评分权重
+SCORE_WEIGHT_ANNUAL_RETURN = 0.4
+SCORE_WEIGHT_DRAWDOWN = 0.3
+SCORE_WEIGHT_WIN_RATE = 0.2
+SCORE_WEIGHT_SHARPE = 0.1
+
 
 @dataclass
 class ParameterSpace:
@@ -90,7 +102,7 @@ class ParameterScanner:
             )
 
         # 滚动验证
-        walk_forward = self._walk_forward_validate(strategy_name, best_result['params'])
+        walk_forward = self._walk_forward_validate(strategy_name, best_result['params'], train_start, train_end)
 
         # 计算稳健域
         robust_domain = self._compute_robust_domain(all_results, best_result)
@@ -221,46 +233,83 @@ class ParameterScanner:
         - 交易次数 >= 50
         """
         # 硬性筛选
-        if metrics.get('max_drawdown', 100) > 15:
-            return -1000
-        if metrics.get('annual_return', 0) <= 10:
-            return -1000
-        if metrics.get('total_trades', 0) < 50:
-            return -1000
+        if metrics.get('max_drawdown', 100) > MAX_DRAWDOWN_THRESHOLD:
+            return INVALID_SCORE
+        if metrics.get('annual_return', 0) <= MIN_ANNUAL_RETURN:
+            return INVALID_SCORE
+        if metrics.get('total_trades', 0) < MIN_TOTAL_TRADES:
+            return INVALID_SCORE
 
         # 综合评分
         score = (
-            metrics.get('annual_return', 0) * 0.4 +
-            (100 - metrics.get('max_drawdown', 0)) * 0.3 +
-            metrics.get('win_rate', 0) * 0.2 +
-            metrics.get('sharpe_ratio', 0) * 10 * 0.1
+            metrics.get('annual_return', 0) * SCORE_WEIGHT_ANNUAL_RETURN +
+            (100 - metrics.get('max_drawdown', 0)) * SCORE_WEIGHT_DRAWDOWN +
+            metrics.get('win_rate', 0) * SCORE_WEIGHT_WIN_RATE +
+            metrics.get('sharpe_ratio', 0) * 10 * SCORE_WEIGHT_SHARPE
         )
         return score
 
     def _walk_forward_validate(
         self,
         strategy_name: str,
-        params: Dict
+        params: Dict,
+        train_start: str,
+        train_end: str
     ) -> List[Dict]:
-        """滚动验证"""
+        """滚动验证
+
+        使用相对于训练期的滚动窗口：
+        - 训练期前半段 + 验证期后半段
+        - 训练期后半段 + 验证期后半段
+        - 训练期末期 + 验证期末期
+        """
+        # 计算滚动窗口：每个窗口训练6个月，验证3个月
         windows = [
-            ('2024-01-01', '2024-06-30', '2024-07-01', '2024-09-30'),
-            ('2024-04-01', '2024-09-30', '2024-10-01', '2024-12-31'),
-            ('2024-07-01', '2024-12-31', '2025-01-01', '2025-03-31'),
+            (train_start, self._add_months_str(train_end, 0),  # 训练期
+             self._add_months_str(train_end, 1), self._add_months_str(train_end, 3)),  # 验证期
+            (self._add_months_str(train_start, 3), self._add_months_str(train_end, 0),  # 训练期
+             self._add_months_str(train_end, 1), self._add_months_str(train_end, 3)),  # 验证期
+            (self._add_months_str(train_start, 6), self._add_months_str(train_end, 0),  # 训练期
+             self._add_months_str(train_end, 1), self._add_months_str(train_end, 3)),  # 验证期
         ]
 
         results = []
-        for train_start, train_end, val_start, val_end in windows:
-            metrics = self._evaluate_params(strategy_name, params, train_start, train_end)
-            if metrics:
+        for t_start, t_end, v_start, v_end in windows:
+            train_metrics = self._evaluate_params(strategy_name, params, t_start, t_end)
+            val_metrics = self._evaluate_params(strategy_name, params, v_start, v_end)
+            if train_metrics and val_metrics:
                 results.append({
-                    'window': f"{train_start}~{train_end}",
-                    'train_metrics': metrics,
-                    'val_start': val_start,
-                    'val_end': val_end
+                    'window': f"{t_start}~{t_end}",
+                    'train_metrics': train_metrics,
+                    'val_start': v_start,
+                    'val_end': v_end,
+                    'val_metrics': val_metrics  # 评估验证期
                 })
 
         return results
+
+    def _add_months_str(self, date_str: str, months: int) -> str:
+        """在日期字符串上添加月份，返回新日期字符串"""
+        parts = date_str.split('-')
+        year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+
+        new_month = month + months
+        new_year = year
+        while new_month > 12:
+            new_month -= 12
+            new_year += 1
+        while new_month < 1:
+            new_month += 12
+            new_year -= 1
+
+        # 保持相同的日，如果新月份天数不够则用月末
+        try:
+            return f"{new_year}-{new_month:02d}-{day:02d}"
+        except ValueError:
+            # 某些日期（如2月30日）不存在，使用月末
+            import calendar
+            last_day = calendar.monthrange(new_year, new_month)[1]
+            return f"{new_year}-{new_month:02d}-{last_day:02d}"
 
     def _compute_robust_domain(self, all_results: List[Dict], best_result: Dict) -> Dict:
         """计算稳健域：最优参数附近的稳健区间"""
@@ -283,7 +332,7 @@ class ParameterScanner:
         if not walk_forward_results:
             return 0.0
 
-        returns = [r.get('train_metrics', {}).get('annual_return', 0) for r in walk_forward_results]
+        returns = [r.get('val_metrics', {}).get('annual_return', 0) for r in walk_forward_results]
         if not returns:
             return 0.0
 
