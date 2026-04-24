@@ -364,14 +364,15 @@ class Backtest:
 
         if self.include_fees:
             commission = max(amount * COMMISSION_RATE, MIN_COMMISSION)
-            transfer_fee = amount * TRANSFER_FEE_RATE
+            transfer_fee = amount * TRANSFER_FEE_RATE if code.startswith('6') else 0
             total_cost = amount + commission + transfer_fee
         else:
             total_cost = amount
 
         if self.cash < total_cost:
             # 资金不足，减少数量
-            max_q = int((self.cash / (1 + COMMISSION_RATE + TRANSFER_FEE_RATE)) / price)
+            transfer_fee_rate = TRANSFER_FEE_RATE if code.startswith('6') else 0
+            max_q = int((self.cash / (1 + COMMISSION_RATE + transfer_fee_rate)) / price)
             max_q = (max_q // MIN_TRADE_UNIT) * MIN_TRADE_UNIT
             if max_q < MIN_TRADE_UNIT:
                 return  # 买不起1手
@@ -379,7 +380,7 @@ class Backtest:
             amount = price * quantity
             if self.include_fees:
                 commission = max(amount * COMMISSION_RATE, MIN_COMMISSION)
-                transfer_fee = amount * TRANSFER_FEE_RATE
+                transfer_fee = amount * TRANSFER_FEE_RATE if code.startswith('6') else 0
                 total_cost = amount + commission + transfer_fee
             else:
                 total_cost = amount
@@ -449,7 +450,7 @@ class Backtest:
         if self.include_fees:
             commission = max(amount * COMMISSION_RATE, MIN_COMMISSION)
             stamp_tax = amount * STAMP_TAX_RATE
-            transfer_fee = amount * TRANSFER_FEE_RATE
+            transfer_fee = amount * TRANSFER_FEE_RATE if code.startswith('6') else 0
             total_proceeds = amount - commission - stamp_tax - transfer_fee
         else:
             total_proceeds = amount
@@ -621,8 +622,13 @@ class Backtest:
         return dates
 
     def _default_get_stock_factors(self, date: str, codes: List[str] = None) -> Dict[str, StockFactor]:
-        """默认获取战力因子数据（从 data_manager/cp_history_store 读取）"""
+        """默认获取战力因子数据（从 data_manager/cp_history_store 读取）
+
+        注意：v19.9.2 才添加 change_pct 列迁移，历史数据可能为0。
+        如果 change_pct 为 0，会尝试从 price_history 重新计算。
+        """
         from backend.data_manager.cp_history_store import get_cp_history_store
+        from backend.simulator.database import get_db
 
         store = get_cp_history_store()
         conn = store._get_conn()
@@ -643,19 +649,38 @@ class Backtest:
         result = {}
         for row in cursor.fetchall():
             data = dict(row)
+            change_pct = data.get('change_pct', 0)
+
+            # P2 fix: 如果 change_pct 为 0，从 price_history 重新计算
+            if change_pct == 0:
+                code = data.get('code', '')
+                close = data.get('close', 0) or data.get('price', 0)
+                if code and close > 0:
+                    # 从 price_history 获取前一天收盘价
+                    db = get_db()
+                    price_cursor = db.conn.cursor()
+                    price_cursor.execute("""
+                        SELECT close FROM price_history
+                        WHERE code = ? AND date < ?
+                        ORDER BY date DESC LIMIT 1
+                    """, (code, date))
+                    price_row = price_cursor.fetchone()
+                    if price_row and price_row['close'] > 0:
+                        change_pct = (close - price_row['close']) / price_row['close'] * 100
+
             factor = StockFactor(
                 code=data.get('code', ''),
                 name=data.get('name', ''),
                 date=data.get('recorded_at', date),
                 close=data.get('close', 0) or data.get('price', 0),
-                change_pct=data.get('change_pct', 0),
+                change_pct=change_pct,
                 total_cp=data.get('total_cp', 0),
                 growth_score=data.get('growth_score', 0),
                 value_score=data.get('value_score', 0),
                 momentum_score=data.get('momentum_score', 0),
                 quality_score=data.get('quality_score', 0),
-                is_limit_up=data.get('change_pct', 0) >= 9.9,
-                is_limit_down=data.get('change_pct', 0) <= -9.9,
+                is_limit_up=change_pct >= 9.9,
+                is_limit_down=change_pct <= -9.9,
                 is_suspended=False
             )
             result[factor.code] = factor

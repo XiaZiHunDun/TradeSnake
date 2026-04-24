@@ -4,7 +4,7 @@ Tushare数据源提供者
 使用Tushare Pro API获取数据
 
 配置:
-    - Token: d1548397f09fdff5c3a356326f018c0d8f84691ef94415735c33fc4a
+    - Token: 0c754ce86eb55d62047cb390339cb33231e57fda7c8093b146264ce0
     - 积分: 2000点 (200次/分钟)
 
 可用接口:

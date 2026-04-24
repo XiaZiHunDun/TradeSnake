@@ -580,15 +580,29 @@ class PoolManager:
             from backend.data_manager.pool_state_store import get_pool_state_store
             store = get_pool_state_store()
 
+            # P2 Fix: 保存时包含 code 和 name
+            def pool_to_stocks(tier: PoolTier) -> List[Dict[str, str]]:
+                return [
+                    {"code": code, "name": info.name}
+                    for code, info in self._pools[tier].items()
+                ]
+
             # 只保存核心池和活跃池（最重要）
             pools_to_save = {
-                PoolTier.CORE.value: self.get_pool(PoolTier.CORE),
-                PoolTier.ACTIVE.value: self.get_pool(PoolTier.ACTIVE),
-                PoolTier.OBSERVE.value: self.get_pool(PoolTier.OBSERVE),
+                PoolTier.CORE.value: pool_to_stocks(PoolTier.CORE),
+                PoolTier.ACTIVE.value: pool_to_stocks(PoolTier.ACTIVE),
+                PoolTier.OBSERVE.value: pool_to_stocks(PoolTier.OBSERVE),
             }
 
             success = store.save_all_pools(pools_to_save)
             if success:
+                # 保存白名单、黑名单、观察期记录
+                metadata = {
+                    'whitelist': list(self._whitelist),
+                    'blacklist': list(self._blacklist),
+                    'probation_records': self._probation_records
+                }
+                store.save_metadata(metadata)
                 logger.info(f"池状态已保存: CORE={len(self._pools[PoolTier.CORE])} 只, ACTIVE={len(self._pools[PoolTier.ACTIVE])} 只")
             return success
         except Exception as e:
@@ -617,36 +631,53 @@ class PoolManager:
                 return False
 
             # 恢复池状态
-            for tier_str, codes in loaded_pools.items():
+            for tier_str, stocks in loaded_pools.items():
                 try:
                     tier = PoolTier(tier_str)
                 except ValueError:
+                    if tier_str == '_meta':
+                        continue  # 跳过元数据行
                     logger.warning(f"未知的池层级: {tier_str}")
                     continue
 
                 # 清空现有池并重新填充
                 self._pools[tier] = {}
-                for code in codes:
+                for stock_info in stocks:
+                    code = stock_info.get("code", "")
+                    name = stock_info.get("name", code)  # P2 Fix: 从持久化数据加载名称
+                    if not code:
+                        continue
                     # 尝试从其他池获取股票信息
-                    info = self._code_to_tier.get(code)
-                    if info is None:
+                    existing_info = self._code_to_tier.get(code)
+                    if existing_info is None:
                         # 如果没有 StockInfo，创建一个基础信息
                         from .types import StockInfo
                         info = StockInfo(
                             code=code,
-                            name=code,  # 名称稍后填充
+                            name=name,  # 使用持久化的名称
                             tier=tier,
                             tier_entry_date=date.today(),
                             tier_reason="从持久化状态恢复",
                         )
                     else:
-                        # 更新池层级
-                        info.tier = tier
+                        # 更新池层级和名称（以持久化数据为准）
+                        existing_info.tier = tier
+                        existing_info.name = name
+                        info = existing_info
 
                     self._pools[tier][code] = info
                     self._code_to_tier[code] = tier
 
             logger.info(f"池状态已恢复: {list(loaded_pools.keys())}")
+
+            # 恢复白名单、黑名单、观察期记录
+            metadata = store.load_metadata()
+            if metadata:
+                self._whitelist = set(metadata.get('whitelist', []))
+                self._blacklist = set(metadata.get('blacklist', []))
+                self._probation_records = metadata.get('probation_records', {})
+                logger.info(f"元数据已恢复: 白名单={len(self._whitelist)}, 黑名单={len(self._blacklist)}, 观察期={len(self._probation_records)}")
+
             return True
         except Exception as e:
             logger.error(f"加载池状态失败: {e}")

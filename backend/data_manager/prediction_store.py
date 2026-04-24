@@ -108,6 +108,8 @@ class PredictionStore:
                 up_probability_3d REAL DEFAULT 0,
                 up_probability_5d REAL DEFAULT 0,
                 confidence REAL DEFAULT 0,
+                confidence_interval_3d TEXT,
+                confidence_interval_5d TEXT,
                 risk_level TEXT DEFAULT 'medium',
                 features TEXT,
                 model_version TEXT DEFAULT 'rule_v19.8',
@@ -115,6 +117,14 @@ class PredictionStore:
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # v19.9.9: 迁移旧表添加 confidence_interval 字段
+        cursor.execute("PRAGMA table_info(probability_predictions)")
+        existing_cols = [col[1] for col in cursor.fetchall()]
+        if 'confidence_interval_3d' not in existing_cols:
+            cursor.execute("ALTER TABLE probability_predictions ADD COLUMN confidence_interval_3d TEXT")
+        if 'confidence_interval_5d' not in existing_cols:
+            cursor.execute("ALTER TABLE probability_predictions ADD COLUMN confidence_interval_5d TEXT")
 
         # 创建索引
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_gain_pred_date ON gain_predictions(recorded_at)")
@@ -206,17 +216,23 @@ class PredictionStore:
                 features_json = json.dumps(pred.get('features', {})) if pred.get('features') else None
                 # v19.9.5: 标准化代码格式
                 code = _normalize_code(pred.get('code', ''))
+                # confidence_interval 存为 JSON 字符串
+                ci_3d = json.dumps(pred.get('confidence_interval_3d', (0.0, 1.0)))
+                ci_5d = json.dumps(pred.get('confidence_interval_5d', (0.0, 1.0)))
                 cursor.execute("""
                     INSERT INTO probability_predictions (
                         code, name, up_probability_3d, up_probability_5d,
-                        confidence, risk_level, features, model_version, recorded_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        confidence, confidence_interval_3d, confidence_interval_5d,
+                        risk_level, features, model_version, recorded_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     code,
                     pred.get('name'),
                     pred.get('up_probability_3d', 0),
                     pred.get('up_probability_5d', 0),
                     pred.get('confidence', 0),
+                    ci_3d,
+                    ci_5d,
                     pred.get('risk_level', 'medium'),
                     features_json,
                     pred.get('model_version', 'rule_v19.8'),
@@ -286,6 +302,10 @@ class PredictionStore:
             record = dict(row)
             if record.get('features'):
                 record['features'] = json.loads(record['features'])
+            if record.get('confidence_interval_3d'):
+                record['confidence_interval_3d'] = _str_to_tuple(record['confidence_interval_3d'])
+            if record.get('confidence_interval_5d'):
+                record['confidence_interval_5d'] = _str_to_tuple(record['confidence_interval_5d'])
             result.append(record)
 
         conn.close()

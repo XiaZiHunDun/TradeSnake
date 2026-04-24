@@ -65,6 +65,37 @@ class QueryResult:
     row_count: int = 0
     error: Optional[str] = None
 
+    def __len__(self) -> int:
+        if self.data is not None:
+            return len(self.data)
+        return self.row_count
+
+    def __getitem__(self, key):
+        if self.data is not None:
+            return self.data[key]
+        raise IndexError("QueryResult has no data")
+
+
+# ==================== 代码规范化 ====================
+
+def normalize_code(code: str) -> str:
+    """将带前缀的股票代码标准化为纯数字格式
+
+    Args:
+        code: 股票代码，支持 sh600000、sz000001、600000 等格式
+
+    Returns:
+        纯数字代码，如 600000、000001
+    """
+    if code is None:
+        return code
+    code = str(code).strip().upper()
+    if code.startswith('SH'):
+        return code[2:]
+    elif code.startswith('SZ'):
+        return code[2:]
+    return code
+
 
 # ==================== DuckDB管理器 ====================
 
@@ -114,11 +145,15 @@ class DuckDBStore:
         return self._write_conn
 
     def _get_read_conn(self) -> duckdb.DuckDBPyConnection:
-        """获取读连接（单例，复用）"""
+        """获取读连接（单例，复用）
+
+        注意：即使这个方法名为"读连接"，DuckDB 要求所有连接使用相同的 read_only 配置。
+        由于我们使用 flock 进行跨进程互斥，这里仍然使用 read_only=False。
+        """
         if self._read_conn is None:
             with self._conn_lock:
                 if self._read_conn is None:
-                    self._read_conn = duckdb.connect(self.db_path, read_only=True)
+                    self._read_conn = duckdb.connect(self.db_path, read_only=False)
                     self._read_conn.execute("SET threads=1")
         return self._read_conn
 
@@ -332,7 +367,8 @@ class DuckDBStore:
                                 getattr(r, 'adj_factor', 1.0),
                             ))
                             total_success += 1
-                        except Exception:
+                        except Exception as e:
+                            print(f"insert_klines error for {r.code} on {r.trade_date}: {e}")
                             total_errors += 1
 
             # 提交事务
@@ -377,8 +413,8 @@ class DuckDBStore:
             # 先删除已存在的记录
             unique_codes = df['code'].unique().tolist()
             if unique_codes:
-                placeholders = ','.join([f"'{c}'" for c in unique_codes])
-                conn.execute(f"DELETE FROM {table} WHERE code IN ({placeholders})")
+                placeholders = ','.join(['?' for _ in unique_codes])
+                conn.execute(f"DELETE FROM {table} WHERE code IN ({placeholders})", unique_codes)
 
             # 批量插入
             conn.execute(f"INSERT INTO {table} BY NAME SELECT * FROM df")
@@ -400,7 +436,7 @@ class DuckDBStore:
         查询K线数据
 
         Args:
-            code: 股票代码
+            code: 股票代码（支持 sh600000、sz000001、600000 等格式，内部自动标准化）
             start_date: 开始日期 (YYYY-MM-DD)
             end_date: 结束日期 (YYYY-MM-DD)
             limit: 返回条数限制
@@ -408,11 +444,12 @@ class DuckDBStore:
         Returns:
             QueryResult with DataFrame
         """
+        code = normalize_code(code)  # 标准化代码格式
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)  # 共享锁
-            # DuckDB 不支持同时打开只读和读写连接，统一使用写连接
-            conn = self._get_conn()
+            # 使用读连接（写连接也可读，但读连接有 threads=1 优化且语义更清晰）
+            conn = self._get_read_conn()
             sql = "SELECT * FROM daily_kline WHERE code = ?"
             params = [code]
 
@@ -424,7 +461,8 @@ class DuckDBStore:
                 sql += " AND trade_date <= ?"
                 params.append(end_date)
 
-            sql += " ORDER BY trade_date DESC, id DESC LIMIT ?"
+            # 返回 ASC 顺序（方便consumer直接使用）
+            sql += " ORDER BY trade_date ASC, id ASC LIMIT ?"
             params.append(limit)
 
             df = conn.execute(sql, params).df()
@@ -445,15 +483,16 @@ class DuckDBStore:
         获取某股票已有数据的日期范围（最小/最大日期）。
 
         Args:
-            code: 股票代码
+            code: 股票代码（支持 sh600000、sz000001、600000 等格式，内部自动标准化）
 
         Returns:
             (min_date, max_date) 格式为 YYYY-MM-DD 字符串，或 (None, None)
         """
+        code = normalize_code(code)  # 标准化代码格式
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_conn()
+            conn = self._get_read_conn()
             row = conn.execute(
                 "SELECT MIN(trade_date), MAX(trade_date) FROM daily_kline WHERE code = ?",
                 [code]
@@ -461,7 +500,8 @@ class DuckDBStore:
             if row and row[0] and row[1]:
                 return str(row[0]), str(row[1])
             return None, None
-        except Exception:
+        except Exception as e:
+            print(f"get_kline_date_range error for {code}: {e}")
             return None, None
         finally:
             self._release_lock(lock_fd)
@@ -481,20 +521,21 @@ class DuckDBStore:
         """
         if not codes:
             return {}
+        codes = [normalize_code(c) for c in codes]  # 标准化代码格式
         from datetime import datetime, timedelta
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_conn()
+            conn = self._get_read_conn()
             placeholders = ','.join(['?' for _ in codes])
             sql = f"""
                 SELECT * FROM daily_kline
                 WHERE code IN ({placeholders})
                   AND trade_date >= ?
                   AND trade_date <= ?
-                ORDER BY code, trade_date DESC
+                ORDER BY code, trade_date ASC
             """
             params = list(codes) + [start_date, end_date]
             df = conn.execute(sql, params).df()
@@ -527,19 +568,20 @@ class DuckDBStore:
         """
         if not codes:
             return {}
+        codes = [normalize_code(c) for c in codes]  # 标准化代码格式
         from datetime import datetime, timedelta
         start_date = (datetime.strptime(end_date, '%Y-%m-%d') - timedelta(days=days)).strftime('%Y-%m-%d')
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_conn()
+            conn = self._get_read_conn()
             placeholders = ','.join(['?' for _ in codes])
             sql = f"""
                 SELECT * FROM daily_kline
                 WHERE code IN ({placeholders})
                   AND trade_date >= ?
                   AND trade_date <= ?
-                ORDER BY code, trade_date DESC
+                ORDER BY code, trade_date ASC
             """
             params = list(codes) + [start_date, end_date]
             df = conn.execute(sql, params).df()
@@ -566,11 +608,12 @@ class DuckDBStore:
         result: Dict[str, float] = {}
         if not codes:
             return result
+        codes = [normalize_code(c) for c in codes]  # 标准化代码格式
         unique = list({str(c).strip() for c in codes if c})
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_conn()
+            conn = self._get_read_conn()
             for i in range(0, len(unique), chunk_size):
                 chunk = unique[i : i + chunk_size]
                 placeholders = ",".join(["?" for _ in chunk])
@@ -600,10 +643,11 @@ class DuckDBStore:
 
     def get_latest_kline(self, code: str) -> Optional[Dict]:
         """获取最新一条K线"""
+        code = normalize_code(code)  # 标准化代码格式
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_conn()
+            conn = self._get_read_conn()
             df = conn.execute("""
                 SELECT * FROM daily_kline
                 WHERE code = ?
@@ -615,7 +659,8 @@ class DuckDBStore:
                 return None
 
             return df.iloc[0].to_dict()
-        except Exception:
+        except Exception as e:
+            print(f"get_latest_kline error for {code}: {e}")
             return None
         finally:
             self._release_lock(lock_fd)
@@ -637,7 +682,7 @@ class DuckDBStore:
             field: 计算字段（白名单验证）
 
         Returns:
-            均线值
+            QueryResult: 包含均线DataFrame（列：ma）/ 空数据时success=False
         """
         # 白名单验证，防止 SQL 注入
         ALLOWED_FIELDS = {'close', 'open', 'high', 'low', 'volume', 'amount',
@@ -645,10 +690,11 @@ class DuckDBStore:
         if field not in ALLOWED_FIELDS:
             return QueryResult(success=False, error=f"Invalid field: {field}")
 
+        code = normalize_code(code)  # 标准化代码格式
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_conn()
+            conn = self._get_read_conn()
             sql_field = field  # 已通过白名单验证
             if end_date:
                 df = conn.execute(f"""
@@ -692,7 +738,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_conn()
+            conn = self._get_read_conn()
             ma_sql_parts = []
             for d in ma_days:
                 ma_sql_parts.append(f"""
@@ -706,7 +752,7 @@ class DuckDBStore:
                     WHERE code = ?
                     {'AND trade_date >= ?' if start_date else ''}
                     {'AND trade_date <= ?' if end_date else ''}
-                    ORDER BY trade_date DESC, id DESC
+                    ORDER BY trade_date ASC, id ASC
                     LIMIT ?
                 ) t
                 ORDER BY t.trade_date ASC
@@ -736,16 +782,17 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_conn()
+            conn = self._get_read_conn()
             df = conn.execute("""
                 SELECT volume FROM daily_kline
                 WHERE code = ?
-                ORDER BY trade_date DESC, id DESC
+                ORDER BY trade_date ASC, id ASC
                 LIMIT ?
             """, [code, days]).df()
 
             return df['volume'].tolist() if not df.empty else []
-        except Exception:
+        except Exception as e:
+            print(f"get_volume_list error for {code}: {e}")
             return []
         finally:
             self._release_lock(lock_fd)
@@ -766,18 +813,19 @@ class DuckDBStore:
         Returns:
             QueryResult，包含minute_kline表的数据
         """
+        code = normalize_code(code)  # 标准化代码格式
         lock_fd = None
         try:
             from datetime import datetime, timedelta
             start_datetime = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
 
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_conn()
+            conn = self._get_read_conn()
             df = conn.execute("""
                 SELECT code, trade_date, trade_time, open, high, low, close, volume, amount
                 FROM minute_kline
                 WHERE code = ? AND trade_time >= ?
-                ORDER BY trade_time DESC
+                ORDER BY trade_time ASC
                 LIMIT ?
             """, [code, start_datetime, limit]).df()
 
@@ -803,13 +851,14 @@ class DuckDBStore:
         Returns:
             均线值
         """
+        code = normalize_code(code)  # 标准化代码格式
         lock_fd = None
         try:
             from datetime import datetime, timedelta
             start_datetime = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
 
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_conn()
+            conn = self._get_read_conn()
             df = conn.execute("""
                 WITH ranked AS (
                     SELECT trade_time, close,
@@ -824,7 +873,8 @@ class DuckDBStore:
                 return None
 
             return float(df.iloc[0]['ma'])
-        except Exception:
+        except Exception as e:
+            print(f"get_ma error for {code}: {e}")
             return None
         finally:
             self._release_lock(lock_fd)
@@ -854,12 +904,13 @@ class DuckDBStore:
 
             if not codes:
                 return {}
+            codes = [normalize_code(c) for c in codes]  # 标准化代码格式
 
             # 构造IN子句的占位符
             placeholders = ','.join(['?' for _ in codes])
 
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_conn()
+            conn = self._get_read_conn()
             # 一次性获取所有股票的最新分钟数据
             df = conn.execute(f"""
                 WITH latest AS (
@@ -911,7 +962,8 @@ class DuckDBStore:
                     'current_volume': 0.0  # 将在调用处填充
                 }
             return result
-        except Exception:
+        except Exception as e:
+            print(f"get_bulk_minute_data error: {e}")
             return {}
         finally:
             self._release_lock(lock_fd)
@@ -925,7 +977,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_conn()
+            conn = self._get_read_conn()
             df = conn.execute("""
                 SELECT DISTINCT trade_date FROM daily_kline
                 WHERE trade_date BETWEEN ? AND ?
@@ -943,7 +995,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_conn()
+            conn = self._get_read_conn()
             total = conn.execute("SELECT COUNT(*) as cnt FROM daily_kline").fetchone()[0]
             codes = conn.execute("SELECT COUNT(DISTINCT code) as cnt FROM daily_kline").fetchone()[0]
             date_range = conn.execute("""
@@ -970,8 +1022,8 @@ class DuckDBStore:
         """执行自定义SQL查询"""
         lock_fd = None
         try:
-            lock_fd = self._acquire_lock(exclusive=True)
-            conn = self._get_conn()
+            lock_fd = self._acquire_lock(exclusive=False)  # 共享锁
+            conn = self._get_read_conn()  # 使用读连接
             if params:
                 df = conn.execute(sql, params).df()
             else:
@@ -1093,7 +1145,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             lock_fd = self._acquire_lock(exclusive=False)
-            conn = self._get_conn()
+            conn = self._get_read_conn()
             info = {}
 
             # daily_kline
@@ -1165,21 +1217,23 @@ class DuckDBStore:
             # 获取文件锁（跨进程保护）
             lock_fd = self._acquire_lock(exclusive=True)
 
-            # 如果已有读连接，关闭它（避免 DuckDB 连接配置冲突）
-            if self._read_conn is not None:
-                try:
-                    self._read_conn.close()
-                except Exception:
-                    pass
-                self._read_conn = None
+            # 关闭已有连接（需要同时持有 _conn_lock 防止并发访问）
+            with self._conn_lock:
+                # 如果已有读连接，关闭它（避免 DuckDB 连接配置冲突）
+                if self._read_conn is not None:
+                    try:
+                        self._read_conn.close()
+                    except Exception:
+                        pass
+                    self._read_conn = None
 
-            # 如果已有写连接，先关闭它（确保干净的连接状态）
-            if self._write_conn is not None:
-                try:
-                    self._write_conn.close()
-                except Exception:
-                    pass
-                self._write_conn = None
+                # 如果已有写连接，先关闭它（确保干净的连接状态）
+                if self._write_conn is not None:
+                    try:
+                        self._write_conn.close()
+                    except Exception:
+                        pass
+                    self._write_conn = None
 
             # 创建新连接（避免配置冲突）
             import duckdb
@@ -1223,11 +1277,11 @@ class DuckDBStore:
                                     SET adj_factor = ?, adj_close = close * ?
                                     WHERE code = ? AND trade_date = ?
                                 """, [factor, factor, symbol, formatted_date])
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                print(f"backfill_adj_factor UPDATE failed for {symbol} {formatted_date}: {e}")
                         total_updated += len(factors)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"backfill_adj_factor symbol processing failed for {symbol}: {e}")
 
             # 提交事务
             conn.commit()

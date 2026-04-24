@@ -43,12 +43,11 @@ class WebSocketManager:
         if not self.active_connections:
             return
 
-        message_json = json.dumps(message, ensure_ascii=False)
         disconnected = []
 
         for connection in self.active_connections:
             try:
-                await connection.send_json(message_json)
+                await connection.send_json(message)
             except Exception as e:
                 print(f"WebSocket发送失败: {e}")
                 disconnected.append(connection)

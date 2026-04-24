@@ -118,7 +118,7 @@ backend/engine/gain_predictor/
 | 波动率 | volatility_20d, atr_14 | 20日波动率、ATR指标 |
 | 趋势 | ma_position | 收盘价/MA20比率 |
 | 技术指标 | rsi_14, macd, macd_signal | RSI、MACD |
-| 市场状态 | board_type, limit_type | 板块类型、涨跌停状态 |
+| 市场状态 | limit_up, limit_down, volume_ratio | 涨跌停状态、成交量异常度 |
 
 ### 5.2 板块涨跌幅限制
 

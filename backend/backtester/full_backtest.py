@@ -10,12 +10,12 @@ from datetime import datetime, timedelta
 import math
 
 from .strategies import Strategy, TopNStrategy, ValueStrategy, GrowthStrategy, MomentumStrategy
-from .strategies import RisingCPStrategy, HybridRisingStrategy
+from .strategies import RisingCPStrategy, HybridRisingStrategy, MultiFactorStrategy
 from .metrics import BacktestResult, Trade
 
 
 @dataclass
-class Position:
+class FullBacktestPosition:
     """持仓"""
     code: str
     name: str
@@ -38,6 +38,7 @@ class BacktestTrade:
     quantity: int
     amount: float
     commission: float
+    profit: float = 0.0  # 平仓盈亏（卖出时计算）
     reason: str = ''
 
 
@@ -60,11 +61,19 @@ class BacktestStats:
 class FullBacktestEngine:
     """完整回测引擎 v1.0"""
 
-    # 交易费用
-    COMMISSION_RATE = 0.0003  # 0.03%
-    MIN_COMMISSION = 5.0
-    STAMP_TAX_RATE = 0.001   # 0.1% (卖出时收取)
-    TRANSFER_FEE_RATE = 0.00002  # 0.002%
+    # 交易费用（v2 设计）
+    COMMISSION_RATE = 0.0001       # 万1
+    MIN_COMMISSION = 5.0            # 最低佣金5元
+    STAMP_TAX_RATE = 0.0005        # 千0.5（卖出时收取）
+    TRANSFER_FEE_RATE = 0.00001    # 千0.01（过户费，沪市双向，深市免）
+    SLIPPAGE_RATE = 0.001          # 0.1%（滑点，买卖双向）
+    # 涨跌停阈值（与 backtest.py 保持一致）
+    LIMIT_UP_THRESHOLD = 9.9
+
+    @staticmethod
+    def _is_shanghai(code: str) -> bool:
+        """判断股票是否为沪市（6开头）"""
+        return code.startswith('6')
 
     def __init__(self):
         from backend.data_manager.cp_history_store import get_cp_history_store
@@ -73,7 +82,7 @@ class FullBacktestEngine:
         self.cp_store = get_cp_history_store()
         self.duckdb = get_duckdb_store()
 
-        # 策略映射
+        # 策略映射（不使用全局 WEIGHTS，保持独立性）
         self.strategies = {
             'top': TopNStrategy(n=10),
             'value': ValueStrategy(n=10),
@@ -83,6 +92,42 @@ class FullBacktestEngine:
             'hybrid': HybridRisingStrategy(n=10),
         }
 
+    def _fix_change_pct(self, cp_data: List[Dict], date: str) -> List[Dict]:
+        """修复历史数据中 change_pct 为 0 的问题
+
+        v19.9.2 才添加 change_pct 列迁移，历史数据可能为0。
+        如果 change_pct 为 0，从 DuckDB 重新计算。
+
+        Args:
+            cp_data: 战力数据列表
+            date: 日期
+
+        Returns:
+            修复后的战力数据列表
+        """
+        result = []
+        for item in cp_data:
+            change_pct = item.get('change_pct', 0)
+            if change_pct == 0 and item.get('price') and item.get('price') > 0:
+                # 尝试从 DuckDB 获取前一天的数据来计算 change_pct
+                code = item.get('code')
+                if code:
+                    prev_price = self._get_prev_close_price(code, date)
+                    if prev_price and prev_price > 0:
+                        change_pct = (item['price'] - prev_price) / prev_price * 100
+                        item = item.copy()
+                        item['change_pct'] = change_pct
+            result.append(item)
+        return result
+
+    def _get_prev_close_price(self, code: str, date: str) -> Optional[float]:
+        """获取前一交易日的收盘价（用于计算 change_pct）"""
+        result = self.duckdb.get_klines(code, end_date=date, limit=2)
+        if result.success and result.data is not None and len(result.data) >= 2:
+            # 取倒数第二根K线的收盘价（前一交易日）
+            return float(result.data.iloc[-2]['close'])
+        return None
+
     def run(
         self,
         start_date: str,
@@ -91,7 +136,7 @@ class FullBacktestEngine:
         top_n: int = 10,
         initial_capital: float = 20000.0,
         weight_config: Dict = None,
-        stop_loss_pct: float = -3.0,
+        stop_loss_pct: float = -10.0,
         max_holding_days: int = 5,
         market_filter_pct: float = -2.0
     ) -> BacktestStats:
@@ -106,118 +151,127 @@ class FullBacktestEngine:
             initial_capital: 初始资金
             weight_config: 战力权重配置，如 {'growth': 0.35, 'momentum': 0.15}
                           如果为None，使用默认权重
-            stop_loss_pct: 止损阈值（负数，如-3.0表示亏损3%止损）
+            stop_loss_pct: 止损阈值（负数，如-10.0表示亏损10%止损）
             max_holding_days: 最大持仓天数
             market_filter_pct: 市场过滤阈值（负数，如-2.0表示大盘平均跌幅超过2%时减半持仓）
 
         Returns:
             BacktestStats: 回测统计结果
         """
-        # 临时调整权重
-        from backend.engine.cp_engine.constants import WEIGHTS
-        original_weights = WEIGHTS.copy()
-        if weight_config:
-            WEIGHTS.update(weight_config)
+        # 确保DuckDB数据一致性
+        self.duckdb.checkpoint()
 
-        try:
-            # 确保DuckDB数据一致性
-            self.duckdb.checkpoint()
-            # 获取策略
-            strategy = self.strategies.get(strategy_name, TopNStrategy(n=top_n))
+        # 获取策略：如果有 weight_config，创建多因子策略（不依赖全局 WEIGHTS）
+        if weight_config:
+            strategy = MultiFactorStrategy(n=top_n, weights=weight_config)
+        else:
+            if strategy_name not in self.strategies:
+                available = ', '.join(self.strategies.keys())
+                raise ValueError(f"未知策略: '{strategy_name}'。可用策略: {available}")
+            strategy = self.strategies[strategy_name]
             if hasattr(strategy, 'n'):
                 strategy.n = top_n
 
-            # 获取交易日列表
-            trading_dates = self._get_trading_dates(start_date, end_date)
-            if len(trading_dates) < 2:
-                raise ValueError("交易日数据不足")
+        # 获取交易日列表
+        trading_dates = self._get_trading_dates(start_date, end_date)
+        if len(trading_dates) < 2:
+            raise ValueError("交易日数据不足")
 
-            # 初始化状态
-            cash = {'value': initial_capital}
-            positions: Dict[str, Position] = {}
-            pending_bought: Set[str] = set()
-            trades: List[BacktestTrade] = []
-            equity_curve: List[Dict] = []
-            completed_pnls: List[float] = []  # 已平仓交易的盈亏列表
+        # 初始化状态
+        cash = {'value': initial_capital}
+        positions: Dict[str, FullBacktestPosition] = {}
+        pending_bought: Set[str] = set()
+        trades: List[BacktestTrade] = []
+        equity_curve: List[Dict] = []
+        completed_pnls: List[float] = []  # 已平仓交易的盈亏列表
 
-            # 按日期遍历
-            for i in range(len(trading_dates) - 1):
-                signal_date = trading_dates[i]
-                trade_date = trading_dates[i + 1]
+        # 按日期遍历
+        for i in range(len(trading_dates) - 1):
+            signal_date = trading_dates[i]
+            trade_date = trading_dates[i + 1]
 
-                # 获取信号日的战力数据（今日）
-                cp_data = self._get_cp_at_date(signal_date)
-                if not cp_data:
-                    continue
+            # 获取信号日的战力数据（今日）
+            cp_data = self._get_cp_at_date(signal_date)
+            if not cp_data:
+                continue
 
-                # 市场环境过滤：计算市场平均涨跌幅
-                market_change = sum(item.get('change_pct', 0) for item in cp_data) / len(cp_data) if cp_data else 0
-                # 大盘下跌超过阈值时，减少一半仓位
-                reduce_positions = market_change < market_filter_pct
-                actual_top_n = top_n // 2 if reduce_positions else top_n
+            # P2 fix: 修复 change_pct 为 0 的问题（历史数据迁移问题）
+            cp_data = self._fix_change_pct(cp_data, signal_date)
 
-                # 获取昨日的战力数据（用于计算战力变化）
-                prev_cp_data = None
-                if i > 0:
-                    prev_signal_date = trading_dates[i - 1]
-                    prev_cp_data = self._get_cp_at_date(prev_signal_date)
+            # 市场环境过滤：计算市场平均涨跌幅
+            market_change = sum(item.get('change_pct', 0) for item in cp_data) / len(cp_data) if cp_data else 0
+            # 大盘下跌超过阈值时，减少一半仓位
+            reduce_positions = market_change < market_filter_pct
+            actual_top_n = top_n // 2 if reduce_positions else top_n
 
-                # 策略选股 - 按战力排序取actual_top_n（市场大跌时减半）
-                stock_factors = self._build_stock_factors(cp_data, prev_cp_data)
-                target_codes = strategy.select_stocks(signal_date, stock_factors, actual_top_n)
+            # 获取昨日的战力数据（用于计算战力变化）
+            prev_cp_data = None
+            if i > 0:
+                prev_signal_date = trading_dates[i - 1]
+                prev_cp_data = self._get_cp_at_date(prev_signal_date)
+                # 同样修复 prev_cp_data 的 change_pct
+                prev_cp_data = self._fix_change_pct(prev_cp_data, prev_signal_date)
 
-                # 检查止损（亏损超过3%立即卖出）
-                for code in list(positions.keys()):
-                    current_price = self._get_price(code, trade_date)
-                    if current_price > 0:
-                        pos = positions[code]
-                        # 计算持仓盈亏：当前市值 - 成本（含佣金）
-                        cost = pos.buy_amount + pos.buy_commission
-                        current_value = current_price * pos.quantity
-                        pnl_pct = (current_value - cost) / cost * 100
-                        if pnl_pct <= stop_loss_pct:  # 止损
-                            self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'stop_loss')
+            # 策略选股 - 按战力排序取actual_top_n（市场大跌时减半）
+            stock_factors = self._build_stock_factors(cp_data, prev_cp_data)
+            target_codes = strategy.select_stocks(signal_date, stock_factors, actual_top_n)
 
-                # 检查持仓超时
-                for code in list(positions.keys()):
-                    positions[code].holding_days += 1
-                    if positions[code].holding_days > max_holding_days:
-                        self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'max_days')
+            # 检查止损（亏损超过阈值立即卖出）
+            for code in list(positions.keys()):
+                current_price = self._get_price(code, trade_date)
+                if current_price > 0:
+                    pos = positions[code]
+                    # 计算持仓盈亏：当前市值 - 成本（含佣金）
+                    cost = pos.buy_amount + pos.buy_commission
+                    current_value = current_price * pos.quantity
+                    pnl_pct = (current_value - cost) / cost * 100
+                    if pnl_pct <= stop_loss_pct:  # 止损
+                        self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'stop_loss')
 
-                # 调仓
-                current_codes = set(positions.keys())
-                new_codes = set(target_codes[:actual_top_n])
+            # 检查持仓超时
+            for code in list(positions.keys()):
+                positions[code].holding_days += 1
+                if positions[code].holding_days > max_holding_days:
+                    self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'max_days')
 
-                # 卖出不在新目标中的持仓
-                for code in current_codes - new_codes:
-                    self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'rebalance')
+            # 调仓
+            current_codes = set(positions.keys())
+            new_codes = set(target_codes[:actual_top_n])
 
-                # 买入新目标
-                for code in new_codes - current_codes:
-                    self._execute_buy(positions, cash, trades, pending_bought, code, trade_date)
+            # 过滤涨跌停股票（买入时涨停不买，跌停也不买）
+            filtered_codes = set()
+            for code in new_codes - current_codes:
+                factor = stock_factors.get(code)
+                if factor and abs(factor.change_pct) < self.LIMIT_UP_THRESHOLD:
+                    filtered_codes.add(code)
 
-                # 记录净值
-                total_value = cash['value'] + sum(
-                    pos.quantity * self._get_price(pos.code, trade_date)
-                    for pos in positions.values()
-                )
-                equity_curve.append({
-                    'date': trade_date,
-                    'total_value': total_value,
-                    'cash': cash['value'],
-                    'position_value': total_value - cash['value']
-                })
+            # 卖出不在新目标中的持仓
+            for code in current_codes - new_codes:
+                self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'rebalance')
 
-                # 清除当日买入记录
-                pending_bought.clear()
+            # 买入新目标（已过滤涨跌停）
+            for code in filtered_codes - current_codes:
+                self._execute_buy(positions, cash, trades, pending_bought, code, trade_date)
 
-            # 计算统计
-            return self._calculate_stats(
-                initial_capital, cash['value'], positions, equity_curve, trades, completed_pnls
+            # 记录净值
+            total_value = cash['value'] + sum(
+                pos.quantity * self._get_price(pos.code, trade_date)
+                for pos in positions.values()
             )
-        finally:
-            # 恢复原始权重
-            WEIGHTS.update(original_weights)
+            equity_curve.append({
+                'date': trade_date,
+                'total_value': total_value,
+                'cash': cash['value'],
+                'position_value': total_value - cash['value']
+            })
+
+            # 清除当日买入记录
+            pending_bought.clear()
+
+        # 计算统计
+        return self._calculate_stats(
+            initial_capital, cash['value'], positions, equity_curve, trades, completed_pnls
+        )
 
     def _get_trading_dates(self, start_date: str, end_date: str) -> List[str]:
         """获取交易日列表"""
@@ -301,25 +355,30 @@ class FullBacktestEngine:
         if max_qty < 100:
             return
 
-        # 计算费用
+        # 计算费用（含滑点）
         gross_amount = price * max_qty
+        slippage_amount = gross_amount * self.SLIPPAGE_RATE
         commission = max(gross_amount * self.COMMISSION_RATE, self.MIN_COMMISSION)
-        transfer_fee = gross_amount * self.TRANSFER_FEE_RATE
-        total_cost = gross_amount + commission + transfer_fee
+        # 过户费：沪市双向收取，深市免收
+        transfer_fee = gross_amount * self.TRANSFER_FEE_RATE if self._is_shanghai(code) else 0
+        total_cost = gross_amount + slippage_amount + commission + transfer_fee
 
         if total_cost > cash['value']:
             # 资金不足，减少数量
-            max_qty = int((cash['value'] * 0.99) / (price * (1 + self.COMMISSION_RATE + self.TRANSFER_FEE_RATE))) // 100 * 100
+            slippage_rate = self.SLIPPAGE_RATE
+            transfer_fee_rate = self.TRANSFER_FEE_RATE if self._is_shanghai(code) else 0
+            max_qty = int((cash['value'] * 0.99) / (price * (1 + slippage_rate + self.COMMISSION_RATE + transfer_fee_rate))) // 100 * 100
             if max_qty < 100:
                 return
             gross_amount = price * max_qty
+            slippage_amount = gross_amount * self.SLIPPAGE_RATE
             commission = max(gross_amount * self.COMMISSION_RATE, self.MIN_COMMISSION)
-            transfer_fee = gross_amount * self.TRANSFER_FEE_RATE
-            total_cost = gross_amount + commission + transfer_fee
+            transfer_fee = gross_amount * self.TRANSFER_FEE_RATE if self._is_shanghai(code) else 0
+            total_cost = gross_amount + slippage_amount + commission + transfer_fee
 
         # 执行
         cash['value'] -= total_cost
-        positions[code] = Position(
+        positions[code] = FullBacktestPosition(
             code=code,
             name=name,
             quantity=max_qty,
@@ -327,7 +386,7 @@ class FullBacktestEngine:
             buy_date=date,
             holding_days=0,
             buy_amount=gross_amount,
-            buy_commission=commission + transfer_fee
+            buy_commission=slippage_amount + commission + transfer_fee
         )
         pending_bought.add(code)
 
@@ -339,7 +398,7 @@ class FullBacktestEngine:
             price=price,
             quantity=max_qty,
             amount=gross_amount,
-            commission=commission + transfer_fee
+            commission=slippage_amount + commission + transfer_fee
         ))
 
     def _execute_sell(self, positions: Dict, cash: Dict, trades: List,
@@ -353,12 +412,14 @@ class FullBacktestEngine:
         if price <= 0:
             return
 
-        # 计算费用
+        # 计算费用（含滑点和卖出成本）
         gross_amount = price * pos.quantity
+        slippage_amount = gross_amount * self.SLIPPAGE_RATE
         commission = max(gross_amount * self.COMMISSION_RATE, self.MIN_COMMISSION)
         stamp_tax = gross_amount * self.STAMP_TAX_RATE
-        transfer_fee = gross_amount * self.TRANSFER_FEE_RATE
-        total_cost = commission + stamp_tax + transfer_fee
+        # 过户费：沪市双向收取，深市免收
+        transfer_fee = gross_amount * self.TRANSFER_FEE_RATE if self._is_shanghai(code) else 0
+        total_cost = slippage_amount + commission + stamp_tax + transfer_fee
 
         net_amount = gross_amount - total_cost
         cash['value'] += net_amount
@@ -377,6 +438,7 @@ class FullBacktestEngine:
             quantity=pos.quantity,
             amount=net_amount,
             commission=total_cost,
+            profit=pnl,
             reason=reason
         ))
 
@@ -450,6 +512,7 @@ class FullBacktestEngine:
                 'quantity': t.quantity,
                 'amount': t.amount,
                 'commission': t.commission,
+                'profit': t.profit,
                 'reason': t.reason
             } for t in trades],
             completed_pnls=completed_pnls

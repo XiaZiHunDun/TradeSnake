@@ -4,12 +4,19 @@
 职责：融合战力评分与预测引擎结果
 
 融合公式：
-综合得分 = 战力权重 × total_cp/100 + 涨幅预测权重 × predicted_gain_5d/50 + 上涨概率权重 × up_probability_5d
+综合得分 = 战力权重 × cp_norm + 涨幅预测权重 × gain_norm × confidence + 上涨概率权重 × prob_norm × confidence
 
-设计文档: docs/plans/recommender/RECOMMENDER_ARCHITECTURE.md v18.5
+其中：
+- cp_norm = total_cp / 100 (归一化到0-1)
+- gain_norm = predicted_gain_5d / 50 (归一化到0-1，假设50%为上限)
+- prob_norm = up_probability_5d (已是0-1)
+- confidence = 预测置信度 (0-1)
+
+设计文档: docs/plans/recommender/RECOMMENDER_ARCHITECTURE.md v19.8
 """
 
 import ast
+import logging
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
@@ -17,18 +24,35 @@ from backend.engine import StockCP
 from backend.engine.gain_predictor import GainPrediction
 from backend.engine.probability_predictor import ProbabilityPrediction
 
+logger = logging.getLogger(__name__)
 
-def _safe_parse_interval(value: Optional[str], default: Tuple[float, float] = (0.0, 0.0)) -> Tuple[float, float]:
-    """安全解析 confidence_interval 字符串，防止格式错误导致崩溃"""
-    if not value:
+
+def _safe_parse_interval(value, default: Tuple[float, float] = (0.0, 0.0)) -> Tuple[float, float]:
+    """安全解析 confidence_interval，支持字符串/列表/元组格式，防止格式错误导致崩溃
+
+    Args:
+        value: confidence_interval 值，可能来自:
+            - prediction_store 已解析的 tuple/list (P1 修复)
+            - DB 返回的 JSON 字符串 (兼容旧逻辑)
+        default: 解析失败时返回的默认值
+    """
+    if value is None:
         return default
-    try:
-        parsed = ast.literal_eval(value)
-        if isinstance(parsed, tuple) and len(parsed) == 2:
-            return (float(parsed[0]), float(parsed[1]))
+    # P1 修复：prediction_store.get_gain_predictions() 已通过 _str_to_tuple 解析
+    if isinstance(value, (tuple, list)):
+        if len(value) == 2:
+            return (float(value[0]), float(value[1]))
         return default
-    except (ValueError, SyntaxError):
-        return default
+    # 兼容字符串格式（旧逻辑）
+    if isinstance(value, str):
+        try:
+            parsed = ast.literal_eval(value)
+            if isinstance(parsed, (tuple, list)) and len(parsed) == 2:
+                return (float(parsed[0]), float(parsed[1]))
+            return default
+        except (ValueError, SyntaxError):
+            return default
+    return default
 
 
 @dataclass
@@ -41,6 +65,7 @@ class FusionResult:
     up_probability_5d: float  # 5日上涨概率
     confidence: float  # 预测置信度
     risk_level: str  # 风险等级
+    volatility_20d: float  # 20日波动率 (%，日度，与 FILTER_MAX_VOLATILITY 阈值单位一致)
     fused_score: float  # 融合得分
     fused_rank: int  # 融合排名
     # 分项得分
@@ -75,7 +100,9 @@ class PredictionFusion:
     FILTER_MIN_GAIN_5D = 0  # 预测涨幅必须>0（过滤预测下跌）
     FILTER_MIN_PROB_5D = 0.5  # 上涨概率必须>50%
     FILTER_MAX_RISK_LEVEL = 'high'  # 过滤高风险
-    FILTER_MAX_VOLATILITY = 40  # 过滤高波动
+    # 波动率过滤：StockCP.volatility_20d 存储年化波动率(%)，这里转换为日波动率阈值
+    # 40% 年化 ≈ 40 / sqrt(252) ≈ 2.52% 日波动率（与 probability_predictor 的 40 阈值单位一致）
+    FILTER_MAX_VOLATILITY = 40 / (252 ** 0.5)  # ~2.52% 日波动率上限
 
     @classmethod
     def fuse(
@@ -125,6 +152,7 @@ class PredictionFusion:
             up_probability_5d=up_probability_5d,
             confidence=confidence,
             risk_level=risk_level,
+            volatility_20d=getattr(stock, 'volatility_20d', 0.0),
             fused_score=fused_score,
             fused_rank=0,  # 待排序后填充
             cp_score=cp_score,
@@ -158,7 +186,9 @@ class PredictionFusion:
             prob_pred = prob_predictions.get(stock.code)
 
             # 过滤条件
-            if not cls._passes_filter(stock, gain_pred, prob_pred):
+            filter_reason = cls._get_filter_reason(stock, gain_pred, prob_pred)
+            if filter_reason:
+                logger.info(f"Fusion filtered out {stock.code} ({stock.name}): {filter_reason}")
                 continue
 
             result = cls.fuse(stock, gain_pred, prob_pred, risk_preference)
@@ -181,24 +211,35 @@ class PredictionFusion:
         prob_pred: Optional[ProbabilityPrediction]
     ) -> bool:
         """检查是否通过过滤条件"""
+        return cls._get_filter_reason(stock, gain_pred, prob_pred) is None
+
+    @classmethod
+    def _get_filter_reason(
+        cls,
+        stock: StockCP,
+        gain_pred: Optional[GainPrediction],
+        prob_pred: Optional[ProbabilityPrediction]
+    ) -> Optional[str]:
+        """返回过滤原因字符串，如果通过则返回 None"""
         # 预测涨幅过滤
         if gain_pred and gain_pred.predicted_gain_5d < cls.FILTER_MIN_GAIN_5D:
-            return False
+            return f"predicted_gain_5d {gain_pred.predicted_gain_5d:.2f} < {cls.FILTER_MIN_GAIN_5D}"
 
         # 上涨概率过滤
         if prob_pred and prob_pred.up_probability_5d < cls.FILTER_MIN_PROB_5D:
-            return False
+            return f"up_probability_5d {prob_pred.up_probability_5d:.3f} < {cls.FILTER_MIN_PROB_5D}"
 
-        # 风险等级过滤
-        if prob_pred and prob_pred.risk_level == cls.FILTER_MAX_RISK_LEVEL:
-            return False
+        # 风险等级过滤：统一使用 _get_risk_level() 判断（与 fuse() 保持一致）
+        risk_lvl = prob_pred.risk_level if prob_pred else cls._get_risk_level(stock)
+        if risk_lvl == cls.FILTER_MAX_RISK_LEVEL:
+            return f"risk_level={risk_lvl}"
 
         # 波动率过滤
         volatility = getattr(stock, 'volatility_20d', 0)
         if volatility > cls.FILTER_MAX_VOLATILITY:
-            return False
+            return f"volatility_20d {volatility:.2f} > {cls.FILTER_MAX_VOLATILITY:.2f}"
 
-        return True
+        return None
 
     @classmethod
     def _get_risk_level(cls, stock: StockCP) -> str:
@@ -221,13 +262,12 @@ class PredictionFusion:
             'up_probability_5d': round(result.up_probability_5d, 3),
             'confidence': round(result.confidence, 3),
             'risk_level': result.risk_level,
+            'volatility_20d': round(result.volatility_20d, 2),
             'fused_score': round(result.fused_score, 4),
             'fused_rank': result.fused_rank,
-            'score_breakdown': {
-                'cp_score': round(result.cp_score, 4),
-                'gain_score': round(result.gain_score, 4),
-                'prob_score': round(result.prob_score, 4),
-            }
+            'cp_score': round(result.cp_score, 4),
+            'gain_score': round(result.gain_score, 4),
+            'prob_score': round(result.prob_score, 4),
         }
 
     @classmethod
@@ -273,6 +313,8 @@ class PredictionFusion:
                     up_probability_3d=latest['up_probability_3d'],
                     up_probability_5d=latest['up_probability_5d'],
                     confidence=latest['confidence'],
+                    confidence_interval_3d=_safe_parse_interval(latest.get('confidence_interval_3d')),
+                    confidence_interval_5d=_safe_parse_interval(latest.get('confidence_interval_5d')),
                     risk_level=latest.get('risk_level', 'medium'),
                     features=latest.get('features', {}),
                     model_version=latest.get('model_version', 'rule_v19.8')

@@ -56,19 +56,20 @@ class Account:
         return (self.total_profit / self.initial_cash) * 100
 
     def get_market_value(self) -> float:
-        """获取持仓总市值"""
+        """获取持仓总市值（使用SQLite stocks表，无网络请求）"""
         import logging
         logger = logging.getLogger(__name__)
 
         holdings = self.db.get_holdings()
-        total = 0
+        total = 0.0
         for h in holdings:
             code = h.get('code', '')
             quantity = h.get('total_quantity', 0)
             try:
-                from backend.data_manager.fetcher import get_single_stock_data
-                stock = get_single_stock_data(code)
-                if stock:
+                # 使用SQLite stocks表的价格（避免网络请求）
+                lookup_code = code.replace('sh', '').replace('sz', '')
+                stock = self.db.get_stock(lookup_code)
+                if stock and stock.get('price', 0) > 0:
                     total += stock.get('price', 0) * quantity
             except Exception as e:
                 logger.warning(f"get_market_value: 获取 {code} 市价失败: {e}")

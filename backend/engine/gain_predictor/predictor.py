@@ -10,7 +10,7 @@
 
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, date as date_type
 
 from .features import calculate_features, GLOBAL_AVG_VOLATILITY
 
@@ -91,7 +91,10 @@ class GainPredictor:
         return GainPredictionResult(
             predictions=predictions,
             calculated_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-            data_timestamp=klines[-1].get('date', datetime.now().strftime("%Y-%m-%d")) if klines_dict else "",
+            data_timestamp = next((
+                self._convert_trade_date(klines[-1].get('trade_date'))
+                for klines in klines_dict.values() if klines
+            ), datetime.now().strftime("%Y-%m-%d")),
             stock_count=len(predictions),
             distribution=distribution,
             avg_confidence=avg_confidence
@@ -139,20 +142,6 @@ class GainPredictor:
         # ========== 涨跌停处理 ==========
         predicted = self._apply_limit_adjustment(predicted, klines)
 
-        # ========== 置信度计算 ==========
-        confidence = min(0.6 + 0.4 * (1 - volatility / 50), 0.95)
-
-        # ========== 置信区间 ==========
-        interval_width = volatility * 0.4 * confidence
-        confidence_interval_3d = (
-            max(predicted - interval_width, -30),
-            min(predicted + interval_width, 30)
-        )
-        confidence_interval_5d = (
-            max(predicted * 1.5 - interval_width * 1.5, -50),
-            min(predicted * 1.5 + interval_width * 1.5, 50)
-        )
-
         # ========== 预测3日和5日 ==========
         # 3日预测：主要基于短期动量和RSI
         predicted_gain_3d = (features.get('gain_3d', 0) * 0.6 +
@@ -167,6 +156,21 @@ class GainPredictor:
         predicted_gain_3d = max(-30.0, min(30.0, predicted_gain_3d))
         predicted_gain_5d = max(-50.0, min(50.0, predicted_gain_5d))
 
+        # ========== 置信度计算 ==========
+        confidence = min(0.6 + 0.4 * (1 - volatility / 50), 0.95)
+
+        # ========== 置信区间（基于实际预测值计算） ==========
+        interval_width_3d = volatility * 0.4 * confidence
+        confidence_interval_3d = (
+            max(predicted_gain_3d - interval_width_3d, -30.0),
+            min(predicted_gain_3d + interval_width_3d, 30.0)
+        )
+        interval_width_5d = volatility * 0.4 * confidence * 1.5
+        confidence_interval_5d = (
+            max(predicted_gain_5d - interval_width_5d, -50.0),
+            min(predicted_gain_5d + interval_width_5d, 50.0)
+        )
+
         return GainPrediction(
             code=code,
             name=name,
@@ -178,8 +182,19 @@ class GainPredictor:
             features={
                 'gain_3d': round(float(features.get('gain_3d', 0)), 2),
                 'gain_5d': round(float(features.get('gain_5d', 0)), 2),
+                'gain_10d': round(float(features.get('gain_10d', 0)), 2),
+                'gain_20d': round(float(features.get('gain_20d', 0)), 2),
                 'volatility_20d': round(float(features.get('volatility_20d', 0)), 2),
+                'atr_14': round(float(features.get('atr_14', 0)), 2),
+                'ma_position': round(float(features.get('ma_position', 1.0)), 4),
+                'ma10_position': round(float(features.get('ma10_position', 1.0)), 4),
                 'rsi_14': round(float(features.get('rsi_14', 50)), 1),
+                'macd': round(float(features.get('macd', 0)), 4),
+                'macd_signal': round(float(features.get('macd_signal', 0)), 4),
+                'macd_cross': float(features.get('macd_cross', 0)),
+                'limit_up': float(features.get('limit_up', 0)),
+                'limit_down': float(features.get('limit_down', 0)),
+                'volume_ratio': round(float(features.get('volume_ratio', 1.0)), 2),
             },
             model_version=self.model_version
         )
@@ -230,6 +245,17 @@ class GainPredictor:
             'negative_count': sum(1 for g in gains if g < 0),
         }
 
+    def _convert_trade_date(self, trade_date) -> str:
+        """将 trade_date 转换为字符串格式"""
+        if trade_date is None:
+            return datetime.now().strftime("%Y-%m-%d")
+        if isinstance(trade_date, str):
+            return trade_date
+        if isinstance(trade_date, (datetime, date_type)):
+            return trade_date.strftime("%Y-%m-%d")
+        # pandas Timestamp
+        return str(trade_date)
+
     def to_dict(self, result: GainPredictionResult) -> Dict:
         """转换为字典格式"""
         return {
@@ -240,8 +266,8 @@ class GainPredictor:
                     'predicted_gain_3d': p.predicted_gain_3d,
                     'predicted_gain_5d': p.predicted_gain_5d,
                     'confidence': p.confidence,
-                    'confidence_interval_3d': p.confidence_interval_3d,
-                    'confidence_interval_5d': p.confidence_interval_5d,
+                    'confidence_interval_3d': list(p.confidence_interval_3d),
+                    'confidence_interval_5d': list(p.confidence_interval_5d),
                     'features': p.features,
                     'model_version': p.model_version,
                 }
@@ -297,14 +323,39 @@ class GainPredictor:
     ) -> Dict:
         """历史回测：基于历史K线数据验证预测准确性
 
+        对指定日期区间内的每个交易日进行预测，并追踪未来N日的实际涨幅，
+        以评估规则模型的预测准确性。
+
         Args:
             codes: 股票代码列表
             start_date: 回测开始日期 (YYYY-MM-DD)
             end_date: 回测结束日期 (YYYY-MM-DD)
-            save_to_store: 是否保存到 prediction_store
+            save_to_store: 是否保存每日预测结果到 prediction_store
 
         Returns:
-            回测结果统计
+            回测结果统计，包含以下字段：
+            - total_predictions: 总预测次数
+            - mean_error: 平均预测误差 (predicted - actual)
+            - mean_abs_error: 平均绝对误差
+            - accuracy_within_5pct: 预测误差<=5%的比例 (%)
+            - accuracy_within_10pct: 预测误差<=10%的比例 (%)
+            - top_k_accuracy: 预测涨幅前10%的股票中，实际上涨的比例 (%)
+            - cumulative_return: 累计收益率 (%)，假设每日买入预测涨幅前10只
+            - sharpe_ratio: 夏普比率
+            - errors: 最多10个错误记录
+
+        Prediction Approach:
+            1. 滚动窗口：每日使用该日期之前的历史K线（最多60天）计算特征
+            2. 特征计算：调用 calculate_features() 提取动量、波动率、趋势、RSI、MACD等指标
+            3. 预测生成：应用综合预测公式（动量因子 x 波动率调整 + 趋势加成 + RSI调整 + MACD调整）
+            4. 涨跌停处理：根据当日涨跌停状态调整预测值
+            5. 实际涨幅对比：5日后获取实际收盘价，计算真实收益率
+            6. 统计评估：汇总所有预测-实际对，计算误差统计和高级指标
+
+        Note:
+            - 每个交易日只使用该日期之前的数据，避免前视偏差
+            - 实际涨幅计算使用复权收盘价
+            - TopK准确率和累计收益使用每日预测涨幅前10%的股票
         """
         from backend.data_manager.duckdb_store import get_duckdb_store
         from datetime import datetime, timedelta
@@ -330,8 +381,13 @@ class GainPredictor:
                         end_date=date_str,
                         limit=60  # 至少60天数据
                     )
-                    if klines and len(klines) >= 20:
-                        date_klines[code] = klines
+                    # P0-1/P0-2: klines is QueryResult, extract data and convert to List[Dict]
+                    if klines.success and klines.data is not None and len(klines.data) > 0:
+                        df = klines.data
+                        # Convert DataFrame to list of dicts, sorted ASC by date (oldest first)
+                        klines_list = df.to_dict('records')
+                        klines_list.sort(key=lambda x: x.get('trade_date', ''))
+                        date_klines[code] = klines_list
                 except Exception as e:
                     errors.append(f"{code}@{date_str}: {e}")
 
@@ -418,12 +474,27 @@ class GainPredictor:
         date_str: str,
         days: int
     ) -> Optional[float]:
-        """获取指定日期后N日的实际涨幅"""
+        """获取指定日期后N日的实际涨幅（使用复权价格）"""
         try:
             klines = duckdb.get_klines(code, start_date=date_str, limit=days + 1)
-            if klines and len(klines) >= 2:
-                start_price = klines[0].get('close', 0)
-                end_price = klines[-1].get('close', 0)
+            # P0-3: DuckDB returns DESC order (newest first), so klines[0]=newest, klines[-1]=oldest
+            if klines.success and klines.data is not None and len(klines.data) >= 2:
+                klines_list = klines.data.to_dict('records')
+                klines_list.sort(key=lambda x: x.get('trade_date', ''))
+
+                # v19.9.11: 使用复权价格计算实际涨幅
+                def get_adj_price(k):
+                    close = float(k.get('close', 0))
+                    adj_factor = float(k.get('adj_factor', 1.0))
+                    adj_close = float(k.get('adj_close', 0))
+                    if adj_factor > 1 and adj_close == 0:
+                        return close * adj_factor
+                    elif adj_close > 0:
+                        return adj_close
+                    return close
+
+                start_price = get_adj_price(klines_list[-1])  # oldest
+                end_price = get_adj_price(klines_list[0])     # newest
                 if start_price > 0:
                     return (end_price - start_price) / start_price * 100
         except:

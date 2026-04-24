@@ -29,9 +29,9 @@ class Stats:
 
         # 按日期筛选
         if start_date:
-            trades = [t for t in trades if t.get('created_at', '') >= start_date]
+            trades = [t for t in trades if t.get('recorded_at', '') >= start_date]
         if end_date:
-            trades = [t for t in trades if t.get('created_at', '') <= end_date]
+            trades = [t for t in trades if t.get('recorded_at', '') <= end_date]
 
         if not trades:
             return self._empty_summary()
@@ -63,7 +63,7 @@ class Stats:
             net_sell_proceeds = sell.get('total_amount', 0)
 
             # 通过FIFO找到对应的买入成本
-            matched_buy_cost = self._get_fifo_buy_cost(code, sell.get('created_at', ''), sell_quantity)
+            matched_buy_cost = self._get_fifo_buy_cost(code, sell.get('recorded_at', ''), sell_quantity)
 
             # 真实盈亏 = 卖出净收入 - 买入成本
             real_profit = net_sell_proceeds - matched_buy_cost
@@ -171,17 +171,17 @@ class Stats:
         holding_days_list = []
         for sell in sell_trades:
             code = sell.get('code')
-            sell_date = datetime.fromisoformat(sell.get('created_at', datetime.now().isoformat()))
+            sell_date = datetime.fromisoformat(sell.get('recorded_at', datetime.now().isoformat()))
 
             # 查找对应的买入交易
             buy_trades = [t for t in self.db.get_trades(limit=10000)
                          if t.get('action') == 'buy' and t.get('code') == code
-                         and t.get('created_at', '') < sell.get('created_at', '')]
+                         and t.get('recorded_at', '') < sell.get('recorded_at', '')]
 
             if buy_trades:
                 # 找最早的买入
-                earliest_buy = min(buy_trades, key=lambda x: x.get('created_at', ''))
-                buy_date = datetime.fromisoformat(earliest_buy.get('created_at', datetime.now().isoformat()))
+                earliest_buy = min(buy_trades, key=lambda x: x.get('recorded_at', ''))
+                buy_date = datetime.fromisoformat(earliest_buy.get('recorded_at', datetime.now().isoformat()))
                 holding_days = (sell_date - buy_date).days
                 holding_days_list.append(holding_days)
 
@@ -199,14 +199,12 @@ class Stats:
             # 兜底：使用资金流水估算
             return self._calculate_max_drawdown_from_flows()
 
-        # 使用快照中的总资产（含现金）
-        initial_cash = self.db.get_account().get('initial_cash', 20000)
-        assets_history = [initial_cash]  # 从初始资金开始
+        # 使用快照中的总资产（total_value已包含现金+持仓市值）
+        assets_history = []
 
         for snapshot in portfolio_history:
-            # 每日总资产 = 持仓市值 + （初始资金 - 累计买入 + 累计卖出 + 分红）
             market_value = snapshot.get('total_value', 0)
-            assets_history.append(market_value + initial_cash)
+            assets_history.append(market_value)
 
         if not assets_history:
             return 0
@@ -306,10 +304,10 @@ class Stats:
         # 筛选月度数据
         monthly_trades = []
         for t in trades:
-            created_at = t.get('created_at', '')
-            if created_at:
+            recorded_at = t.get('recorded_at', '')
+            if recorded_at:
                 try:
-                    dt = datetime.fromisoformat(created_at)
+                    dt = datetime.fromisoformat(recorded_at)
                     if dt.year == year and dt.month == month:
                         monthly_trades.append(t)
                 except:
@@ -328,9 +326,14 @@ class Stats:
         buy_trades = [t for t in monthly_trades if t.get('action') == 'buy']
         sell_trades = [t for t in monthly_trades if t.get('action') == 'sell']
 
-        # 简化计算
-        total_profit = sum(t.get('total_amount', 0) for t in sell_trades) - \
-                       sum(t.get('total_amount', 0) for t in buy_trades)
+        # 使用FIFO匹配计算真实月度盈亏
+        total_profit = 0
+        for sell in sell_trades:
+            code = sell.get('code')
+            sell_quantity = sell.get('quantity', 0)
+            net_sell_proceeds = sell.get('total_amount', 0)
+            matched_buy_cost = self._get_fifo_buy_cost(code, sell.get('recorded_at', ''), sell_quantity)
+            total_profit += net_sell_proceeds - matched_buy_cost
 
         return [{
             'year': year,

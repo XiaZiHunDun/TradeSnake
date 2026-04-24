@@ -8,8 +8,11 @@
 
 设计：
 - 存储位置：SQLite stocks 表同库 (tradesnake.db)
-- 表结构：pool_state (pool_tier TEXT PRIMARY KEY, codes TEXT, updated_at TEXT)
-- 持久化内容：核心池+活跃池的股票代码列表
+- 表结构：
+  - pool_state (pool_tier TEXT PRIMARY KEY, codes TEXT, updated_at TEXT)
+  - pool_metadata (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)
+- 持久化内容：核心池+活跃池的股票代码列表（包含名称）
+- 元数据：白名单/黑名单/观察期记录保存在 pool_metadata 表
 """
 
 import sqlite3
@@ -25,6 +28,9 @@ logger = logging.getLogger(__name__)
 # 默认数据库路径
 DATA_DIR = Path("/home/ailearn/projects/TradeSnake/data")
 SQLITE_PATH = DATA_DIR / "tradesnake.db"
+
+# codes 字段的 JSON 结构: [{"code": "000001", "name": "平安银行"}, ...]
+StockInfoJSON = Dict[str, str]  # {"code": str, "name": str}
 
 
 class PoolStateStore:
@@ -64,17 +70,24 @@ class PoolStateStore:
                     updated_at TEXT NOT NULL
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS pool_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
             conn.commit()
         finally:
             conn.close()
 
-    def save_pool_state(self, pool_tier: str, codes: List[str]) -> bool:
+    def save_pool_state(self, pool_tier: str, stocks: List[Dict[str, str]]) -> bool:
         """
         保存单个池的状态
 
         Args:
             pool_tier: 池层级 (CORE/ACTIVE/OBSERVE/TEMP)
-            codes: 股票代码列表
+            stocks: 股票信息列表 [{"code": "000001", "name": "平安银行"}, ...]
 
         Returns:
             是否保存成功
@@ -86,9 +99,9 @@ class PoolStateStore:
                     conn.execute("""
                         INSERT OR REPLACE INTO pool_state (pool_tier, codes, updated_at)
                         VALUES (?, ?, ?)
-                    """, (pool_tier, json.dumps(codes, ensure_ascii=False), datetime.now().isoformat()))
+                    """, (pool_tier, json.dumps(stocks, ensure_ascii=False), datetime.now().isoformat()))
                     conn.commit()
-                    logger.debug(f"保存池状态: {pool_tier}, {len(codes)} 只股票")
+                    logger.debug(f"保存池状态: {pool_tier}, {len(stocks)} 只股票")
                     return True
                 finally:
                     conn.close()
@@ -96,23 +109,25 @@ class PoolStateStore:
                 logger.error(f"保存池状态失败: {pool_tier}, {e}")
                 return False
 
-    def save_all_pools(self, pools: Dict[str, List[str]]) -> bool:
+    def save_all_pools(self, pools: Dict[str, List[Dict[str, str]]]) -> bool:
         """
-        保存所有池的状态
+        保存所有池的状态（过滤掉 _meta 元数据）
 
         Args:
-            pools: {pool_tier: [codes]} 字典
+            pools: {pool_tier: [{"code": "000001", "name": "平安银行"}, ...]} 字典
 
         Returns:
             是否保存成功
         """
-        for pool_tier, codes in pools.items():
-            if not self.save_pool_state(pool_tier, codes):
+        for pool_tier, stocks in pools.items():
+            if pool_tier == '_meta':
+                continue  # _meta 应保存到 pool_metadata 表，不是 pool_state 表
+            if not self.save_pool_state(pool_tier, stocks):
                 return False
         logger.info(f"保存所有池状态完成: {list(pools.keys())}")
         return True
 
-    def load_pool_state(self, pool_tier: str) -> Optional[List[str]]:
+    def load_pool_state(self, pool_tier: str) -> Optional[List[Dict[str, str]]]:
         """
         加载单个池的状态
 
@@ -120,7 +135,7 @@ class PoolStateStore:
             pool_tier: 池层级
 
         Returns:
-            股票代码列表，如果不存在则返回 None
+            股票信息列表 [{"code": "000001", "name": "平安银行"}, ...]，如果不存在则返回 None
         """
         try:
             conn = sqlite3.connect(self.db_path)
@@ -139,12 +154,12 @@ class PoolStateStore:
             logger.error(f"加载池状态失败: {pool_tier}, {e}")
             return None
 
-    def load_all_pools(self) -> Dict[str, List[str]]:
+    def load_all_pools(self) -> Dict[str, List[Dict[str, str]]]:
         """
         加载所有池的状态
 
         Returns:
-            {pool_tier: [codes]} 字典
+            {pool_tier: [{"code": "000001", "name": "平安银行"}, ...]} 字典
         """
         result = {}
         try:
@@ -185,6 +200,73 @@ class PoolStateStore:
                 conn.close()
         except Exception as e:
             logger.error(f"获取池状态更新时间失败: {pool_tier}, {e}")
+            return None
+
+    def save_metadata(self, metadata: Dict) -> bool:
+        """
+        保存白名单、黑名单、观察期记录等元数据
+
+        Args:
+            metadata: {'whitelist': [], 'blacklist': [], 'probation_records': {code: date_str}}
+
+        Returns:
+            是否保存成功
+        """
+        with self._write_lock:
+            try:
+                conn = sqlite3.connect(self.db_path)
+                try:
+                    # 转换日期为字符串
+                    serializable = {
+                        'whitelist': list(metadata.get('whitelist', [])),
+                        'blacklist': list(metadata.get('blacklist', [])),
+                        'probation_records': {
+                            code: dt.isoformat() if isinstance(dt, (date, datetime))
+                            else str(dt) for code, dt in metadata.get('probation_records', {}).items()
+                        }
+                    }
+                    conn.execute("""
+                        INSERT OR REPLACE INTO pool_metadata (key, value, updated_at)
+                        VALUES (?, ?, ?)
+                    """, ('_meta', json.dumps(serializable, ensure_ascii=False), datetime.now().isoformat()))
+                    conn.commit()
+                    logger.debug(f"保存池元数据完成")
+                    return True
+                finally:
+                    conn.close()
+            except Exception as e:
+                logger.error(f"保存池元数据失败: {e}")
+                return False
+
+    def load_metadata(self) -> Optional[Dict]:
+        """
+        加载白名单、黑名单、观察期记录等元数据
+
+        Returns:
+            metadata dict or None
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            try:
+                cursor = conn.execute(
+                    "SELECT value FROM pool_metadata WHERE key = ?",
+                    ('_meta',)
+                )
+                row = cursor.fetchone()
+                if row:
+                    data = json.loads(row[0])
+                    # 反序列化日期
+                    if 'probation_records' in data:
+                        data['probation_records'] = {
+                            code: datetime.fromisoformat(dt_str).date()
+                            for code, dt_str in data['probation_records'].items()
+                        }
+                    return data
+                return None
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error(f"加载池元数据失败: {e}")
             return None
 
     def is_pool_state_fresh(self, pool_tier: str, max_age_hours: int = 24) -> bool:

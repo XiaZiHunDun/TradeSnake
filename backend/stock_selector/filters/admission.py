@@ -72,10 +72,12 @@ class AdmissionFilter:
             return False, financial_reason
 
         # 3. 特殊加成：指数成分（可以直接进入核心/活跃池）
-        in_index = stock.get("in_hs300") or stock.get("in_zz500") or stock.get("in_zz1000")
-        if in_index and target_tier == PoolTier.CORE:
+        if target_tier == PoolTier.CORE:
             if stock.get("in_hs300") or stock.get("in_zz500"):
                 return True, "指数成分加成（沪深300/中证500）"
+        elif target_tier == PoolTier.ACTIVE:
+            if stock.get("in_zz1000"):
+                return True, "指数成分加成（中证1000）"
 
         return True, "满足准入条件"
 
@@ -100,9 +102,9 @@ class AdmissionFilter:
         if revenue_yoy >= 0:
             conditions_met += 1
 
-        # 条件3：资产负债率<70%
+        # 条件3：资产负债率<70%（0表示无负债，是优势）
         debt_ratio = financial_data.get("debt_ratio", 0)
-        if 0 < debt_ratio < 70:
+        if debt_ratio < 70:
             conditions_met += 1
 
         # 3选2通过

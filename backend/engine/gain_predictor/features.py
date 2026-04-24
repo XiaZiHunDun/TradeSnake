@@ -6,7 +6,7 @@
 - 波动率：volatility_20d, atr_14
 - 趋势：ma_position
 - 技术指标：rsi_14, macd, macd_signal
-- 市场状态：board_type, limit_type
+- 市场状态：limit_up, limit_down, volume_ratio
 
 设计文档：docs/plans/engine/gain_predictor/GAIN_PREDICTOR.md
 """
@@ -31,8 +31,27 @@ def calculate_features(klines: List[Dict]) -> Dict[str, float]:
     if not klines or len(klines) < 2:
         return _empty_features()
 
-    closes = [float(k.get('close', 0)) for k in klines]
-    highs = [float(k.get('high', 0)) for k in klines]
+    # 确保按 trade_date 升序排列（DuckDB 使用 trade_date，不是 date）
+    klines = sorted(klines, key=lambda x: x.get('trade_date', ''))
+
+    # v19.9.11: 使用复权价格计算技术指标，避免除权除息造成的缺口
+    # 计算复权收盘价：adj_close = close * adj_factor（当adj_factor>1时）
+    adj_closes = []
+    for k in klines:
+        close = float(k.get('close', 0))
+        adj_factor = float(k.get('adj_factor', 1.0))
+        adj_close = float(k.get('adj_close', 0))
+        if adj_factor > 1 and adj_close == 0:
+            # 如果adj_close未存储，但adj_factor>1，则用close*adj_factor计算
+            adj_close = close * adj_factor
+        elif adj_close > 0:
+            pass  # 使用已存储的adj_close
+        else:
+            adj_close = close  # 无复权时使用原价
+        adj_closes.append(adj_close)
+
+    closes = adj_closes  # 技术指标使用复权价格
+    highs = [float(k.get('high', 0)) for k in klines]  # 高低价暂用原价（简化处理）
     lows = [float(k.get('low', 0)) for k in klines]
     volumes = [float(k.get('volume', 0)) for k in klines]
 

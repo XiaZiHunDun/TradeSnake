@@ -10,7 +10,7 @@
 
 **产品范围（与 `PROJECT_OVERVIEW` 一致）**：批量实时行情抽样（如 `StockDataFetcher.get_batch_market_data`）以 **沪深主板** 为边界，不含创业板、科创板、北交所；全市场股票列表、指数成分等仍可获取，用于列表或标志位，**不等于**对上述非主板标的按主板主流程承担同等批量行情义务。
 
-**版本**: v18.5 | **测试**: 106 个单元测试全部通过
+**版本**: v19.9.9 | **测试**: 106 个单元测试全部通过
 
 **核心流程**: `数据获取 → 数据校验与清洗 → 数据存储`
 
@@ -797,15 +797,52 @@ mv tradesnake_new.db tradesnake.db
 - `backend/stock_selector/market_snapshot.py` - 启动/再平衡用 `market_data` 构建
 - `backend/data_manager/duckdb_store.py` - `get_avg_daily_amount_20d_bulk`（日均成交额批量查询，供 snapshot 使用）
 
-### 8.5 数据源可用性矩阵
+### 8.5 数据源网络特性与可用性矩阵（v19.9.8）
 
-| 数据源 | 用途 | 稳定性 | 依赖 | 失败降级 |
-|--------|------|--------|------|----------|
-| 东方财富(akshare) | 成交额排名 | ⚠️ 不稳定 | 代理 | 随机抽样 |
-| 腾讯行情API | 实时行情 | ✅ 稳定 | 无 | 返回空 |
-| baostock | 财务数据 | ✅ 稳定 | 无 | 返回空 |
-| Tushare Pro | K线/财务 | ✅ 稳定 | 代理/积分 | 返回空 |
-| 新浪行情API | 备用实时行情 | ⚠️ 不稳定 | 无 | 返回空 |
+#### 网络特性说明
+
+| 数据源 | 域名/接口 | 需要代理 | 直连测试 | 说明 |
+|--------|----------|---------|---------|------|
+| **腾讯行情API** | `qt.gtimg.cn` | ❌ 不需要 | ✅ 正常 | 实时行情主力，响应快（<500ms） |
+| **东方财富行情** | `datacenter-web.eastmoney.com` | ❌ 不需要 | ✅ 正常 | 财务数据来源 |
+| **akshare `stock_zh_a_spot_em`** | eastmoney CDN | ❌ 不需要 | ⚠️ 不稳定 | 获取58页数据，连接常被拒，需30秒超时保护 |
+| **新浪行情API** | `hq.sinajs.cn` | ❌ 不需要 | ✅ 正常 | 备用实时行情 |
+| **baostock** | `api.baostock.com` | ❌ 不需要（主路径已移除） | N/A | v19.9.8前：子进程5秒超时备用；主路径已完全移除调用 |
+| **Tushare Pro** | `api.tushare.pro` | ❌ **不需要**（SDK已禁用代理） | ⚠️ 部分可用 | 财务/K线，有积分限制（2000积分）；v19.9.6起SDK内部禁用代理 |
+
+#### 各数据源使用情况
+
+| 数据源 | 使用场景 | 超时/保护机制 | 降级策略 |
+|--------|---------|-------------|----------|
+| 腾讯行情API | 实时行情（主力） | 10秒，3次重试 | → 新浪行情API |
+| 东方财富财务API | ROE/增长率（主力） | 10秒，3次重试 | → akshare补充字段 |
+| akshare `stock_zh_a_spot_em` | 成交额排名（`get_market_cap_leaders`） | **子进程30秒硬超时**（v19.9.8新增） | → 随机抽样 |
+| baostock | ~~财务数据~~ | 已移除调用（v19.9.8） | 依赖 eastmoney + akshare + tushare fallback |
+| Tushare | revenue补充（fallback） | SDK内部 | revenue为0时补充 |
+| akshare `stock_financial_analysis_indicator` | 流动比率/利息保障倍数 | 无超时，约0.7秒 | 失败则跳过 |
+
+#### 数据获取流程（v19.9.8优化后）
+
+```
+get_stock_data_api(limit=1500)
+  └─ get_market_cap_leaders()
+       └─ akshare.stock_zh_a_spot_em()  ← 子进程30秒超时保护
+  └─ get_batch_market_data()
+       └─ MarketDataFetcher → 腾讯API（主力）→ 新浪API（备用）
+  └─ 循环获取财务数据
+       └─ FinancialDataFetcher.get_financial_data()
+            ├─ eastmoney（主力，快速）
+            ├─ akshare补充字段（流动比率等）
+            └─ Tushare revenue fallback（仅当revenue=0时）
+```
+
+> ⚠️ **注意**：代理设置为 `http://192.168.13.218:10808` 时，baostock.com 返回502，腾讯/东方财富直连正常。
+
+### 8.6 版本历史补充
+
+| 版本 | 日期 | 更新 |
+|------|------|------|
+| v19.9.8 | 2026-04-23 | 修复数据刷新挂起问题：1）`get_market_cap_leaders` 加子进程30秒超时；2）移除每股票调用baostock（5秒超时×N只太慢），改为纯eastmoney+akshare+tushare；baostock改为子进程调用（5秒超时）仅作备用 |
 
 ---
 

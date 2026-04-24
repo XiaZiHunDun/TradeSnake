@@ -27,6 +27,10 @@ def _calculate_single_stock_factor(args: Tuple) -> Dict[str, float]:
     """
     计算单只股票的因子分数（用于并行计算）
 
+    注意：此函数与 StockCP.calculate_scores() 逻辑基本一致，但有以下语义差异：
+    1. cashflow=0 或 None 时视为"未知"不应用负向惩罚（calculate_scores 对 cashflow<=0 会惩罚）
+    2. 用于 multiprocessing，需保持为独立函数而非方法
+
     Args:
         args: (code, name, price, pe, roe, net_profit_growth, revenue_growth,
                change_pct, pb, gross_margin, cashflow, debt_ratio, sector)
@@ -38,6 +42,19 @@ def _calculate_single_stock_factor(args: Tuple) -> Dict[str, float]:
      change_pct, pb, gross_margin, cashflow, debt_ratio, sector) = args
 
     try:
+        # 输入验证：处理缺失值
+        # cashflow为0或None时，不应用负向惩罚（视为"未知"而非"零")
+        if cashflow is None or cashflow == 0:
+            cashflow_for_score = None
+        else:
+            cashflow_for_score = cashflow
+
+        # gross_margin为None时，不应用bonus（gross_margin=0是有效值，需区分）
+        if gross_margin is None:
+            gross_margin_for_score = None
+        else:
+            gross_margin_for_score = gross_margin
+
         # 成长分
         net_g = max(0, min(300, net_profit_growth))
         rev_g = max(-50, min(100, revenue_growth))
@@ -55,8 +72,10 @@ def _calculate_single_stock_factor(args: Tuple) -> Dict[str, float]:
                 pe_score = 7
             elif 30 < pe <= 50:
                 pe_score = 3
-            elif pe > 50:
+            elif 50 < pe <= 100:
                 pe_score = -5
+            elif pe > 100:
+                pe_score = -10
 
         peg_bonus = 0
         peg = 0
@@ -70,6 +89,8 @@ def _calculate_single_stock_factor(args: Tuple) -> Dict[str, float]:
                 peg_bonus = 0
             else:
                 peg_bonus = -5
+        elif net_profit_growth < 0:
+            peg_bonus = -3
 
         pb_score = 0
         if pb > 0:
@@ -84,26 +105,31 @@ def _calculate_single_stock_factor(args: Tuple) -> Dict[str, float]:
 
         value_score = max(0, base_roe + pe_score + peg_bonus + pb_score * 0.3)
 
-        # 质量分
+        # 质量分（使用验证后的值）
         cf_score = 0
-        if cashflow > 0 and roe > 0:
-            cf_ratio = cashflow / (roe * 10 + 1)
+        if cashflow_for_score is not None and cashflow_for_score > 0 and roe > 0:
+            cf_ratio = cashflow_for_score / (roe * 10 + 1)
             if 0.5 <= cf_ratio <= 3:
                 cf_score = 15
             elif cf_ratio > 3:
                 cf_score = 10
             else:
                 cf_score = 5
-        elif cashflow <= 0 and roe > 0:
-            cf_score = -5
+        # cashflow <= 0 或缺失时，不应用负向惩罚（视为"未知"）
 
         gm_score = 0
-        if gross_margin == 0 and roe > 10:
-            gm_score = 8
-        elif gross_margin > 30:
-            gm_score = 10
-        elif gross_margin > 15:
-            gm_score = 6
+        if gross_margin_for_score is not None:
+            if gross_margin_for_score == 0 and roe > 10:
+                gm_score = 8
+            elif gross_margin_for_score > 30:
+                gm_score = 10
+            elif gross_margin_for_score > 15:
+                gm_score = 6
+            elif gross_margin_for_score > 0:
+                gm_score = 3
+            elif gross_margin_for_score < 0:
+                gm_score = -5
+        # gross_margin 缺失时，gm_score 保持 0，不应用bonus
 
         debt_score = 0
         if debt_ratio > 80:
@@ -281,21 +307,8 @@ class ParallelCalculator:
                 if progress_callback and completed % 10 == 0:
                     progress_callback(completed, total)
 
-        # 失败重试
-        failed = [r for r in results if not r.get('success', False)]
-        if failed:
-            # 重试失败的计算
-            retry_args = [(f['code'], f['name'], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '')
-                         for f in failed]
-            with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
-                retry_futures = {executor.submit(_calculate_single_stock_factor, args): args[0]
-                                for args in retry_args}
-                for future in as_completed(retry_futures):
-                    result = future.result()
-                    # 更新原结果
-                    for r in results:
-                        if r['code'] == result['code']:
-                            r.update(result)
+        # 失败重试：保留原结果，不再用零值重试（零值会产生垃圾结果）
+        # 重试逻辑已移除，失败的股票保持原始（部分）结果
 
         return results
 
@@ -353,8 +366,8 @@ class ParallelCalculator:
             upper = q3 + 1.5 * iqr
         else:
             # 大数据集使用百分位裁剪
-            lower = np.percentile(arr, (1 - clip_percentile) * 50)
-            upper = np.percentile(arr, clip_percentile * 50)
+            lower = np.percentile(arr, (1 - clip_percentile) * 100)
+            upper = np.percentile(arr, clip_percentile * 100)
 
         if upper == lower:
             return [50.0] * len(values)

@@ -411,12 +411,12 @@ class StockCP:
         object.__setattr__(stock, 'revenue', revenue)
         object.__setattr__(stock, 'cashflow', cashflow)
         object.__setattr__(stock, 'debt_ratio', debt_ratio)
-        object.__setattr__(stock, 'volume', 0)
-        object.__setattr__(stock, 'amount', 0)
-        object.__setattr__(stock, 'dividend_yield', 0)
-        object.__setattr__(stock, 'market_cap', 0)
-        object.__setattr__(stock, 'high', price)
-        object.__setattr__(stock, 'low', price)
+        object.__setattr__(stock, 'volume', kwargs.get('volume', 0))
+        object.__setattr__(stock, 'amount', kwargs.get('amount', 0))
+        object.__setattr__(stock, 'dividend_yield', kwargs.get('dividend_yield', 0))
+        object.__setattr__(stock, 'market_cap', kwargs.get('market_cap', 0))
+        object.__setattr__(stock, 'high', kwargs.get('high', price))
+        object.__setattr__(stock, 'low', kwargs.get('low', price))
         object.__setattr__(stock, 'sector', sector)
         object.__setattr__(stock, 'current_ratio', 0)
         object.__setattr__(stock, 'interest_coverage', 0)
@@ -692,11 +692,11 @@ class StockCP:
 
     def get_risk_level(self) -> str:
         if self.risk_score >= 60:
-            return '高风险'
+            return 'high'
         elif self.risk_score >= 30:
-            return '中等'
+            return 'medium'
         else:
-            return '较低'
+            return 'low'
 
     def get_cp_explanation(self) -> dict:
         """获取战力分解说明"""
@@ -704,7 +704,7 @@ class StockCP:
             'growth': {'weight': 0.30, 'name': '成长分'},
             'value': {'weight': 0.25, 'name': '价值分'},
             'quality': {'weight': 0.20, 'name': '质量分'},
-            'momentum': {'weight': 0.15, 'name': '动量分'},
+            'momentum': {'weight': 0.08, 'name': '动量分'},
         }
 
         factors = []
@@ -736,9 +736,9 @@ class StockCP:
 
         momentum_raw = max(-10, min(10, self.change_pct))
         factors.append({
-            "name": "动量分", "weight": "15%",
+            "name": "动量分", "weight": "8%",
             "raw_score": round(momentum_raw, 1),
-            "contribution": round(self.momentum_score * 0.15, 1),
+            "contribution": round(self.momentum_score * 0.08, 1),
             "detail": f"当日涨跌幅:{self.change_pct:.2f}%"
         })
 
@@ -825,8 +825,8 @@ class CPEngine:
             return CPEngine._robust_normalize_small(arr)
 
         # 大数据集使用百分位裁剪
-        lower = np.percentile(arr, (1 - clip_percentile) * 50)
-        upper = np.percentile(arr, clip_percentile * 50)
+        lower = np.percentile(arr, (1 - clip_percentile) * 100)
+        upper = np.percentile(arr, clip_percentile * 100)
 
         clipped = np.clip(arr, lower, upper)
 
@@ -1278,8 +1278,8 @@ class CPEngine:
         if board == 'main':
             stocks = [s for s in stocks if s.can_trade_newbie]
 
-        sorted_stocks = sorted(stocks, key=lambda s: s.total_cp, reverse=True)
-        return sorted_stocks[-n:]
+        sorted_stocks = sorted(stocks, key=lambda s: s.total_cp, reverse=False)
+        return sorted_stocks[:n] if n > 0 else []
 
     def get_by_code(self, code: str) -> Optional[StockCP]:
         """根据代码获取股票"""
@@ -1376,12 +1376,17 @@ class CPEngine:
             stock.risk_score = cached.risk_score
             stock.peg = cached.peg
 
-            # 重新计算总战力
+            # 计算实时因子（仅在交易时间，权重2%）
+            stock.real_time_score = self.calculate_real_time_score(stock.code, stock.price)
+
+            # 重新计算总战力（包含 real_time_score）
+            norm_real_time = max(-10, min(10, stock.real_time_score))
             base_cp = (
                 stock.growth_score * WEIGHTS['growth'] +
                 stock.value_score * WEIGHTS['value'] +
                 stock.quality_score * WEIGHTS['quality'] +
-                stock.momentum_score * WEIGHTS['momentum']
+                stock.momentum_score * WEIGHTS['momentum'] +
+                norm_real_time * WEIGHTS['real_time']
             )
             risk_factor = 1 - (stock.risk_score / 100) * WEIGHTS['risk_penalty']
             stock.total_cp = max(0, base_cp * risk_factor)

@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional, Set
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -403,7 +404,7 @@ async def background_refresh_task():
                         single = await loop.run_in_executor(None, lambda c=code: get_single_stock_data(c))
                         if single:
                             stocks_data.append(single)
-                    except:
+                    except Exception:
                         pass
 
             print(f"[后台] 最终加载: {len(stocks_data)} 只", flush=True)
@@ -732,7 +733,27 @@ async def lifespan(app: FastAPI):
         all_list_codes = [str(s.get("code", "")) for s in formatted_stock_list if s.get("code")]
         market_data = merge_market_data_for_stock_list(all_list_codes, base_market, index_flags_by_code)
 
+        # v19.9.11: 从 SQLite stocks 表获取财务数据用于选股器准入检查
         financial_data = {}
+        try:
+            import sqlite3
+            sqlite_path = Path("/home/ailearn/projects/TradeSnake/data/tradesnake.db")
+            conn = sqlite3.connect(str(sqlite_path))
+            cursor = conn.execute("""
+                SELECT code, net_profit, revenue_growth, debt_ratio
+                FROM stocks WHERE code IN ({})
+            """.format(','.join('?' * len(all_list_codes))), all_list_codes)
+            for row in cursor:
+                code, net_profit, revenue_growth, debt_ratio = row
+                financial_data[str(code)] = {
+                    'net_profit': net_profit or 0,
+                    'revenue_yoy': revenue_growth or 0,
+                    'debt_ratio': debt_ratio or 0,
+                }
+            conn.close()
+            print(f"[启动] 财务数据加载完成: {len(financial_data)} 只股票")
+        except Exception as e:
+            print(f"[启动] 财务数据加载失败: {e}")
 
         # 注册 UpdateScheduler 必须在 initialize 之前，以便初始化入池事件能写入调度队列
         scheduler = None
@@ -767,12 +788,15 @@ async def lifespan(app: FastAPI):
             print(f"[启动] StockSelector 初始化完成: {selector.get_pool_stats()}")
 
             # 尝试从持久化状态恢复池组成 (v19.9.9)
-            # 如果持久化状态比市场数据更新（24小时内），优先使用持久化状态
-            if selector._pm.has_persistent_state():
-                print("[启动] 检测到新鲜的池状态，尝试恢复...")
+            # 注意：只在新池为空时才恢复，避免覆盖已初始化的有效数据
+            current_stats = selector.get_pool_stats()
+            if sum(current_stats.values()) == 0 and selector._pm.has_persistent_state():
+                print("[启动] 检测到空的池状态，尝试从持久化恢复...")
                 loaded = selector._pm.load_state()
                 if loaded:
                     print(f"[启动] 池状态已从持久化恢复: {selector.get_pool_stats()}")
+            else:
+                print(f"[启动] 使用新初始化的池状态: {current_stats}")
         else:
             print(f"[启动] StockSelector 初始化跳过: stock_list={len(formatted_stock_list)}")
 
@@ -846,6 +870,25 @@ ws_manager = WebSocketManager()
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+# 全局异常处理器 - 捕获所有未处理的异常
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    import traceback
+    error_msg = str(exc)
+    # 隐藏 NoneType 等内部错误信息
+    detail = error_msg if "NoneType" not in error_msg and "attribute" not in error_msg.lower() else "An internal error occurred"
+    print(f"[ERROR] Global exception on {request.method} {request.url.path}: {error_msg}")
+    print(f"[ERROR] Traceback: {traceback.format_exc()}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "error": "Internal server error",
+            "detail": detail
+        }
+    )
 
 
 def get_cors_origins():

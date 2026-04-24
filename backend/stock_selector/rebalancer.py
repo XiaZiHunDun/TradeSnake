@@ -144,6 +144,10 @@ class Rebalancer:
         if info is None:
             return False, "股票信息不存在"
 
+        # P1 Fix: 战力检查 - 战力有效但分数低于阈值时拒绝晋级
+        if info.cp_score_valid and info.cp_score < 30:
+            return False, f"战力评分 {info.cp_score} 低于晋级门槛 30"
+
         # 晋级门槛
         min_volume = config.ADMISSION_CONFIG.get(next_tier.value, {}).get("min_daily_volume_20d", 0)
         if info.daily_volume_20d < min_volume:
@@ -218,9 +222,12 @@ class Rebalancer:
             # 优先级计算（战力越低越优先被挤出）
             priority = 0
 
-            # 战力最低优先
-            cp_score = getattr(info, "cp_score", 0)
-            priority += (100 - cp_score) * 10 if cp_score else 50
+            # 战力最低优先（仅在 cp_score 有效时才使用）
+            # P1 Fix: 添加 cp_score_valid 同步检查，避免使用未刷新的旧值
+            if info.cp_score_valid and info.cp_score > 0:
+                priority += (100 - info.cp_score) * 10
+            else:
+                priority += 50  # cp_score 未更新或为0时，使用默认优先级
 
             # 成交额低迷优先挤出
             if data.get("volume_below_threshold_days", 0) > 0:

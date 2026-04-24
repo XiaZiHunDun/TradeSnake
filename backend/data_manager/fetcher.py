@@ -16,10 +16,17 @@ import time
 import json
 import hashlib
 import threading
+import socket
 import baostock as bs
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 from collections import OrderedDict
+import signal
+
+from .circuit_breaker import call_with_protection, CircuitOpenError, RateLimitExceededError
+
+# 在 baostock 导入后立即设置全局 socket 超时（防止 baostock API 挂起）
+socket.setdefaulttimeout(5)
 
 # ==================== 常量配置 ====================
 MAX_RETRIES = 3
@@ -161,23 +168,44 @@ class StockListFetcher:
         if cached:
             return cached[:limit]
 
-        # 重试机制：东方财富API不稳定
-        last_error = None
-        for attempt in range(3):
-            try:
-                df = ak.stock_zh_a_spot_em()
-                if df is not None and len(df) > 0:
-                    if '成交额' in df.columns:
-                        df = df.sort_values('成交额', ascending=False)
-                        top_codes = df['代码'].head(limit).tolist()
-                        write_cache('top_volume', top_codes, expire_minutes=60)
-                        return top_codes
-            except Exception as e:
-                last_error = e
-                if attempt < 2:
-                    time.sleep(2 * (attempt + 1))  # 2, 4秒指数退避
+        # v19.9.8: akshare.stock_zh_a_spot_em() 直连 eastmoney 不稳定且无内部超时
+        # 使用 subprocess 包装，30秒硬超时，超时则返回空（后续随机抽样）
+        import subprocess
+        py_code = '''
+import akshare as ak
+try:
+    df = ak.stock_zh_a_spot_em()
+    if df is not None and len(df) > 0 and '成交额' in df.columns:
+        df = df.sort_values('成交额', ascending=False)
+        codes = df['代码'].head(3000).tolist()
+        print('SUCCESS:' + ','.join(codes))
+    else:
+        print('EMPTY')
+except Exception as e:
+    print('ERROR:' + str(e))
+'''
+        try:
+            proc = subprocess.run(
+                ['python', '-c', py_code],
+                capture_output=True, text=True, timeout=30,
+                env={**os.environ, 'http_proxy': '', 'https_proxy': '',
+                     'HTTP_PROXY': '', 'HTTPS_PROXY': ''}
+            )
+            output = proc.stdout.strip()
+            if output.startswith('SUCCESS:'):
+                codes_str = output[8:]
+                top_codes = codes_str.split(',')[:limit] if codes_str else []
+                if top_codes:
+                    write_cache('top_volume', top_codes, expire_minutes=60)
+                    return top_codes
+            elif output.startswith('ERROR:'):
+                print(f"获取市值排名失败: {output[6:]}")
+        except subprocess.TimeoutExpired:
+            print("获取市值排名超时（30秒）")
+        except Exception as e:
+            print(f"获取市值排名异常: {e}")
 
-        print(f"获取市值排名失败: {last_error}")
+        print("获取市值排名失败，使用随机抽样")
         return []
 
 
@@ -373,113 +401,129 @@ class MarketDataFetcher:
         return stocks
 
 
-# ==================== Baostock 会话 ====================
-
-class BaoStockSession:
-    """封装单次 baostock 会话，支持自动重连"""
-
-    def __init__(self, max_reuses: int = 500):
-        self._bs = bs
-        self._reuses = 0
-        self._max_reuses = max_reuses
-        self._logged_in = False
-        self._login()
-
-    def _login(self):
-        """登录 baostock"""
-        lg = self._bs.login()
-        if lg.error_code != '0':
-            raise ConnectionError(f"baostock login failed: {lg.error_msg}")
-        self._logged_in = True
-
-    def query(self, query_func, *args, **kwargs):
-        """执行查询，超限自动重连"""
-        if self._reuses >= self._max_reuses:
-            self._relogin()
-        try:
-            result = query_func(*args, **kwargs)
-            if result.error_code != '0':
-                self._relogin()
-                result = query_func(*args, **kwargs)
-            self._reuses += 1
-            return result
-        except Exception:
-            self._relogin()
-            raise
-
-    def _relogin(self):
-        """重新登录"""
-        was_logged_in = self._logged_in
-        self._logged_in = False
-        if was_logged_in:
-            self._bs.logout()
-        self._login()
-        self._reuses = 0
-
-    def logout(self):
-        """登出"""
-        if self._logged_in:
-            self._bs.logout()
-            self._logged_in = False
+# ==================== Baostock 子进程调用 ====================
+# v19.9.8: baostock.com 通过代理无法访问（C扩展socket阻塞无法中断）
+# 用subprocess包装查询，5秒超时，失败则返回None
 
 
-# ==================== Baostock 连接池 ====================
+def _run_baostock_query_py(symbol: str) -> str:
+    """在子进程中运行baostock查询，返回JSON字符串（超时返回空）"""
+    bs_code = f"sh.{symbol}" if symbol.startswith('6') else f"sz.{symbol}"
+    code = '''
+import sys
+import os
+os.environ.pop('http_proxy', None)
+os.environ.pop('https_proxy', None)
+os.environ.pop('HTTP_PROXY', None)
+os.environ.pop('HTTPS_PROXY', None)
+
+import baostock as bs
+import json
+
+try:
+    lg = bs.login()
+    if lg.error_code != '0':
+        print('LOGIN_FAIL')
+        sys.exit(0)
+
+    bs_code = '%s'
+
+    result = {'roe': 0, 'net_profit_growth': 0, 'revenue_growth': 0,
+              'gross_margin': 0, 'revenue': 0, 'cashflow': 0, 'debt_ratio': 0}
+
+    # 盈利能力
+    rs = bs.query_profit_data(code=bs_code, year=2024, quarter=4)
+    if rs.error_code == '0':
+        data = rs.get_data()
+        if len(data) > 0:
+            row = data.iloc[-1]
+            roe = row.get('roeAvg')
+            if roe not in (None, '', 'nan') and str(roe) != 'nan':
+                result['roe'] = round(float(roe) * 100, 2)
+            gp = row.get('gpMargin')
+            if gp not in (None, '', 'nan') and str(gp) != 'nan':
+                result['gross_margin'] = round(float(gp) * 100, 2)
+            mbrev = row.get('MBRevenue')
+            if mbrev not in (None, '', 'nan') and str(mbrev) != 'nan':
+                result['revenue'] = round(float(mbrev) / 100000000, 2)
+
+    # 成长能力
+    rs = bs.query_growth_data(code=bs_code, year=2024, quarter=4)
+    if rs.error_code == '0':
+        data = rs.get_data()
+        if len(data) > 0:
+            row = data.iloc[-1]
+            yoyni = row.get('YOYNI')
+            if yoyni not in (None, '', 'nan') and str(yoyni) != 'nan':
+                result['net_profit_growth'] = round(float(yoyni) * 100, 2)
+            yoyor = row.get('YOYOR')
+            if yoyor not in (None, '', 'nan') and str(yoyor) != 'nan':
+                result['revenue_growth'] = round(float(yoyor) * 100, 2)
+
+    bs.logout()
+    print(json.dumps(result))
+except Exception as e:
+    print('ERROR:' + str(e))
+''' % bs_code
+    return code
+
 
 class BaoStockPool:
-    """Baostock 连接池，避免频繁 login/logout"""
+    """Baostock 连接池 v19.9.8
+
+    使用子进程执行查询，5秒超时。
+    超时或网络错误时 FinancialDataFetcher 会 fallback 到 tushare。
+    """
 
     def __init__(self, pool_size: int = 5, max_reuses: int = 500):
         self._pool_size = pool_size
         self._max_reuses = max_reuses
-        self._sessions: List[BaoStockSession] = []
+        self._sessions: List = []
         self._lock = threading.RLock()
         self._initialized = False
 
-    def _ensure_initialized(self):
-        """延迟初始化连接池（首次使用时）"""
-        if self._initialized:
-            return
-        with self._lock:
-            if self._initialized:
-                return
-            for _ in range(self._pool_size):
-                try:
-                    session = BaoStockSession(max_reuses=self._max_reuses)
-                    self._sessions.append(session)
-                except Exception as e:
-                    print(f"  警告: Baostock连接池初始化失败: {e}")
-            self._initialized = True
+    def acquire(self):
+        """获取一个连接（直接返回 self，由 _fetch_from_baostock 使用）"""
+        return self
 
-    def acquire(self) -> BaoStockSession:
-        """获取一个连接"""
-        with self._lock:
-            self._ensure_initialized()
-            if not self._sessions:
-                # 池空了，创建一个新连接
-                session = BaoStockSession(max_reuses=self._max_reuses)
-                return session
-            return self._sessions.pop(0)
+    def query_in_subprocess(self, symbol: str) -> Optional[Dict]:
+        """在子进程中执行 baostock 查询，5秒超时"""
+        import subprocess
+        import json
 
-    def release(self, session: BaoStockSession):
-        """归还一个连接"""
-        with self._lock:
-            if session is not None:
-                if len(self._sessions) < self._pool_size:
-                    self._sessions.append(session)
-                else:
-                    # 池已满，直接关闭连接
-                    session.logout()
+        py_code = _run_baostock_query_py(symbol)
+        try:
+            proc = subprocess.run(
+                ['python', '-c', py_code],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env={**os.environ, 'http_proxy': '', 'https_proxy': '',
+                     'HTTP_PROXY': '', 'HTTPS_PROXY': ''}
+            )
+            output = proc.stdout.strip()
+            if output == 'LOGIN_FAIL' or output.startswith('ERROR:'):
+                return None
+            if output:
+                return json.loads(output)
+        except subprocess.TimeoutExpired:
+            print(f"  baostock 查询超时 {symbol}")
+        except Exception as e:
+            print(f"  baostock 子进程异常 {symbol}: {e}")
+        return None
+
+    def release(self, session):
+        """归还连接（无操作）"""
+        pass
 
     def close(self):
-        """关闭池中所有连接（应用退出时调用）"""
-        with self._lock:
-            for session in self._sessions:
-                try:
-                    session.logout()
-                except:
-                    pass
-            self._sessions.clear()
-            self._initialized = False
+        """关闭池"""
+        pass
+
+
+# 全局单例（延迟创建）
+_bs_pool = None
+_bs_pool_lock = threading.Lock()
 
 
 # ==================== 财务数据获取 ====================
@@ -517,29 +561,15 @@ class FinancialDataFetcher:
             market = 'SZ'
 
         em_data = self._fetch_from_eastmoney(symbol, market)
-        bs_data = self._fetch_from_baostock(symbol)
 
-        if em_data and bs_data:
-            result = em_data.copy()
-            if result.get('gross_margin', 0) == 0 and bs_data.get('gross_margin', 0) > 0:
-                result['gross_margin'] = bs_data['gross_margin']
-            if result.get('revenue', 0) == 0 and bs_data.get('revenue', 0) > 0:
-                result['revenue'] = bs_data['revenue']
-            if result.get('debt_ratio', 0) == 0 and bs_data.get('debt_ratio', 0) > 0:
-                result['debt_ratio'] = bs_data['debt_ratio']
-            if result.get('cashflow', 0) == 0 and bs_data.get('cashflow', 0) != 0:
-                result['cashflow'] = bs_data['cashflow']
-            if bs_data.get('dividend_per_share'):
-                result['dividend_per_share'] = bs_data['dividend_per_share']
-            result['source'] = 'eastmoney+baostock'
-        elif em_data:
+        # v19.9.8: 不再对每只股票调用 baostock（5秒超时×N只太慢）
+        # 财务数据完全依赖 eastmoney + akshare + tushare fallback
+        if em_data:
             result = em_data
-        elif bs_data:
-            result = bs_data
         else:
             result = None
 
-        # Tushare revenue fallback：当 eastmoney/baostock 的 revenue 为 0 时，从 Tushare 补充
+        # Tushare revenue fallback：当 eastmoney 的 revenue 为 0 时，从 Tushare 补充
         if result and result.get('revenue', 0) == 0:
             try:
                 from .providers.tushare import get_tushare_provider
@@ -552,7 +582,7 @@ class FinancialDataFetcher:
                 print(f"  Tushare revenue fallback失败 {symbol}: {e}")
 
         try:
-            df_ak = ak.stock_financial_analysis_indicator(symbol=symbol, start_year='2023')
+            df_ak = call_with_protection('akshare', ak.stock_financial_analysis_indicator, symbol=symbol, start_year='2023')
             if df_ak is not None and len(df_ak) > 0:
                 latest_ak = df_ak.iloc[-1]
                 if result is None:
@@ -620,110 +650,13 @@ class FinancialDataFetcher:
         return None
 
     def _fetch_from_baostock(self, symbol: str) -> Optional[Dict]:
-        session = self._bs_pool.acquire()
-        try:
-            try:
-                if symbol.startswith('6'):
-                    baostock_code = f'sh.{symbol}'
-                else:
-                    baostock_code = f'sz.{symbol}'
-
-                result = {
-                    'roe': 0, 'net_profit_growth': 0, 'revenue_growth': 0,
-                    'gross_margin': 0, 'revenue': 0, 'cashflow': 0, 'debt_ratio': 0,
-                    'dividend_yield': 0, 'data_quality': 'low', 'source': 'baostock'
-                }
-
-                try:
-                    rs = session.query(bs.query_profit_data, code=baostock_code, year=2024, quarter=4)
-                    if rs.error_code == '0':
-                        data = rs.get_data()
-                        if len(data) > 0:
-                            row = data.iloc[-1]
-                            roe = row.get('roeAvg')
-                            if roe is not None and str(roe) != '' and str(roe) != 'nan':
-                                result['roe'] = round(float(roe) * 100, 2)
-                            gp = row.get('gpMargin')
-                            if gp is not None and str(gp) != '' and str(gp) != 'nan':
-                                result['gross_margin'] = round(float(gp) * 100, 2)
-                            mbrevenue = row.get('MBRevenue')
-                            if mbrevenue is not None and str(mbrevenue) != '' and str(mbrevenue) != 'nan':
-                                result['revenue'] = round(float(mbrevenue) / 100000000, 2)
-                except Exception as e:
-                    print(f"  baostock盈利能力获取失败 {symbol}: {e}")
-
-                try:
-                    rs = session.query(bs.query_growth_data, code=baostock_code, year=2024, quarter=4)
-                    if rs.error_code == '0':
-                        data = rs.get_data()
-                        if len(data) > 0:
-                            row = data.iloc[-1]
-                            yoyni = row.get('YOYNI')
-                            if yoyni is not None and str(yoyni) != '' and str(yoyni) != 'nan':
-                                result['net_profit_growth'] = round(float(yoyni) * 100, 2)
-                            yoyor = row.get('YOYOR')
-                            if yoyor is not None and str(yoyor) != '' and str(yoyor) != 'nan':
-                                result['revenue_growth'] = round(float(yoyor) * 100, 2)
-                except Exception as e:
-                    print(f"  baostock成长能力获取失败 {symbol}: {e}")
-
-                try:
-                    rs = session.query(bs.query_balance_data, code=baostock_code, year=2024, quarter=4)
-                    if rs.error_code == '0':
-                        data = rs.get_data()
-                        if len(data) > 0:
-                            row = data.iloc[-1]
-                            asset_to_equity = row.get('assetToEquity')
-                            if asset_to_equity is not None and str(asset_to_equity) != '' and str(asset_to_equity) != 'nan':
-                                ate = float(asset_to_equity)
-                                if ate > 0:
-                                    result['debt_ratio'] = round((1 - 1/ate) * 100, 2)
-                except Exception as e:
-                    print(f"  baostock资产负债表获取失败 {symbol}: {e}")
-
-                try:
-                    rs = session.query(bs.query_cash_flow_data, code=baostock_code, year=2024, quarter=4)
-                    if rs.error_code == '0':
-                        data = rs.get_data()
-                        if len(data) > 0:
-                            row = data.iloc[-1]
-                            cfo_to_np = row.get('CFOToNP')
-                            cfo_ratio = None
-                            if cfo_to_np is not None and str(cfo_to_np) != '' and str(cfo_to_np) != 'nan':
-                                cfo_ratio = float(cfo_to_np)
-                            elif cfo_to_np is not None and str(cfo_to_np) == '':
-                                cfo_to_or = row.get('CFOToOR')
-                                if cfo_to_or is not None and str(cfo_to_or) != '' and str(cfo_to_or) != 'nan':
-                                    cfo_ratio = float(cfo_to_or)
-                            if cfo_ratio is not None and cfo_ratio > 0:
-                                result['cashflow'] = 1
-                            elif cfo_ratio is not None and cfo_ratio < 0:
-                                result['cashflow'] = -1
-                except Exception as e:
-                    print(f"  baostock现金流获取失败 {symbol}: {e}")
-
-                try:
-                    rs = session.query(bs.query_dividend_data, code=baostock_code, year=2024)
-                    if rs.error_code == '0':
-                        data = rs.get_data()
-                        if len(data) > 0:
-                            row = data.iloc[-1]
-                            dividend_ps = row.get('dividCashPsBeforeTax')
-                            if dividend_ps is not None and str(dividend_ps) != '' and str(dividend_ps) != 'nan':
-                                result['dividend_per_share'] = round(float(dividend_ps), 2)
-                except Exception as e:
-                    print(f"  baostock股息数据获取失败 {symbol}: {e}")
-
-                if result['roe'] > 0 or result['net_profit_growth'] != 0:
-                    result['data_quality'] = 'medium'
-
-                return result
-
-            except Exception as e:
-                print(f"  baostock获取财务数据失败 {symbol}: {e}")
-                return None
-        finally:
-            self._bs_pool.release(session)
+        # v19.9.8: 使用子进程调用 baostock，5秒超时（避免 C 扩展阻塞）
+        result = self._bs_pool.query_in_subprocess(symbol)
+        if result:
+            result['source'] = 'baostock'
+            if result.get('roe', 0) > 0 or result.get('net_profit_growth', 0) != 0:
+                result['data_quality'] = 'medium'
+        return result
 
 
 # ==================== 指数成分股获取器 ====================
@@ -778,7 +711,7 @@ class IndexDataFetcher:
         result = {}
         for index_name, index_code in self.INDEX_CODES.items():
             try:
-                df = ak.index_stock_cons_csindex(symbol=index_code)
+                df = call_with_protection('akshare', ak.index_stock_cons_csindex, symbol=index_code)
                 if df is not None and len(df) > 0:
                     stocks = []
                     for _, row in df.iterrows():
@@ -1075,7 +1008,7 @@ def get_single_stock_data(code: str) -> Optional[Dict]:
         avg_daily_amount_20d = _calculate_avg_daily_amount_20d(clean_code)
 
     return {
-        'code': tencent_code,
+        'code': clean_code,  # 规范化数字代码，与DuckDB存储格式一致
         'name': mkt.get('name', ''),
         'price': price,
         'open': mkt.get('open', 0),
@@ -1307,7 +1240,7 @@ def batch_update_stocks_pe_roe() -> Dict:
                     if cursor.rowcount > 0:
                         pe_updated += 1
                 except Exception as e:
-                    pass
+                    print(f"PE/PB UPDATE failed for {code}: {e}")
 
         db.conn.commit()
         result['pe_updated'] = pe_updated
@@ -1343,8 +1276,8 @@ def batch_update_stocks_pe_roe() -> Dict:
                           datetime.now().isoformat(), code))
                     if cursor.rowcount > 0:
                         roe_updated += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"ROE UPDATE failed for {code}: {e}")
 
         db.conn.commit()
         result['roe_updated'] = roe_updated

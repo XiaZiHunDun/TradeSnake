@@ -13,7 +13,7 @@ from backend.models.schemas import (
     AccountResponse, HoldingDetail, PortfolioResponse,
     TradeRequest, TradeResponse, TradeHistoryResponse,
     UserProfile, UserProfileResponse, HealthResponse,
-    MarketStatsResponse,
+    MarketStatsResponse, PoolStatsResponse,
     GainPredictionResponse, GainPredictionItem,
     ProbabilityPredictionResponse, ProbabilityPredictionItem,
     FullBacktestResponse, BacktestTradeResponse, EquityPointResponse,
@@ -40,7 +40,7 @@ from backend.backtester.backtest import BacktestEngine
 from backend.data_manager.fetcher import get_stock_data_api, get_single_stock_data
 from backend.data_manager.cache import get_cache_manager
 def get_stock_selector():
-    """延迟导入避免循环依赖"""
+    """获取StockSelector单例（避免循环导入）"""
     from backend.api.main import get_stock_selector as _get
     return _get()
 
@@ -60,7 +60,12 @@ _cp_lock = asyncio.Lock()
 
 
 def _build_stock_response(stock: StockCP) -> SingleStockResponse:
-    """构建单股票响应数据"""
+    """构建单股票响应数据
+
+    Note: momentum_3d/5d and fusion fields (kelly_position, predicted_gain_5d,
+    up_probability_5d, prediction_confidence, fused_score) are only populated
+    in the fusion path. Here we set them to defaults since this is the CP path.
+    """
     return SingleStockResponse(
         code=stock.code,
         name=stock.name,
@@ -85,14 +90,21 @@ def _build_stock_response(stock: StockCP) -> SingleStockResponse:
         debt_ratio=stock.debt_ratio,
         dividend_yield=stock.dividend_yield,
         market_cap=stock.market_cap,
+        high=stock.high,
+        low=stock.low,
         data_quality=stock.data_quality,
         board_type=stock.board_type,
         board_name=stock.board_name,
+        sector=stock.sector,
         can_trade_newbie=stock.can_trade_newbie,
         trade_requirement=stock.trade_requirement,
         current_ratio=stock.current_ratio,
         interest_coverage=stock.interest_coverage,
-        deducted_net_profit=stock.deducted_net_profit
+        deducted_net_profit=stock.deducted_net_profit,
+        # Fusion/prediction fields - set to defaults in CP path
+        # momentum_3d=0, momentum_5d=0, net_benefit_hint='',
+        # kelly_position=0, predicted_gain_5d=0, up_probability_5d=0,
+        # prediction_confidence=0, fused_score=0
     )
 
 
@@ -218,7 +230,8 @@ async def get_recommend(
             if stock_obj:
                 resp = _build_stock_response(stock_obj)
                 resp_dict = resp.model_dump()
-                # 添加融合字段
+                # 融合字段注入：这些字段在StockCPData schema中已定义（v19.9.5），
+                # 但Pydantic对model_dump后的dict不会重新验证，直接注入是安全的。
                 resp_dict['kelly_position'] = sig.get('kelly_position', 0)
                 resp_dict['predicted_gain_5d'] = sig.get('predicted_gain_5d', 0)
                 resp_dict['up_probability_5d'] = sig.get('up_probability_5d', 0)
@@ -285,7 +298,7 @@ async def get_swap_suggestions(principal: float = Query(100000, gt=0)):
             'to_name': s.get('to_name', ''),
             'to_cp': s.get('to_cp', 0),
             'cp_improvement': s.get('cp_improvement', 0),
-            'net_benefit': s.get('net_profit', 0),  # 字段映射
+            'net_benefit': s.get('net_profit', 0),  # net_profit -> net_benefit 字段映射
             'trade_cost': s.get('trade_cost', 0),
             'holding_days_equivalent': s.get('breakeven_days', 0),  # 字段映射
             'action_level': s.get('action_level', ''),
@@ -390,7 +403,7 @@ async def get_portfolio():
             profit=round(profit, 2),
             profit_rate=round(profit_rate, 2),
             bought_at=h.get('latest_bought_at', ''),
-            can_sell=qty,
+            can_sell=max(0, qty - db.get_today_bought_quantity(lookup_code)),
             on_cooldown=False,
             cooldown_days_remaining=0,
         )
@@ -411,8 +424,13 @@ async def get_portfolio():
 
 @router.post("/api/trade/buy", response_model=TradeResponse)
 async def trade_buy(req: TradeRequest):
-    """买入股票"""
-    result = _trader.buy(req.code, req.quantity)
+    """买入股票
+
+    字段说明:
+    - total_amount: 成交金额 (gross, 印花税=0)
+    - cost_detail.total_cost: 实际扣款 (net, 含佣金+过户费)
+    """
+    result = _trader.buy(req.code, req.quantity, price=req.price, order_type=req.order_type)
     if not result.get('success'):
         raise HTTPException(status_code=400, detail=result.get('error', '买入失败'))
     # 映射字段以匹配 TradeResponse schema
@@ -423,12 +441,12 @@ async def trade_buy(req: TradeRequest):
         name=result.get('name', ''),
         quantity=result.get('quantity', 0),
         price=result.get('price', 0),
-        total_amount=result.get('total_cost', 0),
+        total_amount=result.get('price', 0) * result.get('quantity', 0),  # 成交金额 (gross)
         cost_detail={
             'commission': result.get('commission', 0),
-            'stamp_tax': 0,
+            'stamp_tax': 0,  # 买入无印花税
             'transfer_fee': result.get('transfer_fee', 0),
-            'total_cost': result.get('total_cost', 0),
+            'total_cost': result.get('total_cost', 0),  # 实际扣款 (net)
         },
         cash_after=result.get('remaining_cash', 0),
         message=''
@@ -437,8 +455,13 @@ async def trade_buy(req: TradeRequest):
 
 @router.post("/api/trade/sell", response_model=TradeResponse)
 async def trade_sell(req: TradeRequest):
-    """卖出股票"""
-    result = _trader.sell(req.code, req.quantity)
+    """卖出股票
+
+    字段说明:
+    - total_amount: 成交金额 (gross, 卖出得到的总金额)
+    - cost_detail.total_cost: 实际到账 (net, 扣除佣金+印花税+过户费后)
+    """
+    result = _trader.sell(req.code, req.quantity, price=req.price, order_type=req.order_type)
     if not result.get('success'):
         raise HTTPException(status_code=400, detail=result.get('error', '卖出失败'))
     # 映射字段以匹配 TradeResponse schema
@@ -449,12 +472,12 @@ async def trade_sell(req: TradeRequest):
         name=result.get('name', ''),
         quantity=result.get('quantity', 0),
         price=result.get('price', 0),
-        total_amount=result.get('total_amount', 0),
+        total_amount=result.get('sell_value', 0),  # 成交金额 (gross)
         cost_detail={
             'commission': result.get('commission', 0),
             'stamp_tax': result.get('stamp_tax', 0),
             'transfer_fee': result.get('transfer_fee', 0),
-            'total_cost': result.get('total_cost', 0),
+            'total_cost': result.get('total_proceeds', 0),  # 实际到账 (net)
         },
         cash_after=result.get('remaining_cash', 0),
         message=''
@@ -521,7 +544,7 @@ async def backtest_benchmark(
 async def full_backtest(
     start_date: str = Query(..., regex="^\\d{4}-\\d{2}-\\d{2}$"),
     end_date: str = Query(..., regex="^\\d{4}-\\d{2}-\\d{2}$"),
-    strategy: str = Query("top", pattern="^(top|value|growth|momentum|quality|rising_cp|hybrid)$"),
+    strategy: str = Query("top", pattern="^(top|value|growth|momentum|rising_cp|hybrid)$"),
     top_n: int = Query(10, ge=1, le=50),
     initial_capital: float = Query(20000, gt=0)
 ):
@@ -562,7 +585,8 @@ async def full_backtest(
         win_rate=round(stats.win_rate, 2),
         total_trades=stats.total_trades,
         equity_curve=[EquityPointResponse(**eq) for eq in stats.equity_curve],
-        trades=[BacktestTradeResponse(**t) for t in stats.trades]
+        trades=[BacktestTradeResponse(**t) for t in stats.trades],
+        completed_pnls=stats.completed_pnls
     )
 
 
@@ -610,10 +634,24 @@ async def health_check():
         data_fresh=last_update_time is not None,
         last_update=last_update_time or now,
         stocks_count=len(cp_engine.stocks)
+)
+
+
+# ==================== 股票池统计 ====================
+
+@router.get("/api/pool/stats", response_model=PoolStatsResponse)
+async def get_pool_stats():
+    """获取股票池统计信息"""
+    from backend.stock_selector.stock_selector import get_stock_selector
+    selector = get_stock_selector()
+    stats = selector.get_pool_stats()
+    return PoolStatsResponse(
+        core_count=stats.get('core', 0),
+        active_count=stats.get('active', 0),
+        observe_count=stats.get('observe', 0),
+        total_count=stats.get('core', 0) + stats.get('active', 0) + stats.get('observe', 0)
     )
 
-
-# ==================== 数据刷新 ====================
 
 @router.post("/api/refresh")
 async def refresh_data(limit: int = Query(200, ge=1, le=500)):
@@ -657,7 +695,7 @@ async def refresh_data(limit: int = Query(200, ge=1, le=500)):
                         single = get_single_stock_data(code)
                         if single:
                             stocks_data.append(single)
-                    except:
+                    except Exception:
                         pass
 
             print(f"[刷新] 最终加载: {len(stocks_data)} 只")

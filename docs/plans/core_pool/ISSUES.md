@@ -406,6 +406,30 @@ DELETE FROM stocks WHERE code LIKE 'sh%' OR code LIKE 'sz%'
 
 ---
 
+### ✅ Team模式审查: stock_selector 问题修复 (v19.9.9)
+
+**审查时间**: 2026-04-23
+
+| 优先级 | 问题 | 修复文件 | 状态 |
+|--------|------|----------|------|
+| P2 | save_state 未保存 whitelist/blacklist/probation_records | pool_state_store.py, pool_manager.py | ✅ 已修复 |
+| P2 | load_state 未恢复 whitelist/blacklist/probation_records | pool_manager.py | ✅ 已修复 |
+| P2 | on_financial_warning 接口类型不一致 | stock_selector.py | ✅ 已修复 |
+
+---
+
+### ✅ Team模式审查: 其他模块问题修复 (v19.9.9)
+
+| 模块 | 问题 | 优先级 | 状态 |
+|------|------|--------|------|
+| probability_predictor | data_timestamp 引用错误 | P0 | ✅ 已修复 |
+| models | risk_level 默认值不一致 | P1 | ✅ 已修复 |
+| data_manager | query() 使用错误锁/连接 | P2 | ✅ 已修复 |
+| api | /api/pool/stats _selector 未定义 | P0 | ✅ 已修复 |
+| backtester | 过户费未区分沪深市场 | P1 | ✅ 已修复 |
+
+---
+
 ## 四、优先级说明
 
 | 优先级 | 说明 | 响应时间 |

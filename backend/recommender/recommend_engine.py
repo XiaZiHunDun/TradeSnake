@@ -4,6 +4,7 @@
 支持三大场景：换股、纯买入、纯卖出
 """
 
+import logging
 from typing import List, Dict, Optional, Set
 from backend.engine import StockCP, TradeDecision
 
@@ -13,6 +14,8 @@ from .buy_analyzer import BuyAnalyzer
 from .sell_analyzer import SellAnalyzer
 from .fusion import PredictionFusion
 from .prompts import generate_stock_prompt
+
+logger = logging.getLogger(__name__)
 
 
 class RecommenderCallback:
@@ -117,7 +120,8 @@ class RecommendEngine:
         holdings: List[Dict],
         all_stocks: List[StockCP],
         principal: float = 100000,
-        holding_days: int = 30
+        holding_days: int = 30,
+        use_predictions: bool = True
     ) -> List[Dict]:
         """获取换股建议列表
 
@@ -126,25 +130,52 @@ class RecommendEngine:
             all_stocks: 全量股票列表
             principal: 本金
             holding_days: 持有天数
+            use_predictions: 是否考虑预测数据 (P1: 增强换股质量)
 
         Returns:
             换股建议列表
         """
         suggestions = []
 
+        # P1: 获取预测数据以增强换股评分
+        gain_preds, prob_preds = {}, {}
+        if use_predictions:
+            codes = [h.get('code') for h in holdings] + [s.code for s in all_stocks]
+            gain_preds, prob_preds = PredictionFusion.get_latest_predictions(codes)
+
         for holding in holdings:
             code = holding.get('code')
             current_cp = holding.get('cp', 0)
 
             if current_cp <= 0:
+                logger.info(f"Swap: skipped {code} ({holding.get('name', '')}) - missing CP (cp={current_cp})")
                 continue
 
             holding_cp = current_cp
+            # 获取持仓股的预测数据
+            holding_gain = gain_preds.get(code)
+            holding_prob = prob_preds.get(code)
 
             for stock in all_stocks:
                 if stock.code == code:
                     continue
-                if stock.total_cp <= holding_cp:
+
+                # P1: 计算综合评分：战力 + 预测涨幅 + 上涨概率
+                stock_gain_pred = gain_preds.get(stock.code)
+                stock_prob_pred = prob_preds.get(stock.code)
+
+                # 综合CP评分：如果有预测数据则加成
+                stock_fused_cp = stock.total_cp
+                if stock_prob_pred and stock_prob_pred.up_probability_5d > 0.5:
+                    # 上涨概率 > 50% 时，CP 适度加成
+                    prob_boost = (stock_prob_pred.up_probability_5d - 0.5) * 20  # 最多 +10
+                    stock_fused_cp += prob_boost
+                if stock_gain_pred and stock_gain_pred.predicted_gain_5d > 0:
+                    # 正预测涨幅时，CP 进一步加成
+                    gain_boost = min(stock_gain_pred.predicted_gain_5d / 5, 10)  # 最多 +10
+                    stock_fused_cp += gain_boost
+
+                if stock_fused_cp <= holding_cp:
                     continue
 
                 # 过滤
@@ -152,7 +183,7 @@ class RecommendEngine:
                     continue
 
                 decision = TradeDecision.should_swap(
-                    holding_cp, stock.total_cp, principal, holding_days
+                    holding_cp, stock_fused_cp, principal, holding_days
                 )
 
                 if decision['action'] in ('swap', 'strong_buy'):
@@ -175,7 +206,10 @@ class RecommendEngine:
                         'trade_cost': round(decision['trade_cost'], 2),
                         'breakeven_days': breakeven,
                         'action_level': decision['action_level'],
-                        'action_label': decision['action_label']
+                        'action_label': decision['action_label'],
+                        # P1: 预测字段
+                        'predicted_gain_5d': round(stock_gain_pred.predicted_gain_5d, 2) if stock_gain_pred else None,
+                        'up_probability_5d': round(stock_prob_pred.up_probability_5d, 3) if stock_prob_pred else None,
                     })
 
         suggestions.sort(key=lambda x: x['cp_improvement'], reverse=True)
@@ -257,16 +291,23 @@ class RecommendEngine:
         codes = [s.code for s in stocks]
         gain_preds, prob_preds = PredictionFusion.get_latest_predictions(codes)
 
-        # 2. 批量融合
+        # 2. P1 Fix: 先用 buy_analyzer 风险检查过滤，保证 fusion 只看到可以买入的股票
+        #    避免融合评分高但实际无法买入的股票浪费限额
+        buyable_stocks = [s for s in stocks if BuyAnalyzer._is_buyable(s)]
+        skipped_stocks = len(stocks) - len(buyable_stocks)
+        if skipped_stocks > 0:
+            logger.info(f"Fusion: {skipped_stocks} stocks skipped by buy_analyzer risk check before fusion")
+
+        # 3. 批量融合（仅在可买入的股票上运行）
         fusion_results = PredictionFusion.fuse_batch(
-            stocks=stocks,
+            stocks=buyable_stocks,
             gain_predictions=gain_preds,
             prob_predictions=prob_preds,
             risk_preference=risk_preference
         )
 
-        # 3. 取Top N进行买入分析
-        top_stocks = [s for s in stocks if s.code in {r.code for r in fusion_results[:limit * 2]}]
+        # 4. 取Top N进行买入分析
+        top_stocks = [s for s in buyable_stocks if s.code in {r.code for r in fusion_results[:limit * 2]}]
 
         signals = []
         for stock in top_stocks:

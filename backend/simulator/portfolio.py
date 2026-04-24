@@ -157,8 +157,8 @@ class Portfolio:
                     tax_rate = 0
                 net_dividend = cash_dividend * old_qty * (1 - tax_rate)
 
-                # 成本价调减
-                new_cost = new_cost - cash_dividend * (1 - tax_rate)
+                # 成本价调减（使用完整分红金额，扣税仅影响实际到账）
+                new_cost = new_cost - cash_dividend
 
                 # 分红入账
                 from .account import Account

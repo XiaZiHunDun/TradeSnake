@@ -11,7 +11,7 @@
 | **回测引擎** | `backtest.py` | 基于历史数据模拟交易，评估策略绩效 |
 | **策略验证** | `verification.py` | 基于simulator真实持仓验证换股效果、战力预测准确性 |
 
-**版本**: v19.9 | **状态**: ✅ 方案确定
+**版本**: v19.9.9 | **状态**: ✅ 方案确定
 
 ---
 
@@ -483,7 +483,7 @@ total_cost = amount + commission + transfer_fee
 
 # 卖出成本
 commission = max(amount * 0.0003, 5)
-stamp_tax = amount * 0.0005  # 印花税0.05%
+stamp_tax = amount * 0.0005  # 印花税0.05%（卖出时）
 transfer_fee = amount * 0.00001
 total_proceeds = amount - commission - stamp_tax - transfer_fee
 ```
@@ -576,7 +576,7 @@ class PositionManager:
 | `benchmark` | None | 基准代码，如'000300.SH' |
 | `commission_rate` | 0.0003 | 佣金率 |
 | `min_commission` | 5 | 最低佣金（元） |
-| `stamp_tax_rate` | 0.0005 | 印花税率（卖出） |
+| `stamp_tax_rate` | 0.0005 | 印花税率（卖出，0.05%） |
 | `transfer_fee_rate` | 0.00001 | 过户费率 |
 | `min_trade_unit` | 100 | 最小交易单位（1手） |
 | `price_model` | 'close' | 成交价模型：close/next_open/vwap |

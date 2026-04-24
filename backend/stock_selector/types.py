@@ -23,9 +23,11 @@ class StockInfo:
     market_cap: float = 0          # 流通市值（万元）
     daily_volume_20d: float = 0     # 近20日日均成交额（万元）
     turnover_rate: float = 0        # 换手率（%）
+    volume_below_threshold_days: int = 0
 
     # 战力分数（由 engine 模块计算后回填，用于再平衡排序）
     cp_score: float = 0            # 战力分数
+    cp_score_valid: bool = False   # cp_score 是否已由 engine 模块更新
 
     # 基本面
     is_st: bool = False             # 是否ST

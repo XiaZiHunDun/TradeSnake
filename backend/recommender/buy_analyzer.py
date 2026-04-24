@@ -206,9 +206,8 @@ class BuyAnalyzer:
         if price <= 0:
             return 0
         shares = int(amount / price / 100) * 100
-        if shares == 0:
-            return 0  # 金额不足以买1手
-        return max(100, shares)  # 最小买入1手
+        # Bug fix: shares == 0 means amount不足以买1手, must return 0
+        return shares
 
     @classmethod
     def _generate_buy_reasons(cls, stock: StockCP) -> List[str]:
@@ -313,6 +312,7 @@ class BuyAnalyzer:
             'take_profit': round(signal.take_profit, 2),
             'buy_strength': signal.buy_strength,
             'risk_level': signal.risk_level,
+            'volatility_20d': round(getattr(signal.stock, 'volatility_20d', 0), 2),
             'reasons': signal.reasons,
             'warnings': signal.warnings,
             'breakeven_days': signal.breakeven_days,

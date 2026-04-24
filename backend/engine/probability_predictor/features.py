@@ -6,7 +6,7 @@
 - 波动率：volatility_20d, atr_14
 - 趋势：ma_position
 - 技术指标：rsi_14, kdj_k, kdj_d, kdj_j
-- 市场状态：board_type, limit_type
+- 市场状态：limit_up, limit_down (涨跌停标记)
 
 设计文档：docs/plans/engine/probability_predictor/PROBABILITY_PREDICTOR.md
 """
@@ -31,7 +31,24 @@ def calculate_features(klines: List[Dict]) -> Dict[str, float]:
     if not klines or len(klines) < 2:
         return _empty_features()
 
-    closes = [k.get('close', 0) for k in klines]
+    # 确保按日期升序排列（DuckDB返回DESC降序，需排序处理）
+    klines = sorted(klines, key=lambda x: x.get('trade_date', ''))
+
+    # v19.9.11: 使用复权价格计算技术指标，避免除权除息造成的缺口
+    adj_closes = []
+    for k in klines:
+        close = float(k.get('close', 0))
+        adj_factor = float(k.get('adj_factor', 1.0))
+        adj_close = float(k.get('adj_close', 0))
+        if adj_factor > 1 and adj_close == 0:
+            adj_close = close * adj_factor
+        elif adj_close > 0:
+            pass
+        else:
+            adj_close = close
+        adj_closes.append(adj_close)
+
+    closes = adj_closes  # 技术指标使用复权价格
     highs = [k.get('high', 0) for k in klines]
     lows = [k.get('low', 0) for k in klines]
     volumes = [k.get('volume', 0) for k in klines]
@@ -106,8 +123,8 @@ def _calc_volatility(closes: List[float], days: int) -> float:
         return 0.0
 
     returns = []
-    for i in range(days):
-        if i > 0 and closes[-i] != 0:
+    for i in range(1, days):
+        if closes[-i-1] != 0:
             returns.append((closes[-i] - closes[-i-1]) / closes[-i-1])
         else:
             returns.append(0.0)
@@ -121,14 +138,14 @@ def _calc_volatility(closes: List[float], days: int) -> float:
 
 def _calc_atr(highs: List[float], lows: List[float], closes: List[float], days: int) -> float:
     """计算ATR指标"""
-    if len(highs) < days + 1:
+    if len(highs) < days + 2:
         return 0.0
 
     trs = []
     for i in range(days):
         high = highs[-i-1]
         low = lows[-i-1]
-        prev_close = closes[-i-2] if i > 0 else lows[-i-1]
+        prev_close = closes[-i-2] if i > 0 else closes[-2]
         tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
         trs.append(tr)
 
@@ -149,8 +166,8 @@ def _calc_rsi(closes: List[float], days: int = 14) -> float:
 
     gains = []
     losses = []
-    for i in range(days):
-        change = closes[-i-1] - closes[-i-2] if i > 0 else 0
+    for i in range(1, days):
+        change = closes[-i-1] - closes[-i-2]
         if change > 0:
             gains.append(change)
         else:

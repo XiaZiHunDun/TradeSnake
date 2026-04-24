@@ -40,7 +40,7 @@ class SelectorCallback(Protocol):
         """事件触发回调"""
         ...
 
-    def on_financial_warning(self, code: str, warnings: List[FinancialWarning]) -> None:
+    def on_financial_warning(self, code: str, warnings: List[str]) -> None:
         """财务预警回调"""
         ...
 
@@ -296,10 +296,16 @@ class StockSelector:
                     continue
                 md = market_data.get(code, {})
                 if md:
+                    # P2 Fix: 同时刷新 market_cap（之前只在初始化时设置）
+                    if md.get("market_cap") is not None:
+                        info.market_cap = float(md.get("market_cap") or 0)
                     if md.get("daily_volume_20d") is not None:
                         info.daily_volume_20d = float(md.get("daily_volume_20d") or 0)
                     if md.get("turnover_rate") is not None:
                         info.turnover_rate = float(md.get("turnover_rate") or 0)
+                    # P1 Fix: 同时刷新 volume_below_threshold_days（用于僵尸股判断和降级评估）
+                    if md.get("volume_below_threshold_days") is not None:
+                        info.volume_below_threshold_days = int(md.get("volume_below_threshold_days") or 0)
 
         # 1. 评估晋级/降级
         eval_results = self._rebalancer.evaluate_all(market_data)
@@ -324,9 +330,10 @@ class StockSelector:
         # 4. 触发 RecommenderCallback（如果有注册）
         self._notify_recommender_pool_changes(eval_results, rebalance_results)
 
+        # 统计只基于原始操作列表，不依赖 rebalance_results 的隐含类型推断
         stats = {
-            "upgrades": len([r for r in rebalance_results.values() if r]),
-            "downgrades": len([r for r in rebalance_results.values() if not r]),
+            "upgrades": len(eval_results.get("upgrade", [])),
+            "downgrades": len(eval_results.get("downgrade", [])),
             "evicted": len(eval_results.get("evict", [])),
             "expired_temp": len(expired_temp),
         }
@@ -360,8 +367,18 @@ class StockSelector:
             all_removed = downgrade_codes + evict_codes
 
             if all_added or all_removed:
+                # P3 Fix: 传递实际变化的池层级（更精确的判断）
+                # CORE 变化优先（晋级/挤出），其次 ACTIVE（降级）
+                if upgrade_codes:
+                    tier = PoolTier.CORE  # 有晋级一定是 CORE
+                elif evict_codes:
+                    tier = PoolTier.CORE  # 有挤出也涉及 CORE
+                elif downgrade_codes:
+                    tier = PoolTier.ACTIVE  # 只有降级是 ACTIVE
+                else:
+                    tier = PoolTier.OBSERVE
                 self._recommender_callback.on_pool_changed(
-                    PoolTier.CORE,  # tier 参数
+                    tier,
                     all_added,
                     all_removed
                 )
@@ -424,17 +441,16 @@ class StockSelector:
                                 logger.error(f"降级回调失败: {e}")
 
             # 触发回调
+            warning_strings = [w.description if hasattr(w, 'description') else str(w) for w in warnings]
             for callback in self._callbacks:
                 try:
-                    callback.on_financial_warning(code, warnings)
+                    callback.on_financial_warning(code, warning_strings)
                 except Exception as e:
                     logger.error(f"财务预警回调失败: {e}")
 
-            # 触发 RecommenderCallback
+            # 触发 RecommenderCallback（与 SelectorCallback 接口已统一，都接收 List[str]）
             if self._recommender_callback:
                 try:
-                    # 将 FinancialWarning 转换为字符串列表
-                    warning_strings = [w.description for w in warnings]
                     self._recommender_callback.on_financial_warning(code, warning_strings)
                 except Exception as e:
                     logger.error(f"RecommenderCallback 财务预警通知失败: {e}")
@@ -499,3 +515,14 @@ class StockSelector:
     def get_change_history(self, limit: int = 100):
         """获取变更历史"""
         return self._pm.get_change_history(limit)
+
+
+# ==================== 工厂函数 ====================
+_selector_instance = None
+
+def get_stock_selector() -> "StockSelector":
+    """获取 StockSelector 单例实例"""
+    global _selector_instance
+    if _selector_instance is None:
+        _selector_instance = StockSelector()
+    return _selector_instance

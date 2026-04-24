@@ -74,31 +74,23 @@ class StockFactorCache:
         return datetime.now() > self.calculated_at + timedelta(seconds=ttl)
 
     def to_dict(self) -> Dict:
-        """转换为字典"""
+        """转换为字典（字段名与 StockCP.to_dict() 一致）"""
         return {
             'code': self.code,
             'name': self.name,
-            'raw_scores': {
-                'growth': self.raw_growth_score,
-                'value': self.raw_value_score,
-                'momentum': self.raw_momentum_score,
-                'quality': self.raw_quality_score,
-            },
-            'norm_scores': {
-                'growth': self.norm_growth_score,
-                'value': self.norm_value_score,
-                'momentum': self.norm_momentum_score,
-                'quality': self.norm_quality_score,
-            },
-            'risk': {
-                'score': self.risk_score,
-                'peg': self.peg,
-            },
-            'technical': {
-                'signal': self.technical_signal,
-                'rsi': self.rsi,
-                'macd_histogram': self.macd_histogram,
-            },
+            'growth_score': self.raw_growth_score,
+            'value_score': self.raw_value_score,
+            'momentum_score': self.raw_momentum_score,
+            'quality_score': self.raw_quality_score,
+            'norm_growth_score': self.norm_growth_score,
+            'norm_value_score': self.norm_value_score,
+            'norm_momentum_score': self.norm_momentum_score,
+            'norm_quality_score': self.norm_quality_score,
+            'risk_score': self.risk_score,
+            'peg': self.peg,
+            'technical_signal': self.technical_signal,
+            'rsi': self.rsi,
+            'macd_histogram': self.macd_histogram,
             'calculated_at': self.calculated_at.isoformat(),
             'is_expired': self.is_expired(),
         }

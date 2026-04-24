@@ -23,6 +23,8 @@ class ProbabilityPrediction:
     up_probability_3d: float  # 3日上涨概率 0-1
     up_probability_5d: float  # 5日上涨概率 0-1
     confidence: float  # 置信度 0-1
+    confidence_interval_3d: List[float]  # 3日置信区间
+    confidence_interval_5d: List[float]  # 5日置信区间
     risk_level: str  # high/medium/low
     features: Dict[str, float]  # 主要特征值
     model_version: str = "rule_v19.8"
@@ -72,7 +74,7 @@ class ProbabilityPredictor:
         return ProbabilityPredictionResult(
             predictions=predictions,
             calculated_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-            data_timestamp=klines[-1].get('date', datetime.now().strftime("%Y-%m-%d")) if klines_dict else "",
+            data_timestamp=str(klines_dict.get(predictions[0].code, [{}])[-1].get('trade_date', '')) if predictions and predictions[0].code in klines_dict else '',
             stock_count=len(predictions),
         )
 
@@ -161,12 +163,26 @@ class ProbabilityPredictor:
         up_probability_3d = max(0.0, min(1.0, up_probability_3d))
         up_probability_5d = max(0.0, min(1.0, up_probability_5d))
 
+        # ========== 置信区间 ==========
+        # 概率的置信区间：基于 (1 - confidence) 计算不确定性范围
+        interval_width = (1 - confidence) * 0.2
+        confidence_interval_3d = [
+            round(max(up_probability_3d - interval_width, 0.0), 3),
+            round(min(up_probability_3d + interval_width, 1.0), 3)
+        ]
+        confidence_interval_5d = [
+            round(max(up_probability_5d - interval_width, 0.0), 3),
+            round(min(up_probability_5d + interval_width, 1.0), 3)
+        ]
+
         return ProbabilityPrediction(
             code=code,
             name=name,
             up_probability_3d=round(up_probability_3d, 3),
             up_probability_5d=round(up_probability_5d, 3),
             confidence=round(confidence, 3),
+            confidence_interval_3d=confidence_interval_3d,
+            confidence_interval_5d=confidence_interval_5d,
             risk_level=risk_level,
             features={
                 'gain_3d': round(float(features.get('gain_3d', 0)), 2),
@@ -203,6 +219,8 @@ class ProbabilityPredictor:
                     'up_probability_3d': p.up_probability_3d,
                     'up_probability_5d': p.up_probability_5d,
                     'confidence': p.confidence,
+                    'confidence_interval_3d': p.confidence_interval_3d,
+                    'confidence_interval_5d': p.confidence_interval_5d,
                     'risk_level': p.risk_level,
                     'features': p.features,
                     'model_version': p.model_version,
@@ -237,6 +255,8 @@ class ProbabilityPredictor:
                 'up_probability_3d': p.up_probability_3d,
                 'up_probability_5d': p.up_probability_5d,
                 'confidence': p.confidence,
+                'confidence_interval_3d': p.confidence_interval_3d,
+                'confidence_interval_5d': p.confidence_interval_5d,
                 'risk_level': p.risk_level,
                 'features': p.features,
                 'model_version': p.model_version,
@@ -256,14 +276,30 @@ class ProbabilityPredictor:
     ) -> Dict:
         """历史回测：基于历史K线数据验证概率预测准确性
 
+        方法说明：
+            1. 按日期遍历回测区间每一天
+            2. 对于每一天，获取该日期之前的历史K线数据（最多60天）
+            3. 使用这些历史数据计算特征并预测当日上涨概率
+            4. 然后获取此后5日的K线数据，判定实际是否上涨
+            5. 比较预测概率与实际结果，累积统计
+
         Args:
             codes: 股票代码列表
             start_date: 回测开始日期 (YYYY-MM-DD)
             end_date: 回测结束日期 (YYYY-MM-DD)
-            save_to_store: 是否保存到 prediction_store
+            save_to_store: 是否保存每日预测结果到 prediction_store
 
         Returns:
-            回测结果统计
+            回测结果统计 Dict:
+                - total_predictions: int, 总预测次数
+                - overall_accuracy: float, 整体准确率 (%)
+                - high_prob_accuracy: float, 高概率(>=0.6)预测准确率 (%)
+                - high_prob_count: int, 高概率预测次数
+                - calibration: Dict, 概率校准表
+                    - key: 概率区间如 "40-60"
+                    - value: {predicted: 区间预测均值, actual: 实际上涨率, count: 样本数}
+                - expected_calibration_error: float, ECE校准误差 (越小越好)
+                - errors: List[str], 最多前10个错误信息
         """
         from backend.data_manager.duckdb_store import get_duckdb_store
         from datetime import datetime, timedelta
@@ -289,8 +325,13 @@ class ProbabilityPredictor:
                         end_date=date_str,
                         limit=60  # 至少60天数据
                     )
-                    if klines and len(klines) >= 20:
-                        date_klines[code] = klines
+                    # P0 fix: klines is QueryResult, extract data and convert to List[Dict]
+                    if klines.success and klines.data is not None and len(klines.data) >= 20:
+                        df = klines.data
+                        # Convert DataFrame to list of dicts, sorted ASC by date (oldest first)
+                        klines_list = df.to_dict('records')
+                        klines_list.sort(key=lambda x: x.get('trade_date', ''))
+                        date_klines[code] = klines_list
                 except Exception as e:
                     errors.append(f"{code}@{date_str}: {e}")
 
@@ -393,12 +434,19 @@ class ProbabilityPredictor:
         date_str: str,
         days: int
     ) -> Optional[bool]:
-        """获取指定日期后N日是否上涨"""
+        """获取指定日期后N日是否上涨
+
+        注意：DuckDB返回DESC降序数据，需要转换为ASC升序后处理
+        """
         try:
             klines = duckdb.get_klines(code, start_date=date_str, limit=days + 1)
-            if klines and len(klines) >= 2:
-                start_price = klines[0].get('close', 0)
-                end_price = klines[-1].get('close', 0)
+            # P0 fix: klines is QueryResult, extract data and convert to List[Dict]
+            if klines.success and klines.data is not None and len(klines.data) >= days + 1:
+                klines_list = klines.data.to_dict('records')
+                klines_list.sort(key=lambda x: x.get('trade_date', ''))  # ASC: oldest first
+                # After ASC sort: klines_list[0]=oldest, klines_list[-1]=newest
+                start_price = klines_list[-1].get('close', 0)  # oldest (date_str or next day)
+                end_price = klines_list[0].get('close', 0)     # newest (last available)
                 return end_price > start_price
         except:
             pass

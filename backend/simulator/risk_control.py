@@ -122,7 +122,7 @@ class RiskControl:
         trades = db.get_trades(limit=10000)
         today_buys = [t for t in trades
                      if t.get('action') == 'buy'
-                     and t.get('created_at', '').startswith(today)]
+                     and t.get('recorded_at', '').startswith(today)]
 
         if code:
             today_buys = [t for t in today_buys if t.get('code') == code]
@@ -137,7 +137,7 @@ class RiskControl:
 
         trades = db.get_trades(limit=10000)
         today_trades = [t for t in trades
-                       if t.get('created_at', '').startswith(today)]
+                       if t.get('recorded_at', '').startswith(today)]
 
         return len(today_trades)
 
