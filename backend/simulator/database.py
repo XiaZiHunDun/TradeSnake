@@ -10,7 +10,8 @@ from datetime import datetime
 from typing import List, Dict, Optional
 from contextlib import contextmanager
 
-DB_PATH = "/home/ailearn/projects/TradeSnake/data/tradesnake.db"
+from backend.config import SQLITE_PATH
+DB_PATH = str(SQLITE_PATH)
 
 
 class Database:
@@ -136,20 +137,15 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     code TEXT NOT NULL, name TEXT NOT NULL,
                     quantity INTEGER NOT NULL, cost_price REAL NOT NULL,
-                    bought_at TEXT NOT NULL
-                )
+                    bought_at TEXT NOT NULL, peak_price REAL DEFAULT 0
+)
             """)
 
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS trades (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    code TEXT NOT NULL, name TEXT NOT NULL,
-                    action TEXT NOT NULL, quantity INTEGER NOT NULL,
-                    price REAL NOT NULL, commission REAL NOT NULL,
-                    stamp_tax REAL DEFAULT 0, transfer_fee REAL NOT NULL,
-                    total_amount REAL NOT NULL, recorded_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+            # Migration: 添加 peak_price 列（如果不存在）
+            cursor.execute("PRAGMA table_info(holding_batches)")
+            existing_cols = {row[1] for row in cursor.fetchall()}
+            if 'peak_price' not in existing_cols:
+                cursor.execute("ALTER TABLE holding_batches ADD COLUMN peak_price REAL DEFAULT 0")
 
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS trade_cooldown (
@@ -576,7 +572,8 @@ class Database:
             SELECT code, name, SUM(quantity) as total_quantity,
                    SUM(quantity * cost_price) / SUM(quantity) as avg_cost_price,
                    MIN(bought_at) as earliest_bought_at,
-                   MAX(bought_at) as latest_bought_at
+                   MAX(bought_at) as latest_bought_at,
+                   MAX(peak_price) as peak_price
             FROM holding_batches
             GROUP BY code
             HAVING SUM(quantity) > 0
@@ -590,7 +587,8 @@ class Database:
             SELECT code, name, SUM(quantity) as total_quantity,
                    SUM(quantity * cost_price) / SUM(quantity) as avg_cost_price,
                    MIN(bought_at) as earliest_bought_at,
-                   MAX(bought_at) as latest_bought_at
+                   MAX(bought_at) as latest_bought_at,
+                   MAX(peak_price) as peak_price
             FROM holding_batches
             WHERE code = ?
             GROUP BY code
@@ -598,15 +596,15 @@ class Database:
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def add_holding_batch(self, code: str, name: str, quantity: int, cost_price: float, bought_at: str = None) -> int:
+    def add_holding_batch(self, code: str, name: str, quantity: int, cost_price: float, bought_at: str = None, peak_price: float = 0) -> int:
         with self._write_lock:
             cursor = self.conn.cursor()
             if bought_at is None:
                 bought_at = datetime.now().isoformat()
             cursor.execute("""
-                INSERT INTO holding_batches (code, name, quantity, cost_price, bought_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (code, name, quantity, cost_price, bought_at))
+                INSERT INTO holding_batches (code, name, quantity, cost_price, bought_at, peak_price)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (code, name, quantity, cost_price, bought_at, peak_price))
             self.conn.commit()
             return cursor.lastrowid
 
@@ -653,6 +651,24 @@ class Database:
             cursor.execute("DELETE FROM holding_batches WHERE quantity <= 0")
             self.conn.commit()
             return cursor.rowcount > 0
+
+    def update_peak_price(self, code: str, peak_price: float) -> bool:
+        """更新持仓最高价（用于尾随止损追踪）"""
+        with self._write_lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                UPDATE holding_batches
+                SET peak_price = MAX(peak_price, ?)
+                WHERE code = ? AND quantity > 0
+            """, (peak_price, code))
+            self.conn.commit()
+            return cursor.rowcount > 0
+
+    def update_all_peak_prices(self, prices: Dict[str, float]) -> None:
+        """批量更新所有持仓的最高价"""
+        for code, price in prices.items():
+            if price > 0:
+                self.update_peak_price(code, price)
 
     def delete_holding_batch(self, batch_id: int) -> bool:
         with self._write_lock:

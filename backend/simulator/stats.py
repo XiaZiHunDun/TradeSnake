@@ -310,7 +310,7 @@ class Stats:
                     dt = datetime.fromisoformat(recorded_at)
                     if dt.year == year and dt.month == month:
                         monthly_trades.append(t)
-                except:
+                except (ValueError, TypeError):
                     continue
 
         if not monthly_trades:

@@ -11,6 +11,7 @@ from .database import get_db
 from .account import Account, COMMISSION_RATE, MIN_COMMISSION, STAMP_TAX_RATE, TRANSFER_FEE_RATE
 from .portfolio import Portfolio
 from .risk_control import RiskControl
+from backend.risk.risk_control import RiskManager
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +198,7 @@ class Trader:
         }
 
     def sell(self, code: str, quantity: int, price: float = None,
-             order_type: str = 'market') -> Dict:
+             order_type: str = 'market', reason: str = '') -> Dict:
         """卖出股票
 
         Args:
@@ -205,6 +206,7 @@ class Trader:
             quantity: 数量
             price: 委托价格（None=市价）
             order_type: 'market' | 'limit'
+            reason: 卖出原因（用于风控记录）
 
         Returns:
             成交/委托结果
@@ -558,3 +560,113 @@ class Trader:
             except Exception as e:
                 logger.warning(f"_polling_loop: check_pending_orders failed: {e}")
             time.sleep(interval_sec)
+
+    # ==================== 风控检查（可选） ====================
+
+    def check_risk_and_execute(self) -> List[Dict]:
+        """每日风控检查
+
+        自动执行止损、尾随止损、组合熔断
+        Returns: list of executed trades
+        """
+        risk_manager = RiskManager()
+        executed = []
+
+        # 获取账户信息
+        account_info = {
+            'total_assets': self.account.total_assets,
+            'peak_assets': getattr(self.account, 'peak_assets', self.account.total_assets),
+        }
+
+        # 1. 检查组合回撤
+        should_reduce, reason, action = risk_manager.check_portfolio_drawdown(account_info)
+        if should_reduce:
+            holdings = self.portfolio.get_holdings()
+            if action == 'clear':
+                # 清仓
+                for h in holdings:
+                    code = h.get('code', '')
+                    qty = h.get('total_quantity', 0)
+                    if qty > 0:
+                        try:
+                            result = self.sell(code, qty, reason=reason)
+                            if result.get('success'):
+                                executed.append(result)
+                        except Exception:
+                            pass
+            elif action == 'reduce':
+                # 减半仓
+                for h in holdings:
+                    code = h.get('code', '')
+                    qty = h.get('total_quantity', 0)
+                    reduce_qty = qty // 2
+                    if reduce_qty > 0:
+                        try:
+                            result = self.sell(code, reduce_qty, reason=reason)
+                            if result.get('success'):
+                                executed.append(result)
+                        except Exception:
+                            pass
+
+        # 2. 更新持仓最高价
+        holdings = self.portfolio.get_holdings()
+        prices = {}
+        for h in holdings:
+            code = h.get('code', '')
+            lookup_code = code.replace('sh', '').replace('sz', '')
+            stock = self.db.get_stock(lookup_code)
+            if stock and stock.get('price', 0) > 0:
+                prices[code] = stock.get('price', 0)
+        if prices:
+            self.portfolio.update_peak_prices(prices)
+
+        # 3. 检查每只持仓的止损
+        for h in holdings:
+            code = h.get('code', '')
+            current_price = prices.get(code, 0)
+            cost_price = h.get('avg_cost_price', 0)
+            peak_price = h.get('peak_price', current_price)
+
+            position = {
+                'current_price': current_price,
+                'cost_price': cost_price,
+                'peak_price': peak_price,
+            }
+
+            should_sell, reason = risk_manager.check_stop_loss(position)
+            if not should_sell:
+                should_sell, reason = risk_manager.check_trailing_stop(position)
+            if should_sell:
+                qty = h.get('total_quantity', 0)
+                if qty > 0:
+                    try:
+                        result = self.sell(code, qty, reason=reason)
+                        if result.get('success'):
+                            executed.append(result)
+                            logger.info(f"风控卖出 {code}: {reason}")
+                    except Exception:
+                        pass
+
+        return executed
+
+    def get_kelly_size(self, code: str, price: float) -> int:
+        """获取 Kelly 建议手数
+
+        Args:
+            code: 股票代码
+            price: 当前价格
+
+        Returns:
+            建议买入股数（100的整数倍），0表示不建议买入
+        """
+        risk_manager = RiskManager()
+        account_value = self.account.total_assets
+        return risk_manager.calculate_kelly_position_size(code, account_value, price)
+
+    def get_market_regime(self) -> str:
+        """获取当前市场环境（bull/bear/unknown）"""
+        risk_manager = RiskManager()
+        return risk_manager.detect_market_regime()
+
+    def get_position_limit(self) -> float:
+        """根据市场环境获取仓位限制"""

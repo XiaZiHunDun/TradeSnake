@@ -184,3 +184,53 @@ class Portfolio:
     def clear_all(self) -> bool:
         """清空所有持仓"""
         return self.db.delete_all_holdings()
+
+    def update_peak_prices(self, prices: Dict[str, float]) -> None:
+        """批量更新持仓最高价（每日收盘后调用）
+
+        Args:
+            prices: 股票价格字典 {code: current_price}
+        """
+        self.db.update_all_peak_prices(prices)
+
+    def get_positions_with_risk_info(self) -> List[Dict]:
+        """获取带风控信息的持仓列表
+
+        Returns:
+            持仓列表，包含 current_price, peak_price, pnl_pct, drawdown_pct
+        """
+        holdings = self.get_holdings()
+        if not holdings:
+            return []
+
+        # 获取当前价格
+        prices = {}
+        for h in holdings:
+            code = h.get('code', '')
+            lookup_code = code.replace('sh', '').replace('sz', '')
+            stock = self.db.get_stock(lookup_code)
+            if stock and stock.get('price', 0) > 0:
+                prices[code] = stock.get('price', 0)
+
+        result = []
+        for h in holdings:
+            code = h.get('code', '')
+            current_price = prices.get(code, 0)
+            cost_price = h.get('avg_cost_price', 0)
+            peak_price = h.get('peak_price', current_price)
+
+            info = {**h}
+            info['current_price'] = current_price
+            info['cost_price'] = cost_price
+            info['peak_price'] = peak_price
+
+            if cost_price > 0 and current_price > 0:
+                info['pnl_pct'] = (current_price - cost_price) / cost_price
+                info['drawdown_pct'] = (current_price - peak_price) / peak_price if peak_price > 0 else 0
+            else:
+                info['pnl_pct'] = 0
+                info['drawdown_pct'] = 0
+
+            result.append(info)
+
+        return result

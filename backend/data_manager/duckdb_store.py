@@ -32,12 +32,8 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-# ==================== 路径配置 ====================
-
-DATA_DIR = Path("/home/ailearn/projects/TradeSnake/data")
-DUCKDB_PATH = DATA_DIR / "historical.duckdb"
-SQLITE_PATH = DATA_DIR / "tradesnake.db"
-
+# ==================== 路径
+from backend.config import DATA_DIR, DUCKDB_PATH, SQLITE_PATH
 
 # ==================== 数据类 ====================
 
@@ -147,14 +143,18 @@ class DuckDBStore:
     def _get_read_conn(self) -> duckdb.DuckDBPyConnection:
         """获取读连接（单例，复用）
 
-        注意：即使这个方法名为"读连接"，DuckDB 要求所有连接使用相同的 read_only 配置。
-        由于我们使用 flock 进行跨进程互斥，这里仍然使用 read_only=False。
+        尝试 read_only=False，失败时自动降级为 read_only=True（当另一个进程持有写锁时）
         """
         if self._read_conn is None:
             with self._conn_lock:
                 if self._read_conn is None:
-                    self._read_conn = duckdb.connect(self.db_path, read_only=False)
-                    self._read_conn.execute("SET threads=1")
+                    try:
+                        self._read_conn = duckdb.connect(self.db_path, read_only=False)
+                        self._read_conn.execute("SET threads=1")
+                    except duckdb.IOException:
+                        # 另一个进程持有写锁，降级为只读
+                        self._read_conn = duckdb.connect(self.db_path, read_only=True)
+                        self._read_conn.execute("SET threads=1")
         return self._read_conn
 
     def _migrate_columns(self, conn):
@@ -568,6 +568,9 @@ class DuckDBStore:
         """
         if not codes:
             return {}
+        # 处理 DuckDB Timestamp 类型
+        if hasattr(end_date, 'strftime'):
+            end_date = end_date.strftime('%Y-%m-%d')
         codes = [normalize_code(c) for c in codes]  # 标准化代码格式
         from datetime import datetime, timedelta
         start_date = (datetime.strptime(end_date, '%Y-%m-%d') - timedelta(days=days)).strftime('%Y-%m-%d')
@@ -1200,7 +1203,7 @@ class DuckDBStore:
         lock_fd = None
         try:
             import sqlite3
-            sqlite_path = str(Path("/home/ailearn/projects/TradeSnake/data/tradesnake.db"))
+            sqlite_path = str(SQLITE_PATH)
 
             # 获取需要回填的股票
             sqlite_conn = sqlite3.connect(sqlite_path)
@@ -1583,3 +1586,21 @@ def cleanup_all_old_data(
         'daily_kline': store.cleanup_old_klines(keep_days=daily_keep_days),
         'minute_kline': store.cleanup_old_minute_klines(keep_days=minute_keep_days),
     }
+
+
+def get_readonly_connection(db_path: str = None):
+    """获取只读 DuckDB 连接，用于分析脚本（不与主进程的写锁冲突）
+
+    Args:
+        db_path: 可选，默认使用 DUCKDB_PATH
+
+    Returns:
+        DuckDBPyConnection (read_only=True)
+    """
+    from backend.config import DUCKDB_PATH
+    path = db_path or str(DUCKDB_PATH)
+    return duckdb.connect(path, read_only=True)
+
+
+# 静态方法版本（供 DuckDBStore 内部使用）
+DuckDBStore.get_readonly_connection = staticmethod(get_readonly_connection)

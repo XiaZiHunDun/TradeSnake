@@ -36,7 +36,8 @@ class CPHistoryStore:
             return
 
         if db_path is None:
-            db_path = "/home/ailearn/projects/TradeSnake/data/tradesnake_cp_history.db"
+            from backend.config import CP_HISTORY_DB_PATH
+            db_path = str(CP_HISTORY_DB_PATH)
 
         self.db_path = db_path
         self._write_lock = threading.Lock()
@@ -172,15 +173,18 @@ class CPHistoryStore:
         conn.close()
         return result
 
-    def get_cp_history_by_date(self, date: str) -> List[Dict]:
+    def get_cp_history_by_date(self, date) -> List[Dict]:
         """获取指定日期的战力数据
 
         Args:
-            date: 日期 (YYYY-MM-DD)
+            date: 日期 (YYYY-MM-DD) 或 DuckDB Timestamp
 
         Returns:
             该日期的战力列表
         """
+        # 处理 DuckDB Timestamp 类型
+        if hasattr(date, 'strftime'):
+            date = date.strftime('%Y-%m-%d')
         conn = self._get_conn()
         cursor = conn.cursor()
 
@@ -241,6 +245,31 @@ class CPHistoryStore:
         result = [row['code'] for row in cursor.fetchall()]
         conn.close()
         return result
+
+    def get_available_dates(self) -> List[str]:
+        """获取所有有数据的日期列表
+
+        Returns:
+            日期字符串列表，格式 YYYY-MM-DD
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT DISTINCT recorded_at FROM cp_history
+            ORDER BY recorded_at
+        """)
+
+        result = [row['recorded_at'] for row in cursor.fetchall()]
+        conn.close()
+        return result
+
+    def get_snapshot(self, date):
+        """获取指定日期的 CP 快照（兼容 WalkForward / ML 调用接口）"""
+        # 处理 DuckDB Timestamp 类型
+        if hasattr(date, 'strftime'):
+            date = date.strftime('%Y-%m-%d')
+        return self.get_cp_history_by_date(date)
 
     def delete_old_records(self, before_date: str) -> int:
         """删除指定日期之前的记录
