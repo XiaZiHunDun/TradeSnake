@@ -12,6 +12,7 @@ import math
 from .strategies import Strategy, TopNStrategy, ValueStrategy, GrowthStrategy, MomentumStrategy
 from .strategies import RisingCPStrategy, HybridRisingStrategy, MultiFactorStrategy
 from .metrics import BacktestResult, Trade
+from backend.engine.cp_engine.constants import TRADE_COST
 
 
 @dataclass
@@ -25,6 +26,7 @@ class FullBacktestPosition:
     holding_days: int = 0
     buy_amount: float = 0.0  # 买入金额（扣除费用前）
     buy_commission: float = 0.0  # 买入佣金
+    peak_price: float = 0.0  # 持仓期间最高价（用于尾随止损）
 
 
 @dataclass
@@ -61,12 +63,12 @@ class BacktestStats:
 class FullBacktestEngine:
     """完整回测引擎 v1.0"""
 
-    # 交易费用（v2 设计）
-    COMMISSION_RATE = 0.0001       # 万1
-    MIN_COMMISSION = 5.0            # 最低佣金5元
-    STAMP_TAX_RATE = 0.0005        # 千0.5（卖出时收取）
-    TRANSFER_FEE_RATE = 0.00001    # 千0.01（过户费，沪市双向，深市免）
-    SLIPPAGE_RATE = 0.001          # 0.1%（滑点，买卖双向）
+    # 交易费用（v2 设计，使用 constants.py 的标准费率）
+    COMMISSION_RATE = TRADE_COST['commission']       # 万3
+    MIN_COMMISSION = TRADE_COST['min_commission']     # 最低佣金5元
+    STAMP_TAX_RATE = TRADE_COST['stamp_tax']          # 万5（卖出时收取）
+    TRANSFER_FEE_RATE = TRADE_COST['transfer_fee']     # 千0.01（过户费，沪市双向，深市免）
+    SLIPPAGE_RATE = 0.001                              # 0.1%（滑点，买卖双向，仅回测专用）
     # 涨跌停阈值（与 backtest.py 保持一致）
     LIMIT_UP_THRESHOLD = 9.9
 
@@ -91,6 +93,40 @@ class FullBacktestEngine:
             'rising_cp': RisingCPStrategy(n=10),
             'hybrid': HybridRisingStrategy(n=10),
         }
+
+        # 延迟导入推荐策略（需要 BuyAnalyzer）
+        try:
+            from .strategies import RecommendationStrategy
+            self.strategies['recommendation'] = RecommendationStrategy(n=10)
+        except ImportError:
+            pass
+
+    def run_recommendation(
+        self,
+        start_date: str,
+        end_date: str,
+        strategy_name: str = 'recommendation',
+        principal: float = 1000000.0,
+        risk_preference: str = 'balanced'
+    ) -> 'BacktestStats':
+        """使用推荐策略运行回测
+
+        复用 BuyAnalyzer.get_buy_signals() 的完整选股逻辑
+        """
+        if strategy_name not in self.strategies:
+            raise ValueError(f"Unknown strategy: {strategy_name}")
+
+        strategy = self.strategies[strategy_name]
+        if hasattr(strategy, 'principal'):
+            strategy.principal = principal
+        if hasattr(strategy, 'risk_preference'):
+            strategy.risk_preference = risk_preference
+
+        return self.run(
+            start_date=start_date,
+            end_date=end_date,
+            strategy_name=strategy_name
+        )
 
     def _fix_change_pct(self, cp_data: List[Dict], date: str) -> List[Dict]:
         """修复历史数据中 change_pct 为 0 的问题
@@ -136,7 +172,8 @@ class FullBacktestEngine:
         top_n: int = 10,
         initial_capital: float = 20000.0,
         weight_config: Dict = None,
-        stop_loss_pct: float = -10.0,
+        stop_loss_pct: float = -0.07,  # v21标准 -7%
+        trailing_stop_pct: float = -0.08,  # v21标准 -8%（从最高点回撤8%）
         max_holding_days: int = 5,
         market_filter_pct: float = -2.0
     ) -> BacktestStats:
@@ -216,16 +253,31 @@ class FullBacktestEngine:
             stock_factors = self._build_stock_factors(cp_data, prev_cp_data)
             target_codes = strategy.select_stocks(signal_date, stock_factors, actual_top_n)
 
-            # 检查止损（亏损超过阈值立即卖出）
+            # 检查止损（亏损超过阈值立即卖出）和尾随止损
             for code in list(positions.keys()):
                 current_price = self._get_price(code, trade_date)
                 if current_price > 0:
                     pos = positions[code]
+
+                    # 更新持仓期间最高价（用于尾随止损）
+                    if current_price > pos.peak_price:
+                        pos.peak_price = current_price
+
                     # 计算持仓盈亏：当前市值 - 成本（含佣金）
                     cost = pos.buy_amount + pos.buy_commission
                     current_value = current_price * pos.quantity
                     pnl_pct = (current_value - cost) / cost * 100
-                    if pnl_pct <= stop_loss_pct:  # 止损
+
+                    # 尾随止损：从最高点回撤超过阈值时触发
+                    # 优先于固定止损（涨得越多，止损线越高）
+                    if pos.peak_price > 0:
+                        drawdown_pct = (current_price - pos.peak_price) / pos.peak_price
+                        if drawdown_pct <= trailing_stop_pct:
+                            self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'trailing_stop')
+                            continue
+
+                    # 固定止损
+                    if pnl_pct <= stop_loss_pct:
                         self._execute_sell(positions, cash, trades, completed_pnls, code, trade_date, 'stop_loss')
 
             # 检查持仓超时
@@ -290,11 +342,27 @@ class FullBacktestEngine:
         return self.cp_store.get_cp_history_by_date(date)
 
     def _get_price(self, code: str, date: str) -> float:
-        """获取指定日期的收盘价"""
-        result = self.duckdb.get_klines(code, end_date=date, limit=1)
-        if result.success and result.data is not None and len(result.data) > 0:
-            return float(result.data.iloc[0]['close'])
-        return 0.0
+        """获取指定日期的收盘价（使用子查询确保获取最近日期的价格）"""
+        lock_fd = None
+        try:
+            lock_fd = self.duckdb._acquire_lock(exclusive=False)
+            conn = self.duckdb._get_read_conn()
+            # 使用 ORDER BY trade_date DESC 获取最接近且不超过目标日期的价格
+            sql = """
+                SELECT close FROM daily_kline
+                WHERE code = ? AND trade_date <= ?
+                ORDER BY trade_date DESC
+                LIMIT 1
+            """
+            row = conn.execute(sql, [code, date]).fetchone()
+            if row:
+                return float(row[0])
+            return 0.0
+        except Exception:
+            return 0.0
+        finally:
+            if lock_fd:
+                self.duckdb._release_lock(lock_fd)
 
     def _build_stock_factors(self, cp_data: List[Dict], prev_cp_data: List[Dict] = None) -> Dict[str, 'StockFactor']:
         """将战力数据转换为 StockFactor 字典
@@ -478,7 +546,10 @@ class FullBacktestEngine:
                 mean_ret = sum(returns) / len(returns)
                 std_ret = math.sqrt(sum((r - mean_ret) ** 2 for r in returns) / len(returns))
                 if std_ret > 0:
-                    sharpe = (mean_ret / std_ret) * math.sqrt(250)
+                    # 年化夏普比率（扣除无风险利率 3%）
+                    # 日无风险利率 = 0.03 / 250 ≈ 0.00012
+                    daily_rf = 0.03 / 250
+                    sharpe = (mean_ret - daily_rf) / std_ret * math.sqrt(250)
 
             # 最大回撤
             peak = equity_curve[0]['total_value']

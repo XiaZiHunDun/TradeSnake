@@ -74,8 +74,9 @@ def _get_kline_record():
 
 # ==================== 路径配置 ====================
 
-DATA_DIR = Path("/home/ailearn/projects/TradeSnake/data")
-DB_PATH = DATA_DIR / "tradesnake.db"
+from backend.config import DATA_DIR, SQLITE_PATH
+
+DB_PATH = SQLITE_PATH
 
 
 # ==================== ST/退市股过滤 ====================
@@ -182,6 +183,7 @@ class FillResult:
     """填充结果"""
     success: int = 0
     failed: int = 0
+    skipped: int = 0
     total_records: int = 0
     errors: List[str] = None
 
@@ -1015,6 +1017,11 @@ class KlineFiller:
         for gap_start, gap_end in gaps:
             # 对每个缺口尝试获取数据，带重试
             klines = None
+            # 转换日期格式（gap 可能是 YYYY-MM-DD，需要转为 YYYYMMDD）
+            if isinstance(gap_start, str) and len(gap_start) == 10:
+                gap_start = gap_start.replace('-', '')
+            if isinstance(gap_end, str) and len(gap_end) == 10:
+                gap_end = gap_end.replace('-', '')
             for attempt in range(max_retries):
                 try:
                     klines = self._fetch_from_tushare(code, gap_start, gap_end)
@@ -1438,29 +1445,29 @@ class MinuteKlineFiller:
             return 0
 
         success = 0
+        conn = self.duckdb._get_conn()
         try:
-            with self.duckdb._get_conn() as conn:
-                for k in klines:
-                    try:
-                        conn.execute("""
-                            INSERT OR REPLACE INTO minute_kline
-                            (code, trade_date, trade_time, open, high, low, close, volume, amount, interval_type)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            k['code'],
-                            k['trade_time'].strftime('%Y-%m-%d') if hasattr(k['trade_time'], 'strftime') else str(k['trade_time'])[:10],
-                            k['trade_time'],
-                            k['open'],
-                            k['high'],
-                            k['low'],
-                            k['close'],
-                            k['volume'],
-                            k['amount'],
-                            k.get('interval_type', '1min'),
-                        ))
-                        success += 1
-                    except Exception as e:
-                        pass
+            for k in klines:
+                try:
+                    conn.execute("""
+                        INSERT OR REPLACE INTO minute_kline
+                        (code, trade_date, trade_time, open, high, low, close, volume, amount, interval_type)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        k['code'],
+                        k['trade_time'].strftime('%Y-%m-%d') if hasattr(k['trade_time'], 'strftime') else str(k['trade_time'])[:10],
+                        k['trade_time'],
+                        k['open'],
+                        k['high'],
+                        k['low'],
+                        k['close'],
+                        k['volume'],
+                        k['amount'],
+                        k.get('interval_type', '1min'),
+                    ))
+                    success += 1
+                except Exception as e:
+                    pass
         except Exception as e:
             print(f"保存分钟K线失败: {e}")
 
@@ -1473,20 +1480,20 @@ class MinuteKlineFiller:
             today = date.today()
 
             # 检查最近1-2个交易日
+            conn = self.duckdb._get_conn()
+            cursor = conn.cursor()
             for i in range(days_back):
                 check_date = today - timedelta(days=i)
                 date_str = check_date.strftime('%Y-%m-%d')
 
-                with self.duckdb._get_conn() as conn:
-                    cursor = conn.cursor()
-                    # 使用 DuckDB 的 DATE() 函数转换 TIMESTAMP 进行比较
-                    cursor.execute("""
-                        SELECT COUNT(*) FROM minute_kline
-                        WHERE code = ? AND DATE(trade_time) = ?
-                    """, (code, date_str))
-                    count = cursor.fetchone()[0]
-                    if count > 0:
-                        return True
+                # 使用 DuckDB 的 DATE() 函数转换 TIMESTAMP 进行比较
+                cursor.execute("""
+                    SELECT COUNT(*) FROM minute_kline
+                    WHERE code = ? AND DATE(trade_time) = ?
+                """, (code, date_str))
+                count = cursor.fetchone()[0]
+                if count > 0:
+                    return True
             return False
         except Exception:
             return False
@@ -1741,9 +1748,9 @@ class CPHistoryBatchCalculator:
     def _get_codes_with_klines(self) -> List[str]:
         """获取有K线数据的股票代码"""
         try:
-            with self.duckdb._get_conn() as conn:
-                result = conn.execute("SELECT DISTINCT code FROM daily_kline").fetchall()
-                return [row[0] for row in result]
+            conn = self.duckdb._get_conn()
+            result = conn.execute("SELECT DISTINCT code FROM daily_kline").fetchall()
+            return [row[0] for row in result]
         except Exception as e:
             print(f"获取K线股票列表失败: {e}")
             return []
@@ -1843,6 +1850,19 @@ class CPHistoryBatchCalculator:
 
             # 设置计算得到的动量分
             stock.momentum_score = momentum_score
+
+            # 计算20日年化波动率
+            if len(klines) >= 20:
+                closes = [k.get('close', 0) for k in klines]
+                if closes and all(c > 0 for c in closes[-20:]):
+                    returns = []
+                    for i in range(1, min(20, len(closes))):
+                        if closes[-i-1] > 0:
+                            returns.append((closes[-i] - closes[-i-1]) / closes[-i-1])
+                    if returns:
+                        import numpy as np
+                        std = np.std(returns)
+                        stock.volatility_20d = std * np.sqrt(250) * 100  # 年化波动率 %
 
             return stock
         except Exception as e:
@@ -2084,12 +2104,15 @@ class CPHistoryBatchCalculator:
         # 获取财务数据
         financials = self._get_stock_financials(codes)
 
-        # 使用 CPEngine 计算
-        cp_engine = self._get_cp_engine()
+        # 每次使用新的 CPEngine 实例，避免跨日期股票堆积
         stocks_to_save = []
+        try:
+            from backend.engine.cp_engine import CPEngine
+            cp_engine = CPEngine()
+        except ImportError:
+            cp_engine = None
 
         if cp_engine is not None:
-            # 使用真实 CPEngine 计算
             stock_objects = []
             for code in codes:
                 klines = klines_dict.get(code, [])
@@ -2166,8 +2189,8 @@ class CPHistoryBatchCalculator:
             try:
                 stocks = self._calculate_cp_for_date(date, codes)
                 if stocks:
-                    # 保存到 cp_history
-                    self.cp_store.record_cp_history(stocks)
+                    # 保存到 cp_history（必须传入 date，否则默认为今天）
+                    self.cp_store.record_cp_history(stocks, date=date)
                     result.success += len(stocks)
                     print(f"日期 {date}: 计算 {len(stocks)} 只股票")
                 else:
@@ -2637,14 +2660,14 @@ class TradeCalendar:
     def _ensure_table(self):
         """确保交易日历表存在"""
         try:
-            with self.duckdb._get_conn() as conn:
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS trade_cal (
-                        cal_date DATE PRIMARY KEY,
-                        is_open INTEGER NOT NULL,
-                        pretrade_date DATE
-                    )
-                """)
+            conn = self.duckdb._get_conn()
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS trade_cal (
+                    cal_date DATE PRIMARY KEY,
+                    is_open INTEGER NOT NULL,
+                    pretrade_date DATE
+                )
+            """)
         except Exception as e:
             print(f"创建交易日历表失败: {e}")
 
@@ -2696,20 +2719,20 @@ class TradeCalendar:
                 return 0
 
             count = 0
-            with self.duckdb._get_conn() as conn:
-                for _, row in df.iterrows():
-                    try:
-                        conn.execute("""
-                            INSERT OR REPLACE INTO trade_cal (cal_date, is_open, pretrade_date)
-                            VALUES (?, ?, ?)
-                        """, (
-                            row['cal_date'],
-                            row['is_open'],
-                            row['pretrade_date']
-                        ))
-                        count += 1
-                    except Exception:
-                        pass
+            conn = self.duckdb._get_conn()
+            for _, row in df.iterrows():
+                try:
+                    conn.execute("""
+                        INSERT OR REPLACE INTO trade_cal (cal_date, is_open, pretrade_date)
+                        VALUES (?, ?, ?)
+                    """, (
+                        row['cal_date'],
+                        row['is_open'],
+                        row['pretrade_date']
+                    ))
+                    count += 1
+                except Exception:
+                    pass
 
             return count
 
@@ -2737,14 +2760,14 @@ class TradeCalendar:
                 check_date = f"{check_date[:4]}-{check_date[4:6]}-{check_date[6:8]}"
 
         try:
-            with self.duckdb._get_conn() as conn:
-                result = conn.execute(
-                    "SELECT is_open FROM trade_cal WHERE cal_date = ?",
-                    [check_date]
-                ).fetchone()
+            conn = self.duckdb._get_conn()
+            result = conn.execute(
+                "SELECT is_open FROM trade_cal WHERE cal_date = ?",
+                [check_date]
+            ).fetchone()
 
-                if result:
-                    return result[0] == 1
+            if result:
+                return result[0] == 1
         except Exception:
             pass
 
@@ -2764,16 +2787,16 @@ class TradeCalendar:
                 from_date = datetime.strptime(from_date, '%Y-%m-%d').date()
 
         try:
-            with self.duckdb._get_conn() as conn:
-                result = conn.execute("""
-                    SELECT cal_date FROM trade_cal
-                    WHERE cal_date > ? AND is_open = 1
-                    ORDER BY cal_date ASC
-                    LIMIT 1
-                """, [from_date]).fetchone()
+            conn = self.duckdb._get_conn()
+            result = conn.execute("""
+                SELECT cal_date FROM trade_cal
+                WHERE cal_date > ? AND is_open = 1
+                ORDER BY cal_date ASC
+                LIMIT 1
+            """, [from_date]).fetchone()
 
-                if result:
-                    return result[0]
+            if result:
+                return result[0]
         except Exception:
             pass
 
@@ -2790,24 +2813,24 @@ class TradeCalendar:
             end_date = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}"
 
         try:
-            with self.duckdb._get_conn() as conn:
-                result = conn.execute("""
-                    SELECT cal_date FROM trade_cal
-                    WHERE cal_date BETWEEN ? AND ? AND is_open = 1
-                    ORDER BY cal_date ASC
-                """, [start_date, end_date]).fetchall()
+            conn = self.duckdb._get_conn()
+            result = conn.execute("""
+                SELECT cal_date FROM trade_cal
+                WHERE cal_date BETWEEN ? AND ? AND is_open = 1
+                ORDER BY cal_date ASC
+            """, [start_date, end_date]).fetchall()
 
-                return [row[0] for row in result]
+            return [row[0] for row in result]
         except Exception:
             return []
 
     def get_stats(self) -> Dict:
         """获取统计"""
         try:
-            with self.duckdb._get_conn() as conn:
-                total = conn.execute("SELECT COUNT(*) FROM trade_cal").fetchone()[0]
-                trading = conn.execute("SELECT COUNT(*) FROM trade_cal WHERE is_open = 1").fetchone()[0]
-                latest = conn.execute("SELECT MAX(cal_date) FROM trade_cal").fetchone()[0]
+            conn = self.duckdb._get_conn()
+            total = conn.execute("SELECT COUNT(*) FROM trade_cal").fetchone()[0]
+            trading = conn.execute("SELECT COUNT(*) FROM trade_cal WHERE is_open = 1").fetchone()[0]
+            latest = conn.execute("SELECT MAX(cal_date) FROM trade_cal").fetchone()[0]
         except Exception:
             total = trading = latest = 0
 
