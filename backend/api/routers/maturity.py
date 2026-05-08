@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from backend.maturity.evaluator import MaturityEvaluator, MaturityResult
 from backend.maturity.daily_signal import DailySignalGenerator
-from backend.maturity.metrics import MonthlyReturn
+from backend.maturity.metrics import MonthlyReturn, get_benchmark_return
 from backend.simulator.database import get_db
 from backend.api.dependencies import cp_engine
 from backend.recommender.buy_analyzer import BuyAnalyzer
