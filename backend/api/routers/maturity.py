@@ -19,6 +19,42 @@ from backend.data_manager.prediction_store import get_prediction_store
 DEFAULT_PRINCIPAL = 100000.0
 
 
+def get_current_up_probability() -> float:
+    """获取当前上涨概率（从 prediction_store 获取最高5日上涨概率）
+
+    Returns:
+        5日上涨概率（0-1，如 0.65 表示 65%）
+        如果无数据，返回 0.5（中性值，不会过度影响信号）
+    """
+    try:
+        store = get_prediction_store()
+        today = datetime.now().strftime("%Y-%m-%d")
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        # 优先获取今天的预测（当日收盘后计算）
+        predictions = store.get_probability_predictions_by_date(today)
+
+        # 如果今天没有预测，尝试昨天的（最新可用数据）
+        if not predictions:
+            predictions = store.get_probability_predictions_by_date(yesterday)
+            if not predictions:
+                logger.warning(f"maturity/daily_signal: 无上涨概率预测数据 (today={today}, yesterday={yesterday})")
+                return 0.5
+            logger.info(f"maturity/daily_signal: 使用昨日上涨概率预测数据 ({yesterday})")
+        else:
+            logger.info(f"maturity/daily_signal: 使用今日上涨概率预测数据 ({today})")
+
+        # 返回最高上涨概率（已按 up_probability_5d DESC 排序）
+        top_prediction = predictions[0]
+        up_prob = top_prediction.get('up_probability_5d', 0.5)
+        logger.info(f"maturity/daily_signal: top up_probability_5d = {up_prob} ({top_prediction.get('code')})")
+        return float(up_prob)
+
+    except Exception as e:
+        logger.error(f"get_current_up_probability failed: {e}")
+        return 0.5
+
+
 def get_current_kelly_position() -> float:
     """获取当前最优Kelly仓位
 
