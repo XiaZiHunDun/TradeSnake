@@ -121,3 +121,76 @@ def test_evaluator_not_mature_low_oos_is_ratio():
     result = evaluator.evaluate(monthly_returns=monthly_returns, benchmark_excess=0.02, oos_is_ratio=0.7)
     assert result.is_mature == False
     assert result.reason == 'oos_is_ratio_insufficient'
+
+
+# =============================================================================
+# Daily Signal Tests
+# =============================================================================
+
+
+def test_daily_signal_strong_buy_mature():
+    """毕业后：Kelly 10%, 低风险, 预测向上 -> 强烈买入"""
+    from backend.maturity.daily_signal import DailySignalGenerator
+
+    generator = DailySignalGenerator()
+
+    signal = generator.generate(
+        kelly_position=10.0,
+        risk_level='acceptable',
+        predicted_gain_5d=8.0,
+        up_probability_5d=0.65,
+        is_mature=True
+    )
+    assert signal.level == 'strong_buy'
+    assert signal.emoji == '🟢'
+
+
+def test_daily_signal_empty_before_maturity():
+    """毕业前：Kelly 10% 但未达强烈买入 -> 空仓（禁止操作）"""
+    from backend.maturity.daily_signal import DailySignalGenerator
+
+    generator = DailySignalGenerator()
+
+    signal = generator.generate(
+        kelly_position=10.0,
+        risk_level='acceptable',
+        predicted_gain_5d=3.0,  # < 5%
+        up_probability_5d=0.55,  # < 0.6
+        is_mature=False
+    )
+    assert signal.level == 'empty'
+    assert signal.emoji == '🔴'
+
+
+def test_daily_signal_watch_after_maturity():
+    """毕业后：Kelly 5%, 中风险, 预测中性 -> 观望"""
+    from backend.maturity.daily_signal import DailySignalGenerator
+
+    generator = DailySignalGenerator()
+
+    signal = generator.generate(
+        kelly_position=5.0,
+        risk_level='warning',
+        predicted_gain_5d=3.0,
+        up_probability_5d=0.55,
+        is_mature=True
+    )
+    assert signal.level == 'watch'
+    assert signal.emoji == '🟡'
+
+
+def test_daily_signal_empty_high_risk():
+    """高风险无论是否毕业都空仓"""
+    from backend.maturity.daily_signal import DailySignalGenerator
+
+    generator = DailySignalGenerator()
+
+    signal = generator.generate(
+        kelly_position=10.0,
+        risk_level='high',
+        predicted_gain_5d=8.0,
+        up_probability_5d=0.65,
+        is_mature=True
+    )
+    assert signal.level == 'empty'
+    assert signal.emoji == '🔴'
