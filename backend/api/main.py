@@ -15,12 +15,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from backend.api.router import router, cp_engine, recommend_engine
+from backend.api.router import router
+from backend.api.routers import maturity
+from backend.api.dependencies import cp_engine, recommend_engine
 from backend.api.limits import limiter
 from backend.api.websocket import WebSocketManager
-
-# v19.9.3: 数据目录常量（提前定义供 RefreshState 使用）
-DATA_DIR = Path("/home/ailearn/projects/TradeSnake/data")
+from backend.config import DATA_DIR, SQLITE_PATH, REFRESH_STATE_FILE
 
 
 def preload_cp_engine_from_cache():
@@ -139,7 +139,6 @@ def preload_cp_engine_from_history(allowed_codes: Optional[Set[str]] = None):
     import sqlite3
 
     print("[启动] 从stocks表快速预加载战力数据...")
-    DB_PATH = "/home/ailearn/projects/TradeSnake/data/tradesnake.db"
 
     sql_select = """
             SELECT code, name, price,
@@ -152,7 +151,7 @@ def preload_cp_engine_from_history(allowed_codes: Optional[Set[str]] = None):
     """
 
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn = sqlite3.connect(SQLITE_PATH, timeout=10)
         conn.row_factory = sqlite3.Row
 
         rows = []
@@ -217,7 +216,7 @@ def preload_cp_engine_from_history(allowed_codes: Optional[Set[str]] = None):
 class RefreshState:
     """差异化刷新的状态管理"""
     # v19.9.3: 持久化状态文件路径
-    _STATE_FILE = DATA_DIR / ".refresh_state.json"
+    _STATE_FILE = REFRESH_STATE_FILE
 
     def __init__(self):
         self.last_core_refresh = 0      # 上次核心池刷新时间
@@ -737,8 +736,7 @@ async def lifespan(app: FastAPI):
         financial_data = {}
         try:
             import sqlite3
-            sqlite_path = Path("/home/ailearn/projects/TradeSnake/data/tradesnake.db")
-            conn = sqlite3.connect(str(sqlite_path))
+            conn = sqlite3.connect(SQLITE_PATH)
             cursor = conn.execute("""
                 SELECT code, net_profit, revenue_growth, debt_ratio
                 FROM stocks WHERE code IN ({})
@@ -907,6 +905,7 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(maturity.router)
 
 
 @app.websocket("/ws/alerts")
