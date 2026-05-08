@@ -313,11 +313,14 @@ def get_daily_signal():
         logger.warning("maturity/daily_signal: 无法获取真实预测涨幅，使用默认值")
         predicted_gain_5d = 8.0
 
+    # 获取真实5日上涨概率（从 prediction_store）
+    up_probability_5d = get_current_up_probability()
+
     signal = generator.generate(
         kelly_position=kelly_position,
         risk_level='acceptable',
         predicted_gain_5d=predicted_gain_5d,
-        up_probability_5d=0.65,
+        up_probability_5d=up_probability_5d,
         is_mature=True
     )
 
