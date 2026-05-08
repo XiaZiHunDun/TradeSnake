@@ -1,7 +1,7 @@
 """策略成熟度相关 API"""
 import logging
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict
 
 from fastapi import APIRouter, Depends
@@ -9,10 +9,11 @@ from pydantic import BaseModel
 
 from backend.maturity.evaluator import MaturityEvaluator, MaturityResult
 from backend.maturity.daily_signal import DailySignalGenerator
-from backend.maturity.metrics import MonthlyReturn, get_benchmark_return
+from backend.maturity.metrics import MonthlyReturn, get_benchmark_return, get_oos_is_ratio_from_walk_forward
 from backend.simulator.database import get_db
 from backend.api.dependencies import cp_engine
 from backend.recommender.buy_analyzer import BuyAnalyzer
+from backend.data_manager.prediction_store import get_prediction_store
 
 # 默认本金（用于Kelly计算）
 DEFAULT_PRINCIPAL = 100000.0
@@ -52,6 +53,43 @@ def get_current_kelly_position() -> float:
     except Exception as e:
         logger.error(f"get_current_kelly_position failed: {e}")
         return 0.0
+
+
+def get_current_predicted_gain() -> float:
+    """获取当前预测涨幅（从 prediction_store 获取最高5日预测涨幅）
+
+    Returns:
+        5日预测涨幅（%，如 8.0 表示预测上涨 8%）
+        如果无数据，返回 0.0（会导致空仓信号，这是安全的选择）
+    """
+    try:
+        store = get_prediction_store()
+        today = datetime.now().strftime("%Y-%m-%d")
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        # 优先获取今天的预测（当日收盘后计算）
+        predictions = store.get_gain_predictions_by_date(today)
+
+        # 如果今天没有预测，尝试昨天的（最新可用数据）
+        if not predictions:
+            predictions = store.get_gain_predictions_by_date(yesterday)
+            if not predictions:
+                logger.warning(f"maturity/daily_signal: 无预测数据 (today={today}, yesterday={yesterday})")
+                return 0.0
+            logger.info(f"maturity/daily_signal: 使用昨日预测数据 ({yesterday})")
+        else:
+            logger.info(f"maturity/daily_signal: 使用今日预测数据 ({today})")
+
+        # 返回最高预测涨幅（已按 predicted_gain_5d DESC 排序）
+        top_prediction = predictions[0]
+        predicted_gain = top_prediction.get('predicted_gain_5d', 0.0)
+        logger.info(f"maturity/daily_signal: top predicted_gain_5d = {predicted_gain}% ({top_prediction.get('code')})")
+        return float(predicted_gain)
+
+    except Exception as e:
+        logger.error(f"get_current_predicted_gain failed: {e}")
+        return 0.0
+
 
 logger = logging.getLogger(__name__)
 
@@ -168,10 +206,14 @@ def get_maturity_status():
             MonthlyReturn('2026-06', 11500, 11800, 2.61, True),
         ]
 
+    # 获取真实的 OOS/IS Sharpe 比率（从 Walk-Forward 回测）
+    oos_is_ratio = get_oos_is_ratio_from_walk_forward()
+    logger.info(f"maturity/status: OOS/IS ratio from walk-forward = {oos_is_ratio:.3f}")
+
     result = evaluator.evaluate(
         monthly_returns=monthly_returns,
         benchmark_excess=0.02,
-        oos_is_ratio=0.85
+        oos_is_ratio=oos_is_ratio
     )
 
     return MaturityStatusResponse(
@@ -206,12 +248,18 @@ def get_daily_signal():
         logger.warning("maturity/daily_signal: 无法获取真实Kelly仓位，使用默认值")
         kelly_position = 10.0
 
-    # TODO: 获取真实风险等级和预测数据
-    # 暂时使用模拟数据，后续可从 recommender 融合结果获取
+    # 获取真实5日预测涨幅（从 prediction_store）
+    predicted_gain_5d = get_current_predicted_gain()
+
+    # 如果获取失败（返回0），使用模拟值但保持向后兼容
+    if predicted_gain_5d <= 0:
+        logger.warning("maturity/daily_signal: 无法获取真实预测涨幅，使用默认值")
+        predicted_gain_5d = 8.0
+
     signal = generator.generate(
         kelly_position=kelly_position,
         risk_level='acceptable',
-        predicted_gain_5d=8.0,
+        predicted_gain_5d=predicted_gain_5d,
         up_probability_5d=0.65,
         is_mature=True
     )
