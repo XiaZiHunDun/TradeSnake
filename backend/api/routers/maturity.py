@@ -206,13 +206,34 @@ def get_maturity_status():
             MonthlyReturn('2026-06', 11500, 11800, 2.61, True),
         ]
 
+    # 计算基准超额收益
+    # 根据月度收益的期初和期末计算策略总收益
+    if monthly_returns and len(monthly_returns) >= 2:
+        # 使用实际数据的日期范围
+        start_date = monthly_returns[0].month + "-01"  # YYYY-MM-01
+        end_date = monthly_returns[-1].month + "-28"    # YYYY-MM-28 (保守估计月末)
+        benchmark_return = get_benchmark_return(start_date, end_date)
+
+        # 计算策略实际收益（简化：使用期末/期初 - 1）
+        strategy_start = monthly_returns[0].start_value
+        strategy_end = monthly_returns[-1].end_value
+        strategy_return = (strategy_end - strategy_start) / strategy_start if strategy_start > 0 else 0
+
+        # 计算超额收益
+        benchmark_excess = strategy_return - benchmark_return
+        logger.info(f"maturity/status: 策略收益={strategy_return:.4f}, 沪深300收益={benchmark_return:.4f}, 超额={benchmark_excess:.4f}")
+    else:
+        # 无法计算时使用模拟值
+        benchmark_excess = 0.02
+        logger.warning("maturity/status: 无法计算基准超额，使用默认值0.02")
+
     # 获取真实的 OOS/IS Sharpe 比率（从 Walk-Forward 回测）
     oos_is_ratio = get_oos_is_ratio_from_walk_forward()
     logger.info(f"maturity/status: OOS/IS ratio from walk-forward = {oos_is_ratio:.3f}")
 
     result = evaluator.evaluate(
         monthly_returns=monthly_returns,
-        benchmark_excess=0.02,
+        benchmark_excess=benchmark_excess,
         oos_is_ratio=oos_is_ratio
     )
 
