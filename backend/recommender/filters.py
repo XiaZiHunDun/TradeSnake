@@ -16,13 +16,13 @@ from typing import List, Dict
 class StockFilter:
     """股票过滤器 v18.4"""
 
-    # 涨跌停阈值（按板块）
+    # 涨跌停阈值（按板块，与 cp_engine 保持一致）
     LIMIT_THRESHOLDS = {
-        'main': 9.9,
-        'gem': 19.9,
-        'star': 19.9,
-        'bge': 29.9,
-        'st': 4.9,  # ST股特殊处理
+        'main': 9.9,      # 主板 ±9.9%
+        'gem': 19.9,     # 创业板 ±19.9%
+        'star': 19.9,    # 科创板 ±19.9%
+        'bge': 29.9,     # 北交所 ±29.9%
+        'st': 4.9,       # ST股特殊处理 ±4.9%
     }
 
     # 流动性最低阈值（日成交额，元）
@@ -33,7 +33,7 @@ class StockFilter:
         """过滤ST/*ST/退市风险股票 v18.4
 
         识别规则（双重保障）：
-        1. 股票名称包含 ST/*ST/退
+        1. 股票名称包含 ST/*ST/SST/S*ST/S/SS/SSD/SSR/退 等前缀（与 cp_engine ST_PREFIXES 一致）
         2. engine返回的 is_st 标记
         """
         result = []
@@ -41,9 +41,10 @@ class StockFilter:
             # 使用StockCP的is_st属性
             if getattr(s, 'is_st', False):
                 continue
-            # 备用：名称检查
+            # 备用：名称检查（与 cp_engine DataValidator.ST_PREFIXES 保持一致）
             name = getattr(s, 'name', '')
-            if any(prefix in name.upper() for prefix in ['ST', '*ST', '退', 'SST', 'S*ST']):
+            st_patterns = ['ST', '*ST', 'SST', 'S*ST', 'S', 'SS', 'SSD', 'SSR', '退']
+            if any(prefix in name.upper() for prefix in st_patterns):
                 continue
             result.append(s)
         return result

@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+markers = [
+    "integration: tests requiring real data, database, or network (deselect with '-m \"not integration\"')",
+]
+testpaths = [
+    "backend/tests",
+    "backend/data_manager/tests",
+    "tests",
+]

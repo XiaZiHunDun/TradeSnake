@@ -3,7 +3,7 @@ from backend.backtester.parameter_scanner import ParameterScanner, ParameterSpac
 
 def test_parameter_space():
     space = ParameterSpace()
-    assert space.stop_loss_range == [-0.15, -0.10, -0.08, -0.05]
+    assert space.stop_loss_range == [-0.15, -0.10, -0.08, -0.07, -0.05]
     assert space.max_holding_days_range == [3, 5, 7, 10]
     assert space.top_n_range == [5, 6, 8]
 

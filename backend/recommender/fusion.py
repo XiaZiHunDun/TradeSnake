@@ -12,7 +12,7 @@
 - prob_norm = up_probability_5d (已是0-1)
 - confidence = 预测置信度 (0-1)
 
-设计文档: docs/plans/recommender/RECOMMENDER_ARCHITECTURE.md v19.8
+设计文档: docs/plans/recommender/RECOMMENDER_OVERVIEW.md v19.8
 """
 
 import ast
@@ -65,7 +65,7 @@ class FusionResult:
     up_probability_5d: float  # 5日上涨概率
     confidence: float  # 预测置信度
     risk_level: str  # 风险等级
-    volatility_20d: float  # 20日波动率 (%，日度，与 FILTER_MAX_VOLATILITY 阈值单位一致)
+    volatility_20d: float  # 20日波动率 (%，年化)
     fused_score: float  # 融合得分
     fused_rank: int  # 融合排名
     # 分项得分
@@ -100,9 +100,8 @@ class PredictionFusion:
     FILTER_MIN_GAIN_5D = 0  # 预测涨幅必须>0（过滤预测下跌）
     FILTER_MIN_PROB_5D = 0.5  # 上涨概率必须>50%
     FILTER_MAX_RISK_LEVEL = 'high'  # 过滤高风险
-    # 波动率过滤：StockCP.volatility_20d 存储年化波动率(%)，这里转换为日波动率阈值
-    # 40% 年化 ≈ 40 / sqrt(252) ≈ 2.52% 日波动率（与 probability_predictor 的 40 阈值单位一致）
-    FILTER_MAX_VOLATILITY = 40 / (252 ** 0.5)  # ~2.52% 日波动率上限
+    # 波动率过滤：年化波动率上限 40%（与 probability_predictor 的 40 阈值单位一致）
+    FILTER_MAX_VOLATILITY = 40
 
     @classmethod
     def fuse(
@@ -222,11 +221,15 @@ class PredictionFusion:
     ) -> Optional[str]:
         """返回过滤原因字符串，如果通过则返回 None"""
         # 预测涨幅过滤
-        if gain_pred and gain_pred.predicted_gain_5d < cls.FILTER_MIN_GAIN_5D:
+        if gain_pred is None:
+            return "gain_pred is None"
+        if gain_pred.predicted_gain_5d < cls.FILTER_MIN_GAIN_5D:
             return f"predicted_gain_5d {gain_pred.predicted_gain_5d:.2f} < {cls.FILTER_MIN_GAIN_5D}"
 
         # 上涨概率过滤
-        if prob_pred and prob_pred.up_probability_5d < cls.FILTER_MIN_PROB_5D:
+        if prob_pred is None:
+            return "prob_pred is None"
+        if prob_pred.up_probability_5d < cls.FILTER_MIN_PROB_5D:
             return f"up_probability_5d {prob_pred.up_probability_5d:.3f} < {cls.FILTER_MIN_PROB_5D}"
 
         # 风险等级过滤：统一使用 _get_risk_level() 判断（与 fuse() 保持一致）

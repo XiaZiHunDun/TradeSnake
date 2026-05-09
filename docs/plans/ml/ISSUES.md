@@ -1,6 +1,15 @@
-# ML 模块问题记录
+# ML 问题追踪
 
-## 验证结果 (2026-05-06)
+## 记录格式
+| 日期 | 问题 | 状态 | 修复 |
+|------|------|------|------|
+
+状态枚举：待调查 / 已修复 / 保留 / 已验证
+
+---
+<!-- 在此下方添加历史问题记录 -->
+| 2026-05-06 | [backend/tests/test_ml_model.py] 使用 base 环境导致 lightgbm 找不到 | 保留 | 依赖在 tradesnake conda 环境已安装，CI 应使用正确环境 |
+| 2026-05-08 | ml/ARCHITECTURE.md limitations 称"技术因子未验证 IC"但 engine/ARCHITECTURE.md 已验证 macd_diff IC=+0.0185 | HIGH | 已修复 | limitations 第1条更新为"macd_diff IC=+0.0185(t=7.26) 已验证" |
 
 | 指标 | 值 | 说明 |
 |------|-----|------|

@@ -680,7 +680,8 @@ class BacktestReportStore:
             return
 
         if db_path is None:
-            db_path = "/home/ailearn/projects/TradeSnake/data/backtest_reports.db"
+            from backend.config import BACKTEST_REPORTS_DB_PATH
+            db_path = str(BACKTEST_REPORTS_DB_PATH)
 
         self.db_path = db_path
         self._write_lock = threading.Lock()

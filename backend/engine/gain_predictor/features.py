@@ -18,6 +18,27 @@ import numpy as np
 # 全局均值填充（当数据不足时使用）
 GLOBAL_AVG_VOLATILITY = 25.0  # 默认20日波动率
 
+# 板块涨跌幅限制配置（与 cp_engine/filters.py 保持一致，使用 gem/star/bge/main 命名）
+BOARD_LIMIT_CONFIG = {
+    'main': 10,      # 主板
+    'gem': 20,       # 创业板（300开头）
+    'star': 20,      # 科创板（688开头）
+    'bge': 30,       # 北交所（4/8开头）
+}
+
+
+def _get_board_type(code: str) -> str:
+    """根据代码判断板块类型（与 cp_engine/cp_engine.py board_type 属性一致）"""
+    code_clean = code.replace('sz', '').replace('sh', '').lower()
+    if code_clean.startswith('688'):
+        return 'star'
+    elif code_clean.startswith('300'):
+        return 'gem'
+    elif code_clean.startswith('4') or code_clean.startswith('8'):
+        return 'bge'
+    else:
+        return 'main'
+
 
 def calculate_features(klines: List[Dict]) -> Dict[str, float]:
     """计算单只股票的特征
@@ -85,10 +106,13 @@ def calculate_features(klines: List[Dict]) -> Dict[str, float]:
     features['macd_cross'] = macd_result['cross']
 
     # ========== 市场状态特征 ==========
-    # 涨跌停状态
+    # 涨跌停状态（使用板块差异化阈值）
     today_change = klines[-1].get('change_pct', 0) if klines else 0
-    features['limit_up'] = 1 if today_change >= 9.9 else 0
-    features['limit_down'] = 1 if today_change <= -9.9 else 0
+    code = klines[-1].get('code', '') if klines else ''
+    board_type = _get_board_type(code)
+    limit_pct = BOARD_LIMIT_CONFIG.get(board_type, 10)  # 主板默认10%
+    features['limit_up'] = 1 if today_change >= limit_pct - 0.1 else 0
+    features['limit_down'] = 1 if today_change <= -(limit_pct - 0.1) else 0
 
     # 成交量异常度（今日量/20日均量）
     avg_volume_20d = np.mean(volumes[-20:]) if len(volumes) >= 20 else volumes[-1] if volumes else 1

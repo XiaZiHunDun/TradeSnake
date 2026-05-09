@@ -1,7 +1,7 @@
 """Tests for async optimizer API"""
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 import uuid
 
 
@@ -11,7 +11,7 @@ class TestOptimizationTasks:
     def test_optimization_tasks_is_dict(self):
         """Verify _optimization_tasks is a dict"""
         pytest.importorskip("fastapi", reason="FastAPI required for router import")
-        from backend.api.router import _optimization_tasks
+        from backend.api.routers.backtest import _optimization_tasks
         assert isinstance(_optimization_tasks, dict)
 
     def test_optimize_strategy_returns_task_id(self):

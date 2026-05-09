@@ -4,7 +4,7 @@ import type {
   StockDetail,
   AccountResponse,
   PortfolioResponse,
-  TradeResult,
+  TradeExecutionDetail,
   TradeHistoryResponse,
   RecommendResponse,
   BacktestParams,
@@ -18,6 +18,7 @@ import type {
   VerifyReport,
   UserProfileResponse,
   HealthResponse,
+  SwapSuggestion,
 } from '../types'
 
 export const queryClient = new QueryClient({
@@ -59,8 +60,8 @@ export const recommendApi = {
   getRecommendations: (category: string): Promise<RecommendResponse> =>
     request<RecommendResponse>(`/cp/recommend?category=${category}`),
 
-  getSwapSuggestions: (principal?: number): Promise<unknown[]> =>
-    request<unknown[]>(`/cp/swap?principal=${principal || 100000}`),
+  getSwapSuggestions: (principal?: number): Promise<SwapSuggestion[]> =>
+    request<SwapSuggestion[]>(`/cp/swap?principal=${principal || 100000}`),
 }
 
 // 模拟交易 API
@@ -70,14 +71,14 @@ export const tradeApi = {
   getPortfolio: (): Promise<PortfolioResponse> =>
     request<PortfolioResponse>('/portfolio'),
 
-  buy: (code: string, quantity: number): Promise<TradeResult> =>
-    request<TradeResult>('/trade/buy', {
+  buy: (code: string, quantity: number): Promise<TradeExecutionDetail> =>
+    request<TradeExecutionDetail>('/trade/buy', {
       method: 'POST',
       body: JSON.stringify({ code, quantity }),
     }),
 
-  sell: (code: string, quantity: number): Promise<TradeResult> =>
-    request<TradeResult>('/trade/sell', {
+  sell: (code: string, quantity: number): Promise<TradeExecutionDetail> =>
+    request<TradeExecutionDetail>('/trade/sell', {
       method: 'POST',
       body: JSON.stringify({ code, quantity }),
     }),
@@ -87,17 +88,26 @@ export const tradeApi = {
 
 // 回测 API
 export const backtestApi = {
-  runSimple: (params: BacktestParams): Promise<BacktestResult> =>
-    request<BacktestResult>('/backtest/simple', {
-      method: 'GET',
-    }),
+  runSimple: (params: BacktestParams): Promise<BacktestResult> => {
+    const searchParams = new URLSearchParams()
+    if (params.start_date) searchParams.set('start_date', params.start_date)
+    if (params.end_date) searchParams.set('end_date', params.end_date)
+    if (params.holding_days) searchParams.set('holding_days', String(params.holding_days))
+    if (params.top_n) searchParams.set('top_n', String(params.top_n))
+    const query = searchParams.toString()
+    return request<BacktestResult>(`/backtest/simple${query ? `?${query}` : ''}`)
+  },
 }
 
 // 自选股 API (本地存储)
 export const watchlistApi = {
   getGroups: (): Promise<WatchlistGroup[]> => {
     const stored = localStorage.getItem('watchlist_groups')
-    return Promise.resolve(stored ? JSON.parse(stored) : [])
+    try {
+      return Promise.resolve(stored ? JSON.parse(stored) : [])
+    } catch {
+      return Promise.resolve([])
+    }
   },
 
   saveGroups: (groups: WatchlistGroup[]): Promise<void> => {

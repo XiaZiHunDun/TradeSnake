@@ -28,7 +28,7 @@ class ParameterSpace:
     prob_weight_range: Tuple[float, float] = (0.15, 0.35)
 
     # 离散参数
-    stop_loss_range: List[float] = field(default_factory=lambda: [-0.15, -0.10, -0.08, -0.05])
+    stop_loss_range: List[float] = field(default_factory=lambda: [-0.15, -0.10, -0.08, -0.07, -0.05])
     max_holding_days_range: List[int] = field(default_factory=lambda: [3, 5, 7, 10])
     top_n_range: List[int] = field(default_factory=lambda: [5, 6, 8])
 
@@ -202,8 +202,9 @@ class ParameterScanner:
                 max_holding_days=params['max_holding_days']
             )
 
-            # 运行回测
-            results = self.comparator.compare_strategies(
+            # 用当前参数创建临时 comparator（确保参数传递给策略）
+            comparator = StrategyComparator(config=config)
+            results = comparator.compare_strategies(
                 start_date=start_date,
                 end_date=end_date,
                 strategy_names=[strategy_name]

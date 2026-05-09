@@ -11,16 +11,18 @@
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime, date as date_type
+import logging
 
 from .features import calculate_features, GLOBAL_AVG_VOLATILITY
+logger = logging.getLogger(__name__)
 
 
-# 板块涨跌幅限制配置
+# 板块涨跌幅限制配置（与 cp_engine/filters.py 保持一致，使用 gem/star/bge/main 命名）
 BOARD_LIMIT_CONFIG = {
     'main': 10,      # 主板
-    'chinext': 20,   # 创业板
-    'star': 20,      # 科创板
-    'bj': 30,        # 北交所
+    'gem': 20,       # 创业板（300开头）
+    'star': 20,      # 科创板（688开头）
+    'bge': 30,       # 北交所（4/8开头）
 }
 
 
@@ -50,10 +52,26 @@ class GainPredictionResult:
 
 
 class GainPredictor:
-    """涨幅预测器"""
+    """涨幅预测器（ML 优先，规则兜底）"""
 
     def __init__(self):
         self.model_version = "rule_v19.8"
+        self._ml_model = None
+        self._ml_checked = False
+
+    def _get_ml_model(self):
+        if self._ml_checked:
+            return self._ml_model
+        self._ml_checked = True
+        try:
+            from backend.ml.model import StockPredictor
+            predictor = StockPredictor()
+            if predictor.load("latest"):
+                self._ml_model = predictor
+                self.model_version = f"lgbm_{predictor.train_date or 'unknown'}"
+        except Exception as e:
+            logger.warning(f"ML模型加载失败，将使用规则预测: {e}")
+        return self._ml_model
 
     def predict(self, klines_dict: Dict[str, List[Dict]]) -> GainPredictionResult:
         """批量预测股票涨幅
@@ -220,13 +238,14 @@ class GainPredictor:
         return float(max(-limit_pct, min(limit_pct, predicted)))
 
     def _get_board_type(self, code: str) -> str:
-        """根据代码判断板块类型"""
-        if code.startswith('300'):
-            return 'chinext'
-        elif code.startswith('688'):
+        """根据代码判断板块类型（与 cp_engine/cp_engine.py board_type 属性一致）"""
+        code_clean = code.replace('sz', '').replace('sh', '').lower()
+        if code_clean.startswith('688'):
             return 'star'
-        elif code.startswith('8') or code.startswith('4'):
-            return 'bj'
+        elif code_clean.startswith('300'):
+            return 'gem'
+        elif code_clean.startswith('4') or code_clean.startswith('8'):
+            return 'bge'
         else:
             return 'main'
 
@@ -497,7 +516,7 @@ class GainPredictor:
                 end_price = get_adj_price(klines_list[0])     # newest
                 if start_price > 0:
                     return (end_price - start_price) / start_price * 100
-        except:
+        except (ValueError, IndexError, ZeroDivisionError):
             pass
         return None
 

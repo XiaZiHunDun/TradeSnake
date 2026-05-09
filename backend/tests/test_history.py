@@ -3,18 +3,14 @@
 """
 
 import pytest
-import sys
-import os
 import json
+import os
 import tempfile
 import shutil
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-# 添加项目根目录到路径
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from engine.cp_engine.history import (
+from backend.engine.cp_engine.history import (
     save_history,
     load_history,
     get_stock_history,
@@ -75,9 +71,9 @@ class TestHistoryModule:
 
     def _with_temp_path(self, func):
         """在临时路径下执行函数"""
-        with patch('engine.cp_engine.history.HISTORY_DIR', self.temp_dir), \
-             patch('engine.cp_engine.history.HISTORY_FILE', self.temp_file), \
-             patch('engine.cp_engine.history._get_cp_store', return_value=None):
+        with patch('backend.engine.cp_engine.history.HISTORY_DIR', self.temp_dir), \
+             patch('backend.engine.cp_engine.history.HISTORY_FILE', self.temp_file), \
+             patch('backend.engine.cp_engine.history._get_cp_store', return_value=None):
             return func()
 
     def test_save_and_load_history(self):
@@ -306,9 +302,9 @@ class TestHistoryEdgeCases:
 
     def _with_temp_path(self, func):
         """在临时路径下执行函数"""
-        with patch('engine.cp_engine.history.HISTORY_DIR', self.temp_dir), \
-             patch('engine.cp_engine.history.HISTORY_FILE', self.temp_file), \
-             patch('engine.cp_engine.history._get_cp_store', return_value=None):
+        with patch('backend.engine.cp_engine.history.HISTORY_DIR', self.temp_dir), \
+             patch('backend.engine.cp_engine.history.HISTORY_FILE', self.temp_file), \
+             patch('backend.engine.cp_engine.history._get_cp_store', return_value=None):
             return func()
 
     def test_empty_stock_list(self):

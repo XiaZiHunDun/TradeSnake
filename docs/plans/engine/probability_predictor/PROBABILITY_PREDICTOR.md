@@ -90,6 +90,8 @@ backend/engine/probability_predictor/
 | up_probability_3d | float | 3日上涨概率 0-1 |
 | up_probability_5d | float | 5日上涨概率 0-1 |
 | confidence | float | 置信度 0-1 |
+| confidence_interval_3d | Tuple[float,float] | 3日置信区间 (min, max) |
+| confidence_interval_5d | Tuple[float,float] | 5日置信区间 (min, max) |
 | risk_level | str | high/medium/low |
 | features | Dict | 主要特征值 |
 | model_version | str | "rule_v19.8" |
@@ -148,10 +150,18 @@ backend/engine/probability_predictor/
 
 ### 6.4 涨跌停处理
 
+| 板块 | 涨停阈值 | 跌停阈值 |
+|------|---------|---------|
+| 主板 | ≥9.9% | ≤-9.9% |
+| 创业板/科创板 | ≥19.9% | ≤-19.9% |
+| 北交所 | ≥29.9% | ≤-29.9% |
+
 | 状态 | 处理逻辑 |
 |------|----------|
-| 涨停（limit_up） | `max(probability + 0.15, 0.65)`，最低0.65 |
-| 跌停（limit_down） | `min(probability - 0.15, 0.25)`，最高0.25 |
+| 涨停（板块差异化阈值） | `max(probability + 0.15, 0.65)`，最低0.65 |
+| 跌停（板块差异化阈值） | `min(probability - 0.15, 0.25)`，最高0.25 |
+
+> 注意：涨跌停判断使用板块差异化阈值，与 `gain_predictor` 和 `recommender/filters.py` 保持一致。产品范围仅沪深主板。
 
 ### 6.5 置信度计算
 

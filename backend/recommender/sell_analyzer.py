@@ -40,9 +40,9 @@ class SellAnalyzer:
         'sector_rotation': '板块轮动'
     }
 
-    # 决策阈值
+    # 决策阈值（与 RiskManager 风控标准对齐：TS=-8%, SL=-7%）
     PROFIT_TAKING_THRESHOLD = 0.20  # 盈利>20%止盈
-    STOP_LOSS_THRESHOLD = -0.20  # 亏损>20%止损
+    STOP_LOSS_THRESHOLD = -0.10  # 亏损>10%建议止损（RiskManager 在-7%自动止损，此处作为提前预警）
     CAUTIOUS_THRESHOLD = 0.10  # 盈利>10%但大盘弱
 
     @classmethod
@@ -129,8 +129,6 @@ class SellAnalyzer:
             return 'stop_loss'
         elif market_mode in ('defensive', 'crisis') and pnl_pct > cls.CAUTIOUS_THRESHOLD:
             return 'risk_avoid'
-        elif pnl_pct < -0.10:
-            return 'stop_loss'
         else:
             return 'rebalance'
 
@@ -140,10 +138,13 @@ class SellAnalyzer:
 
         Returns:
             (action, urgency)
+
+        注意：SellAnalyzer 建议阈值比 RiskManager 实盘风控（SL=-7%, TS=-8%）更保守，
+        作为提前预警。实际自动止损由 RiskManager 执行。
         """
         # 大盘危机，强烈建议减仓
         if market_mode == 'crisis':
-            if pnl_pct < -0.10:
+            if pnl_pct < -0.07:  # 与 RiskManager SL=-7% 对齐
                 return 'sell now', 3
             elif pnl_pct < 0:
                 return 'sell now', 2
@@ -156,7 +157,7 @@ class SellAnalyzer:
         if market_mode == 'defensive':
             if pnl_pct > cls.PROFIT_TAKING_THRESHOLD:
                 return 'sell now', 2
-            elif pnl_pct < -0.15:
+            elif pnl_pct < -0.08:  # 介于 SL=-7% 和 TS=-8% 之间
                 return 'sell now', 3
             elif pnl_pct < -0.05:
                 return 'wait', 2
@@ -170,7 +171,7 @@ class SellAnalyzer:
             return 'sell now', 2
         elif pnl_pct < cls.STOP_LOSS_THRESHOLD:
             return 'sell now', 3
-        elif pnl_pct < -0.10:
+        elif pnl_pct < -0.05:
             return 'wait', 2
         elif pnl_pct > 0.10:
             return 'wait', 1

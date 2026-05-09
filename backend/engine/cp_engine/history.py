@@ -30,8 +30,7 @@ except ImportError:
     _HAS_CP_STORE = False
 
 # JSON文件路径（仅用于兼容旧数据和迁移）
-HISTORY_DIR = "/home/ailearn/projects/TradeSnake/data"
-HISTORY_FILE = os.path.join(HISTORY_DIR, "cp_history.json")
+from backend.config import HISTORY_DIR, HISTORY_FILE
 
 
 def ensure_dir():

@@ -35,8 +35,6 @@ export function StockDetail() {
     )
   }
 
-  const isUp = data.change_pct >= 0
-
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       {/* 头部 */}

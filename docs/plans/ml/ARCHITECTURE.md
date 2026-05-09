@@ -22,14 +22,18 @@ backend/ml/
 2. K 线数据：`duckdb.get_klines_bulk_for_date(codes, end_date, days)` → 行情数据
 3. Fallback：`daily_kline` 直接查询 + LIMIT 500
 
-**技术因子** (`ALL_FEATURES`)：
-- `return_5d/10d/20d`：收益率
-- `volatility_5d/10d/20d`：波动率
-- `volume_ratio_5d/10d`：量比
-- `ma20_slope`：20日均线斜率
-- `skew_20d`：收益分布偏度
-- `macd_diff`：MACD 差值
-- `pe_ttm`、`pb`：估值因子
+**特征列表** (`ALL_FEATURES`，共 20 个 = CP 6 + 技术 8 + 统计 6)：
+
+| 类别 | 特征 | 说明 |
+|------|------|------|
+| CP (6) | `total_cp`, `growth_score`, `value_score`, `quality_score`, `momentum_score`, `risk_score` | 战力体系快照 |
+| 技术 (8) | `rsi_14` | 14日RSI |
+| | `macd_diff`, `macd_signal` | MACD 差值与信号线 |
+| | `ma5_slope`, `ma10_slope`, `ma20_slope` | 均线斜率 (%) |
+| | `volume_ratio_5d`, `volume_ratio_10d` | 量比（短期/中期） |
+| 统计 (6) | `return_5d`, `return_10d`, `return_20d` | 收益率 |
+| | `volatility_10d`, `volatility_20d` | 波动率（年化） |
+| | `skew_20d` | 收益分布偏度 |
 
 **关键方法**：
 - `build_dataset(start, end, horizon)` → 生成训练集
@@ -78,14 +82,10 @@ model.py
 
 ## 与 CP 战力体系的关系
 
-**当前问题**：ML 模块与 CP 战力体系脱节。
-
-- CP 战力计算在 `cp_engine/` 中，使用 DuckDB K线 + 财务数据
-- ML 的 `features.py` 虽然使用 DuckDB K线，但未将 CP 战力因子（growth_score 等）作为输入特征
-- 应该：ML 特征构建时从 `cp_store.get_snapshot()` 获取 `growth_score`、`momentum_score` 等作为特征
+ML 特征构建时通过 `cp_store.get_snapshot()` 获取 CP 战力因子作为特征输入（`total_cp`, `growth_score`, `value_score`, `quality_score`, `momentum_score`, `risk_score`），实现与战力体系的对接。
 
 ## 已知 Limitations
 
-1. **特征与 alpha 脱节**：技术因子主导，但未验证 IC
+1. **技术因子 IC 已验证**：macd_diff IC=+0.0185(t=7.26)，为最强技术 alpha（来源：v21 Alpha 分析）
 2. **模型预测能力弱**：AUC≈0.506，几乎随机
 3. **walk_forward 训练慢**：每个 fold 需要构建大量特征

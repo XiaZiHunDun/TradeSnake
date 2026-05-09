@@ -4,7 +4,7 @@ from datetime import datetime, date
 from pathlib import Path
 import os
 
-LOG_DIR = Path("/home/ailearn/projects/TradeSnake/logs/nightly")
+from backend.config import LOG_DIR
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 def get_logger(task_name: str) -> logging.Logger:

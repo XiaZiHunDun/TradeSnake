@@ -54,7 +54,7 @@ MIN_TRADE_VALUE = 50000
 
 # 现金CP配置
 CASH_CP_BASELINE = 50
-RISK_FREE_RATE = 0.02
+RISK_FREE_RATE = 0.03  # 无风险利率 3%（与其他模块保持一致）
 
 # 财报发布月份
 EARNINGS_SEASON_MONTHS = [4, 7, 10]
@@ -74,7 +74,7 @@ MIN_MEANINGFUL_TRADE = 50000
 RISK_MANAGEMENT = {
     'enabled': True,                    # 总开关
     'stop_loss_pct': -0.07,             # 固定止损 -7%
-    'trailing_stop_pct': -0.05,         # 尾随止损：从最高价回撤 5%
+    'trailing_stop_pct': -0.08,         # 尾随止损：从最高价回撤 8%（v21 walk_forward 全局最优点）
     'portfolio_drawdown_limit': -0.15,  # 组合最大回撤 -15%
     'portfolio_drawdown_action': 'reduce',  # 'reduce'(减半仓位) 或 'clear'(清仓)
     'use_kelly_sizing': True,           # 是否使用 Kelly 计算仓位

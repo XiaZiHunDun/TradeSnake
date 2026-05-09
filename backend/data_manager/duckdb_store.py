@@ -988,7 +988,8 @@ class DuckDBStore:
             """, [start_date, end_date]).df()
 
             return [str(d) for d in df['trade_date'].tolist()]
-        except Exception:
+        except Exception as e:
+            logger.warning(f"get_trade_dates 查询失败: {e}")
             return []
         finally:
             self._release_lock(lock_fd)
@@ -1226,16 +1227,16 @@ class DuckDBStore:
                 if self._read_conn is not None:
                     try:
                         self._read_conn.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"关闭读连接时出错: {e}")
                     self._read_conn = None
 
                 # 如果已有写连接，先关闭它（确保干净的连接状态）
                 if self._write_conn is not None:
                     try:
                         self._write_conn.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"关闭写连接时出错: {e}")
                     self._write_conn = None
 
             # 创建新连接（避免配置冲突）

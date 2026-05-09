@@ -3,11 +3,8 @@ Tushare Provider 单元测试
 """
 
 import pytest
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data_manager.providers.tushare import (
+from backend.data_manager.providers.tushare import (
     TushareProvider,
     get_tushare_provider,
     INTERFACE_COSTS,

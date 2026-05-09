@@ -22,9 +22,19 @@ class Portfolio:
         return self.db.get_holding(code)
 
     def add_holding(self, code: str, name: str, quantity: int, cost_price: float,
-                   bought_at: str = None) -> int:
-        """添加持仓批次（买入成交）"""
-        return self.db.add_holding_batch(code, name, quantity, cost_price, bought_at)
+                   bought_at: str = None, stop_loss: float = 0, take_profit: float = 0) -> int:
+        """添加持仓批次（买入成交）
+
+        Args:
+            code: 股票代码
+            name: 股票名称
+            quantity: 数量
+            cost_price: 成本价
+            bought_at: 买入时间
+            stop_loss: 止损价
+            take_profit: 止盈价
+        """
+        return self.db.add_holding_batch(code, name, quantity, cost_price, bought_at, 0, stop_loss, take_profit)
 
     def reduce_holding(self, code: str, quantity: int) -> Tuple[bool, List[Dict]]:
         """减少持仓（FIFO）
@@ -234,3 +244,40 @@ class Portfolio:
             result.append(info)
 
         return result
+
+    def check_and_trigger_stops(self, current_prices: Dict[str, float]) -> List[Tuple[str, str, float]]:
+        """检查所有持仓是否触发止损/止盈
+
+        Args:
+            current_prices: {code: current_price}
+
+        Returns:
+            List of (code, reason, price) 需要卖出的股票
+            reason 是 'stop_loss' 或 'take_profit'
+        """
+        to_sell = []
+        holdings = self.get_holdings()
+
+        for position in holdings:
+            code = position['code']
+            stop_loss = position.get('stop_loss', 0)
+            take_profit = position.get('take_profit', 0)
+
+            if stop_loss <= 0 and take_profit <= 0:
+                continue
+
+            current_price = current_prices.get(code, 0)
+            if current_price <= 0:
+                continue
+
+            # 检查止损
+            if stop_loss > 0 and current_price <= stop_loss:
+                to_sell.append((code, 'stop_loss', current_price))
+                continue
+
+            # 检查止盈
+            if take_profit > 0 and current_price >= take_profit:
+                to_sell.append((code, 'take_profit', current_price))
+                continue
+
+        return to_sell

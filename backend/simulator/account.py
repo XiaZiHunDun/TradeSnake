@@ -55,6 +55,21 @@ class Account:
             return 0
         return (self.total_profit / self.initial_cash) * 100
 
+    @property
+    def peak_assets(self) -> float:
+        """历史最高总资产（用于计算组合回撤）"""
+        return self.db.get_account().get('peak_assets', self.initial_cash)
+
+    def update_peak_assets(self) -> bool:
+        """更新历史最高总资产（当总资产创新高时调用）"""
+        current = self.total_assets
+        peak = self.peak_assets
+        if current > peak:
+            account = self.db.get_account()
+            account['peak_assets'] = current
+            return self.db.update_account(**account)
+        return False
+
     def get_market_value(self) -> float:
         """获取持仓总市值（使用SQLite stocks表，无网络请求）"""
         import logging

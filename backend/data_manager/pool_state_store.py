@@ -26,7 +26,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # 默认数据库路径
-DATA_DIR = Path("/home/ailearn/projects/TradeSnake/data")
+DATA_DIR = Path(__file__).resolve().parent.parent.parent / 'data'
 SQLITE_PATH = DATA_DIR / "tradesnake.db"
 
 # codes 字段的 JSON 结构: [{"code": "000001", "name": "平安银行"}, ...]

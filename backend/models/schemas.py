@@ -3,7 +3,7 @@
 """
 
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional, Dict, Tuple, Any
+from typing import List, Optional, Dict, Tuple, Any, Literal
 
 
 class StockCPData(BaseModel):
@@ -123,7 +123,7 @@ class PersonalCPResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     """健康检查响应"""
-    status: str = Field(..., description="服务状态：healthy正常/unhealthy异常")
+    status: str = Field(..., description="服务状态：ok正常/error异常")
     timestamp: str = Field(..., description="检查时间戳")
     data_fresh: bool = Field(..., description="数据是否最新")
     last_update: Optional[str] = Field(None, description="最后数据更新时间，ISO格式")
@@ -166,7 +166,7 @@ class TradeDecisionResponse(BaseModel):
     trade_cost: float = Field(..., description="交易成本（元）")
     net_profit: float = Field(..., description="净收益（元）")
     net_return: float = Field(..., description="净收益率（%）")
-    action: str = Field(..., description="操作动作：buy买入/sell卖出/hold持有")
+    action: Literal['buy', 'sell', 'hold'] = Field(..., description="操作动作：buy买入/sell卖出/hold持有")
     action_level: str = Field(..., description="操作等级：strong_buy强烈买入/buy买入/hold持有/danger危险")
     action_color: str = Field(..., description="操作颜色代码，用于UI显示")
     action_label: str = Field(..., description="操作标签文字")
@@ -315,7 +315,7 @@ class TradeCostBreakdown(BaseModel):
 class TradeResponse(BaseModel):
     """交易响应"""
     success: bool = Field(..., description="交易是否成功")
-    action: str = Field(..., description="交易动作：buy买入/sell卖出")
+    action: Literal['buy', 'sell'] = Field(..., description="交易动作：buy买入/sell卖出")
     code: str = Field(..., description="股票代码")
     name: str = Field(..., description="股票名称")
     quantity: int = Field(..., description="成交数量（股）")
@@ -331,7 +331,7 @@ class TradeHistoryItem(BaseModel):
     id: int = Field(..., description="交易记录ID")
     code: str = Field(..., description="股票代码")
     name: str = Field(..., description="股票名称")
-    action: str = Field(..., description="交易动作：buy买入/sell卖出")
+    action: Literal['buy', 'sell'] = Field(..., description="交易动作：buy买入/sell卖出")
     quantity: int = Field(..., description="成交数量（股）")
     price: float = Field(..., description="成交价格（元）")
     commission: float = Field(..., description="佣金（元）")
@@ -397,7 +397,7 @@ class ProbabilityPredictionResponse(BaseModel):
 class BacktestTradeResponse(BaseModel):
     """回测交易记录"""
     date: str = Field(..., description="交易日期，YYYY-MM-DD格式")
-    action: str = Field(..., description="交易动作：buy买入/sell卖出")
+    action: Literal['buy', 'sell'] = Field(..., description="交易动作：buy买入/sell卖出")
     code: str = Field(..., description="股票代码")
     name: str = Field(..., description="股票名称")
     price: float = Field(..., description="成交价格（元）")

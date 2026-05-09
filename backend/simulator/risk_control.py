@@ -19,8 +19,8 @@ class RiskControl:
     7. 流动性检查（成交量）
     """
 
-    # 风控参数
-    MAX_POSITION_RATIO = 0.30  # 单股持仓上限30%
+    # 风控参数（v21统一：单股持仓上限20%，与RiskManager/KellyCalculator保持一致）
+    MAX_POSITION_RATIO = 0.20  # 单股持仓上限20%（v21标准）
     MAX_DAILY_BUY_RATIO = 0.80  # 单日买入限额80%
     MAX_DAILY_TRADES = 10  # 单日交易次数
     MIN_TRADE_UNIT = 100  # 最小买入单位（1手=100股）

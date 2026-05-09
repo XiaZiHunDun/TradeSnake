@@ -115,7 +115,7 @@ def is_valid_trade_date(date_str: str) -> bool:
         dt = datetime.strptime(date_str, '%Y-%m-%d')
         # 简单检查：是否为周末
         return dt.weekday() < 5
-    except:
+    except (ValueError, TypeError):
         return False
 
 
@@ -392,7 +392,7 @@ class DataQualityScorer:
                 return 70
             else:
                 return max(30, 100 - (hours_old - 72) / 24 * 10)
-        except:
+        except (ValueError, TypeError):
             return 50
 
     def _calc_consistency(self, data: dict) -> float:

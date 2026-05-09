@@ -10,7 +10,6 @@ export function Watchlist() {
   const navigate = useNavigate()
   const { data: groups, isLoading } = useWatchlistGroups()
   const { mutate: saveGroups } = useSaveWatchlistGroups()
-  const [editingGroup, setEditingGroup] = useState<string | null>(null)
   const [newGroupName, setNewGroupName] = useState('')
   const [newGroupCodes, setNewGroupCodes] = useState('')
 
@@ -21,7 +20,7 @@ export function Watchlist() {
       id: Date.now().toString(),
       name: newGroupName,
       codes,
-      color: DEFAULT_COLORS[groups?.length % DEFAULT_COLORS.length],
+      color: DEFAULT_COLORS[(groups?.length ?? 0) % DEFAULT_COLORS.length],
     }
     saveGroups([...(groups || []), newGroup])
     setNewGroupName('')

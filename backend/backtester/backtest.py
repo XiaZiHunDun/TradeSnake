@@ -548,7 +548,7 @@ class Backtest:
                         sd = datetime.fromisoformat(trade.trade_date)
                         days = (sd - bd).days
                         holding_days_list.append(max(1, days))
-                    except:
+                    except (ValueError, TypeError):
                         pass
 
         avg_holding_days = sum(holding_days_list) / len(holding_days_list) if holding_days_list else 0
@@ -589,6 +589,7 @@ class Backtest:
             losing_trades=metrics.get('losing_trades', 0),
             win_rate=metrics.get('win_rate', 0),
             profit_loss_ratio=metrics.get('profit_loss_ratio', 0),
+            trimmed_profit_loss_ratio=metrics.get('trimmed_profit_loss_ratio', 0),
             avg_holding_days=avg_holding_days,
 
             # 交易记录
@@ -787,7 +788,10 @@ class BacktestEngine:
         if len(dates) < 2:
             return {"error": "数据不足"}
 
-        # 简化计算：取首尾日期的TOP N平均战力
+        # 使用 holding_days 限制窗口：只取开始后 holding_days 天的数据
+        if holding_days > 0 and len(dates) > holding_days + 1:
+            dates = dates[:holding_days + 1]
+
         initial_date = dates[0]
         final_date = dates[-1]
 

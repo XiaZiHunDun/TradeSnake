@@ -17,7 +17,7 @@ export function StockCard({
   showCP = true,
   className = '',
 }: StockCardProps) {
-  const isUp = stock.change >= 0
+  const isUp = (stock.change ?? 0) >= 0
 
   const sizeStyles = {
     sm: 'text-sm p-2',
@@ -59,10 +59,10 @@ export function StockCard({
         </div>
         <div className={`text-right px-2 py-1 rounded ${bgClass} ${colorClass}`}>
           <div className="font-mono text-sm">
-            {isUp ? '+' : ''}{stock.change.toFixed(2)}
+            {isUp ? '+' : ''}{(stock.change ?? 0).toFixed(2)}
           </div>
           <div className="font-mono text-xs">
-            {isUp ? '+' : ''}{stock.changePercent.toFixed(2)}%
+            {isUp ? '+' : ''}{(stock.changePercent ?? 0).toFixed(2)}%
           </div>
         </div>
       </div>

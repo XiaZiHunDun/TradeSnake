@@ -137,7 +137,8 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     code TEXT NOT NULL, name TEXT NOT NULL,
                     quantity INTEGER NOT NULL, cost_price REAL NOT NULL,
-                    bought_at TEXT NOT NULL, peak_price REAL DEFAULT 0
+                    bought_at TEXT NOT NULL, peak_price REAL DEFAULT 0,
+                    stop_loss REAL DEFAULT 0, take_profit REAL DEFAULT 0
 )
             """)
 
@@ -146,6 +147,12 @@ class Database:
             existing_cols = {row[1] for row in cursor.fetchall()}
             if 'peak_price' not in existing_cols:
                 cursor.execute("ALTER TABLE holding_batches ADD COLUMN peak_price REAL DEFAULT 0")
+
+            # Migration: 添加 stop_loss 和 take_profit 列（如果不存在）
+            if 'stop_loss' not in existing_cols:
+                cursor.execute("ALTER TABLE holding_batches ADD COLUMN stop_loss REAL DEFAULT 0")
+            if 'take_profit' not in existing_cols:
+                cursor.execute("ALTER TABLE holding_batches ADD COLUMN take_profit REAL DEFAULT 0")
 
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS trade_cooldown (
@@ -165,10 +172,24 @@ class Database:
                     filled_quantity INTEGER DEFAULT 0, filled_price REAL DEFAULT 0,
                     status TEXT NOT NULL DEFAULT 'pending',
                     frozen_amount REAL DEFAULT 0,
+                    reason TEXT DEFAULT '',
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     filled_at TEXT,
                     cancel_reason TEXT
+                )
+            """)
+
+            # 交易记录表 v19.1（包含 sell_reason 字段，v21 新增）
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL, name TEXT NOT NULL,
+                    action TEXT NOT NULL, quantity INTEGER NOT NULL,
+                    price REAL NOT NULL, total_amount REAL NOT NULL,
+                    commission REAL DEFAULT 0, stamp_tax REAL DEFAULT 0,
+                    transfer_fee REAL DEFAULT 0, sell_reason TEXT,
+                    recorded_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
@@ -573,7 +594,8 @@ class Database:
                    SUM(quantity * cost_price) / SUM(quantity) as avg_cost_price,
                    MIN(bought_at) as earliest_bought_at,
                    MAX(bought_at) as latest_bought_at,
-                   MAX(peak_price) as peak_price
+                   MAX(peak_price) as peak_price,
+                   MAX(stop_loss) as stop_loss, MAX(take_profit) as take_profit
             FROM holding_batches
             GROUP BY code
             HAVING SUM(quantity) > 0
@@ -588,7 +610,8 @@ class Database:
                    SUM(quantity * cost_price) / SUM(quantity) as avg_cost_price,
                    MIN(bought_at) as earliest_bought_at,
                    MAX(bought_at) as latest_bought_at,
-                   MAX(peak_price) as peak_price
+                   MAX(peak_price) as peak_price,
+                   MAX(stop_loss) as stop_loss, MAX(take_profit) as take_profit
             FROM holding_batches
             WHERE code = ?
             GROUP BY code
@@ -596,15 +619,15 @@ class Database:
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def add_holding_batch(self, code: str, name: str, quantity: int, cost_price: float, bought_at: str = None, peak_price: float = 0) -> int:
+    def add_holding_batch(self, code: str, name: str, quantity: int, cost_price: float, bought_at: str = None, peak_price: float = 0, stop_loss: float = 0, take_profit: float = 0) -> int:
         with self._write_lock:
             cursor = self.conn.cursor()
             if bought_at is None:
                 bought_at = datetime.now().isoformat()
             cursor.execute("""
-                INSERT INTO holding_batches (code, name, quantity, cost_price, bought_at, peak_price)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (code, name, quantity, cost_price, bought_at, peak_price))
+                INSERT INTO holding_batches (code, name, quantity, cost_price, bought_at, peak_price, stop_loss, take_profit)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (code, name, quantity, cost_price, bought_at, peak_price, stop_loss, take_profit))
             self.conn.commit()
             return cursor.lastrowid
 
@@ -692,13 +715,14 @@ class Database:
             cursor.execute("""
                 INSERT INTO trades (
                     code, name, action, quantity, price,
-                    commission, stamp_tax, transfer_fee, total_amount, recorded_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    commission, stamp_tax, transfer_fee, total_amount, sell_reason, recorded_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade.get('code'), trade.get('name'), trade.get('action'),
                 trade.get('quantity'), trade.get('price'),
                 trade.get('commission', 0), trade.get('stamp_tax', 0),
                 trade.get('transfer_fee', 0), trade.get('total_amount'),
+                trade.get('sell_reason'),  # v21 新增 sell_reason 字段
                 datetime.now().isoformat()
             ))
             self.conn.commit()
@@ -751,13 +775,14 @@ class Database:
                 INSERT INTO orders (
                     code, name, action, order_type, price, quantity,
                     filled_quantity, filled_price, status, frozen_amount,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'pending', ?, ?, ?)
+                    reason, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'pending', ?, ?, ?, ?)
             """, (
                 order.get('code'), order.get('name'),
                 order.get('action'), order.get('order_type'),
                 order.get('price'), order.get('quantity'),
                 order.get('frozen_amount', 0),
+                order.get('reason', ''),
                 datetime.now().isoformat(), datetime.now().isoformat()
             ))
             self.conn.commit()

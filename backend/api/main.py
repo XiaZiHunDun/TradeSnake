@@ -443,7 +443,8 @@ async def background_refresh_task():
                 cp_engine.calculate_all()
 
                 # 仅保留核心池+活跃池内的股票，与 StockSelector 语义一致
-                cp_engine.stocks = [s for s in cp_engine.stocks if s.code in analysable_codes]
+                if analysable_codes:
+                    cp_engine.stocks = [s for s in cp_engine.stocks if s.code in analysable_codes]
 
                 # 持久化到数据库
                 from backend.simulator.database import get_db

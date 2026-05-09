@@ -1,8 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useRecommendations, useSwapSuggestions, useGainPredictionTop, useProbabilityPredictionTop } from '../../shared/hooks/useApi'
-import { Button } from '../../shared/components/atoms'
-import type { SwapSuggestion, GainPrediction, ProbabilityPrediction } from '../../shared/types'
+import type { GainPrediction, ProbabilityPrediction } from '../../shared/types'
 
 const CATEGORIES = [
   { key: 'value', label: '价值型', desc: '低估值的价值股票' },
@@ -131,7 +130,7 @@ export function Recommend() {
           <div className="text-center py-8 text-gray-500">加载中...</div>
         ) : swapSuggestions && swapSuggestions.length > 0 ? (
           <div className="space-y-4">
-            {swapSuggestions.map((suggestion: SwapSuggestion, index: number) => (
+            {swapSuggestions.map((suggestion, index) => (
               <div
                 key={index}
                 className="border border-gray-200 dark:border-gray-700 rounded-lg p-4"

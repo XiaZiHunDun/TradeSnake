@@ -7,7 +7,7 @@ WebSocket管理器 - TradeSnake v18.x
 - 心跳检测
 """
 
-import asyncio
+# asyncio imported for type hints only
 import json
 from typing import List, Dict
 from fastapi import WebSocket

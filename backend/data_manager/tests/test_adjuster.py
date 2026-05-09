@@ -3,11 +3,8 @@ Adjuster 单元测试
 """
 
 import pytest
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data_manager.adjuster import AdjustmentManager, AdjustmentFactor, ExRightEvent
+from backend.data_manager.adjuster import AdjustmentManager, AdjustmentFactor, ExRightEvent
 
 
 class TestAdjustmentManager:
@@ -26,7 +23,7 @@ class TestAdjustmentManager:
         import os
         try:
             os.unlink(self.temp_db.name)
-        except:
+        except OSError:
             pass
 
     def test_initialization(self):

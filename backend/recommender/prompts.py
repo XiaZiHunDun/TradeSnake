@@ -122,10 +122,10 @@ class PromptsGenerator:
 
         # 波动率
         volatility = getattr(stock, 'volatility_20d', 0)
-        if volatility > 8:
-            warnings.append(f"20日波动率{volatility:.1f}%偏高")
-        elif volatility > 5:
-            warnings.append(f"20日波动率{volatility:.1f}%适中")
+        if volatility > 40:
+            warnings.append(f"20日波动率{volatility:.1f}%偏高（年化）")
+        elif volatility > 25:
+            warnings.append(f"20日波动率{volatility:.1f}%适中（年化）")
 
         # 财报季
         import datetime

@@ -88,8 +88,8 @@ export function Backtest() {
               />
               <ResultCard
                 label="年化收益率"
-                value={result.annual_return != null ? `${result.annual_return.toFixed(2)}%` : '-'}
-                color={result.annual_return && result.annual_return >= 0 ? 'text-red-500' : 'text-green-500'}
+                value={result.annualized_return != null ? `${result.annualized_return.toFixed(2)}%` : '-'}
+                color={result.annualized_return && result.annualized_return >= 0 ? 'text-red-500' : 'text-green-500'}
               />
               <ResultCard
                 label="夏普比率"

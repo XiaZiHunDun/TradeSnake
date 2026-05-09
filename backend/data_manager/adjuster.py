@@ -24,8 +24,8 @@ from dataclasses import dataclass
 
 # ==================== 路径配置 ====================
 
-DATA_DIR = Path("/home/ailearn/projects/TradeSnake/data")
-DB_PATH = DATA_DIR / "tradesnake.db"
+from backend.config import DATA_DIR, SQLITE_PATH
+DB_PATH = str(SQLITE_PATH)
 
 
 # ==================== 数据类 ====================

@@ -8,11 +8,19 @@
 设计文档：docs/plans/engine/probability_predictor/PROBABILITY_PREDICTOR.md
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 
 from .features import calculate_features, GLOBAL_AVG_VOLATILITY
+
+# 板块涨跌幅限制配置（与 cp_engine/filters.py 保持一致，使用 gem/star/bge/main 命名）
+BOARD_LIMIT_CONFIG = {
+    'main': 10,      # 主板
+    'gem': 20,       # 创业板（300开头）
+    'star': 20,      # 科创板（688开头）
+    'bge': 30,       # 北交所（4/8开头）
+}
 
 
 @dataclass
@@ -23,8 +31,8 @@ class ProbabilityPrediction:
     up_probability_3d: float  # 3日上涨概率 0-1
     up_probability_5d: float  # 5日上涨概率 0-1
     confidence: float  # 置信度 0-1
-    confidence_interval_3d: List[float]  # 3日置信区间
-    confidence_interval_5d: List[float]  # 5日置信区间
+    confidence_interval_3d: Tuple[float, float]  # 3日置信区间 (min, max)
+    confidence_interval_5d: Tuple[float, float]  # 5日置信区间 (min, max)
     risk_level: str  # high/medium/low
     features: Dict[str, float]  # 主要特征值
     model_version: str = "rule_v19.8"
@@ -40,10 +48,26 @@ class ProbabilityPredictionResult:
 
 
 class ProbabilityPredictor:
-    """上涨概率预测器"""
+    """上涨概率预测器（ML 优先，规则兜底）"""
 
     def __init__(self):
         self.model_version = "rule_v19.8"
+        self._ml_model = None
+        self._ml_checked = False
+
+    def _get_ml_model(self):
+        if self._ml_checked:
+            return self._ml_model
+        self._ml_checked = True
+        try:
+            from backend.ml.model import StockPredictor
+            predictor = StockPredictor()
+            if predictor.load("latest"):
+                self._ml_model = predictor
+                self.model_version = f"lgbm_{predictor.train_date or 'unknown'}"
+        except Exception:
+            pass
+        return self._ml_model
 
     def predict(self, klines_dict: Dict[str, List[Dict]]) -> ProbabilityPredictionResult:
         """批量预测股票上涨概率
@@ -193,21 +217,39 @@ class ProbabilityPredictor:
         )
 
     def _apply_limit_adjustment(self, probability: float, klines: List[Dict]) -> float:
-        """应用涨跌停限制调整概率"""
+        """应用涨跌停限制调整概率
+
+        注意：涨跌停判断使用板块差异化阈值，与 gain_predictor 保持一致。
+        产品范围仅沪深主板，此处 main 阈值用于兼容性判断。
+        """
         if not klines:
             return probability
 
         today_change = klines[-1].get('change_pct', 0)
+        board_type = self._get_board_type(klines[-1].get('code', ''))
+        limit_pct = BOARD_LIMIT_CONFIG.get(board_type, 10)  # 主板默认10%
 
-        # 涨停：最低0.65
-        if today_change >= 9.9:
+        # 涨停：最低0.65（动量延续效应）
+        if today_change >= limit_pct - 0.1:
             return max(probability + 0.15, 0.65)
 
-        # 跌停：最高0.25
-        if today_change <= -9.9:
+        # 跌停：最高0.25（动量延续效应）
+        if today_change <= -limit_pct + 0.1:
             return min(probability - 0.15, 0.25)
 
         return probability
+
+    def _get_board_type(self, code: str) -> str:
+        """根据代码判断板块类型（与 cp_engine/cp_engine.py board_type 属性一致）"""
+        code_clean = code.replace('sz', '').replace('sh', '').lower()
+        if code_clean.startswith('688'):
+            return 'star'
+        elif code_clean.startswith('300'):
+            return 'gem'
+        elif code_clean.startswith('4') or code_clean.startswith('8'):
+            return 'bge'
+        else:
+            return 'main'
 
     def to_dict(self, result: ProbabilityPredictionResult) -> Dict:
         """转换为字典格式"""
@@ -448,7 +490,7 @@ class ProbabilityPredictor:
                 start_price = klines_list[-1].get('close', 0)  # oldest (date_str or next day)
                 end_price = klines_list[0].get('close', 0)     # newest (last available)
                 return end_price > start_price
-        except:
+        except (ValueError, IndexError, ZeroDivisionError):
             pass
         return None
 

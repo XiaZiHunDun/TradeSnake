@@ -15,7 +15,7 @@ from .full_backtest import FullBacktestEngine, BacktestStats
 class BacktestConfig:
     """回测配置"""
     top_n: int = 6                    # 持仓数量
-    stop_loss: float = -0.10         # 止损 -10%
+    stop_loss: float = -0.07         # 止损 -7%（v21标准）
     max_holding_days: int = 5         # 最大持仓天数
     initial_capital: float = 1000000  # 初始资金 100万
     market_filter: float = -2.0      # 大盘过滤阈值（关闭）
@@ -76,7 +76,7 @@ class StrategyComparator:
         return MultiFactorStrategy(
             n=self.config.top_n,
             max_days=self.config.max_holding_days,
-            weights={'growth': 0.3, 'value': 0.25, 'momentum': 0.25, 'quality': 0.2}
+            weights={'growth': 0.50, 'value': 0.00, 'momentum': 0.28, 'quality': 0.05}  # v21 WEIGHTS
         )
 
     def compare_strategies(

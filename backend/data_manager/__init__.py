@@ -43,7 +43,6 @@ from .manager import (
     get_financial_data,
     get_stock_list,
     get_tushare_data,
-    UnifiedCache,
 )
 
 # 新增模块
@@ -192,7 +191,6 @@ __all__ = [
     'get_financial_data',
     'get_stock_list',
     'get_tushare_data',
-    'UnifiedCache',
     # 数据清洗
     'DataCleaner',
     'DataValidator',

@@ -38,7 +38,7 @@ class TestRiskManager:
 
     def test_trailing_stop_triggered(self):
         """尾随止损触发"""
-        position = {'current_price': 95, 'peak_price': 100}
+        position = {'current_price': 91, 'peak_price': 100}  # 9% drawdown >= TS=-0.08
         result = self.rm.check_trailing_stop(position)
         assert result.should_sell is True
         assert '尾随止损' in result.reason
@@ -46,7 +46,7 @@ class TestRiskManager:
 
     def test_trailing_stop_not_triggered(self):
         """尾随止损未触发"""
-        position = {'current_price': 98, 'peak_price': 100}
+        position = {'current_price': 95, 'peak_price': 100}  # 5% drawdown < TS=-0.08
         result = self.rm.check_trailing_stop(position)
         assert result.should_sell is False
 

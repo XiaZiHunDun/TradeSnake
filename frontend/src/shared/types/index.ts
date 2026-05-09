@@ -34,21 +34,34 @@ export interface StockCP {
   current_ratio?: number
   interest_coverage?: number
   deducted_net_profit?: number
-  // 兼容字段别名
-  change?: number  // change_pct alias
-  changePercent?: number  // change_pct alias
-  growth_cp?: number  // growth_score alias
-  value_cp?: number  // value_score alias
-  quality_cp?: number  // quality_score alias
-  momentum_cp?: number  // momentum_score alias
-  high_price?: number  // high alias
-  low_price?: number  // low alias
+  // 兼容字段别名（组件实际使用）
+  change?: number
+  changePercent?: number
+  growth_cp?: number
+  value_cp?: number
+  quality_cp?: number
+  momentum_cp?: number
+  high_price?: number
+  low_price?: number
+  // 融合推荐字段 (v19.9.5)
+  kelly_position?: number
+  predicted_gain_5d?: number
+  up_probability_5d?: number
+  prediction_confidence?: number
+  fused_score?: number
+  net_benefit_hint?: string
+  // 财务数据
+  roe?: number
+  net_profit_growth?: number
+  revenue_growth?: number
+  peg?: number
 }
 
 export interface CPTopResponse {
   data: StockCP[]
   updated_at: string
   total: number
+  error?: string
 }
 
 export interface StockDetail {
@@ -71,6 +84,9 @@ export interface StockDetail {
   debt_ratio?: number
   dividend_yield?: number
   market_cap?: number
+  float_market_cap?: number
+  turnover_rate?: number
+  amount?: number
   high?: number
   low?: number
   data_quality?: 'high' | 'medium' | 'low'
@@ -138,7 +154,7 @@ export interface TradeCostBreakdown {
   total_cost: number
 }
 
-export interface TradeResult {
+export interface TradeExecutionDetail {
   success: boolean
   action: 'buy' | 'sell'
   code: string
@@ -168,16 +184,6 @@ export interface TradeHistoryItem {
 export interface TradeHistoryResponse {
   trades: TradeHistoryItem[]
   total_count: number
-}
-
-export interface TradeResult {
-  success: boolean
-  message: string
-  trade_id?: string
-  price?: number
-  shares?: number
-  amount?: number
-  commission?: number
 }
 
 export interface SwapSuggestion {
@@ -215,7 +221,7 @@ export interface BacktestParams {
 
 export interface BacktestResult {
   total_return?: number
-  annual_return?: number
+  annualized_return?: number
   sharpe_ratio?: number
   max_drawdown?: number
   win_rate?: number
@@ -227,13 +233,14 @@ export interface BacktestResult {
 
 export interface MarketStats {
   total_stocks: number
-  up_count: number
-  down_count: number
-  flat_count: number
-  limit_up_count: number
-  limit_down_count: number
-  total_amount: number
-  market_capitalization: number
+  avg_cp: number
+  high_cp_count: number
+  mid_cp_count: number
+  low_cp_count: number
+  avg_change: number
+  rising_stocks: number
+  falling_stocks: number
+  unchanged_stocks: number
 }
 
 export interface WatchlistGroup {

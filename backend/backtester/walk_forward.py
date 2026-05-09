@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 TRADING_DAYS_PER_YEAR = 250
 RISK_FREE_RATE = 0.03
+SLIPPAGE_RATE = 0.001  # 0.1% 滑点
 
 
 @dataclass
@@ -26,6 +27,7 @@ class WalkForwardConfig:
     top_n: int = 6
     rebalance_freq: int = 10
     stop_loss: float = -0.07
+    trailing_stop: float = -0.08  # -8% trailing stop
     initial_capital: float = 1_000_000
 
 
@@ -186,8 +188,8 @@ class WalkForwardBacktester:
         holdings = {code: portfolio_value / len(top_codes) for code in top_codes}
         peak_prices = {}  # code -> peak_price for trailing stop
         n_trades += len(top_codes)
-        buy_cost_rate = TRADE_COST["commission"] + TRADE_COST["transfer_fee"]
-        sell_cost_rate = TRADE_COST["commission"] + TRADE_COST["stamp_tax"] + TRADE_COST["transfer_fee"]
+        buy_cost_rate = TRADE_COST["commission"] + TRADE_COST["transfer_fee"] + SLIPPAGE_RATE
+        sell_cost_rate = TRADE_COST["commission"] + TRADE_COST["stamp_tax"] + TRADE_COST["transfer_fee"] + SLIPPAGE_RATE
         for code, val in holdings.items():
             cost = val * buy_cost_rate
             fees += max(cost, TRADE_COST["min_commission"])
@@ -200,7 +202,7 @@ class WalkForwardBacktester:
 
         rebal_counter = 0
         portfolio_stopped = False
-        TRAILING_STOP = 0.07  # -7% trailing stop
+        TRAILING_STOP = abs(self.config.trailing_stop)
         PORTFOLIO_DRAWDOWN_LIMIT = 0.15  # -15% portfolio drawdown circuit breaker
 
         for dt in test_dates:
@@ -227,7 +229,7 @@ class WalkForwardBacktester:
 
                 ret = c1 / c0 - 1
 
-                # Check trailing stop (-10%)
+                # Check trailing stop (-8%)
                 trailing_dd = (peak_prices[code] - c1) / peak_prices[code] if peak_prices[code] > 0 else 0
                 if trailing_dd > TRAILING_STOP:
                     # Sell: hit trailing stop
@@ -285,9 +287,13 @@ class WalkForwardBacktester:
             rebal_counter += 1
 
             # Periodic rebalancing
+            # NOTE: Using ranking_date (training end) intentionally, NOT current dt.
+            # CP rankings for day dt are recorded AFTER market close on dt, so using dt
+            # would introduce look-ahead bias. This follows strict walk-forward principle
+            # where only training-period information is used for stock selection.
             if rebal_counter >= self.config.rebalance_freq and not portfolio_stopped:
                 rebal_counter = 0
-                # Re-select top stocks from CP ranking
+                # Re-select top stocks from CP ranking (same ranking_date = no look-ahead)
                 curr_snapshot = cp_store.get_snapshot(ranking_date) if hasattr(cp_store, "get_snapshot") else snapshot
                 sorted_curr = sorted(curr_snapshot, key=lambda x: x.get("total_cp", 0), reverse=True)
                 new_top_codes = [s["code"] for s in sorted_curr[:self.config.top_n] if "code" in s]

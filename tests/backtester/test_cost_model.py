@@ -11,7 +11,7 @@ from backend.backtester.cost_model import CostModel, calculate_total_cost, CostR
 def test_buy_commission():
     """买入时收取佣金"""
     cost = calculate_total_cost(amount=100000, action='buy')
-    assert cost.commission == 10.0  # 万1 = 10元
+    assert cost.commission == 30.0  # 万3 = 30元
     assert cost.stamp_tax == 0
     assert cost.slippage == 100.0  # 0.1% = 100元
 
@@ -19,7 +19,7 @@ def test_buy_commission():
 def test_sell_commission_and_stamp_tax():
     """卖出时收取佣金+印花税+滑点"""
     cost = calculate_total_cost(amount=100000, action='sell')
-    assert cost.commission == 10.0  # 万1
+    assert cost.commission == 30.0  # 万3
     assert cost.stamp_tax == 50.0   # 千0.5 = 50元
     assert cost.slippage == 100.0   # 0.1%
 
@@ -50,13 +50,13 @@ def test_transfer_fee_shenzhen():
 
 def test_total_cost_calculation():
     """总成本计算"""
-    # 买入：佣金10 + 过户费1 + 滑点100 = 111
+    # 买入：佣金30 + 过户费1 + 滑点100 = 131
     cost = calculate_total_cost(amount=100000, action='buy', is_shanghai=True)
-    assert cost.total_cost == 111.0
+    assert cost.total_cost == 131.0
 
-    # 卖出：佣金10 + 印花税50 + 过户费1 + 滑点100 = 161
+    # 卖出：佣金30 + 印花税50 + 过户费1 + 滑点100 = 181
     cost = calculate_total_cost(amount=100000, action='sell', is_shanghai=True)
-    assert cost.total_cost == 161.0
+    assert cost.total_cost == 181.0
 
 
 def test_cost_result_total():

@@ -5,11 +5,9 @@ DuckDB Store 单元测试
 import pytest
 import tempfile
 import os
-import sys
 from pathlib import Path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data_manager.duckdb_store import (
+from backend.data_manager.duckdb_store import (
     DuckDBStore, KlineRecord, QueryResult, HistoryMigrator
 )
 
@@ -53,7 +51,7 @@ class TestDuckDBStore:
             wal_path = self.temp_db_path + '.wal'
             if os.path.exists(wal_path):
                 os.unlink(wal_path)
-        except:
+        except OSError:
             pass
 
     def test_insert_daily_kline(self):

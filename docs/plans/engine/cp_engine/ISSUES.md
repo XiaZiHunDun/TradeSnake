@@ -1,4 +1,13 @@
-# CPEngine 问题记录
+# CPEngine 问题追踪
+
+## 记录格式
+| 日期 | 问题 | 状态 | 修复 |
+|------|------|------|------|
+
+状态枚举：待调查 / 已修复 / 保留 / 已验证
+
+---
+<!-- 在此下方添加历史问题记录 -->
 
 ## 问题追踪
 
@@ -11,6 +20,10 @@
 | 2026-04-23 | parallel.py 与主流程重复代码 | P3 | 保留 | 语义不同，已在 docstring 说明 |
 | 2026-04-23 | parallel.py quality_score 缺 clamp | P1 | 已验证 | 代码已有 max(0,...) clamp |
 | 2026-05-06 | WEIGHTS v21 数据驱动重构 | - | 已修复 | 基于 414 天 Alpha 分析，growth 0.35→0.50, value 0.20→0.00, quality 0.08→0.05, momentum 0.20→0.28 |
+| 2026-05-07 | get_cp_explanation() 缺少 real_time 因子展示 | MEDIUM | 已修复 | 添加 real_time 因子（2%权重）到战力分解说明 |
+| 2026-05-07 | constants.py RISK_FREE_RATE=0.02 与其他模块 0.03 不一致 | HIGH | 已修复 | 统一为 0.03 |
+| 2026-05-08 | ENGINE_ARCHITECTURE.md 第282-297行战力公式仍为 v19.8 旧版，未同步 v21 权重 | HIGH | 已修复 | 公式已更新为 v21：growth×50%+momentum×28%+quality×5%，并标注旧公式废弃 |
+| 2026-05-08 | CP_ENGINE.md 包含创业板/科创板/北交所涨跌停阈值，与产品范围(沪深主板)矛盾 | MEDIUM | 已修复 | 删除非主板板块阈值，添加产品范围说明注释 |
 
 ## 已知限制
 

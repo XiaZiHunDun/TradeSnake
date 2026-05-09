@@ -69,6 +69,7 @@ class BacktestResult:
     win_rate: float = 0            # 交易胜率%
     profit_loss_ratio: float = 0   # 盈亏比
     trimmed_profit_loss_ratio: float = 0  # 截尾盈亏比（去除5%极端值）
+    avg_holding_days: float = 0  # 平均持仓天数
 
     # 交易记录
     trades: List[Trade] = field(default_factory=list)

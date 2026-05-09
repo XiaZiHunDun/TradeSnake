@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useCPTop, useGainPredictionTop, useProbabilityPredictionTop } from '../../shared/hooks/useApi'
 import { SortableTable } from '../../shared/components/organisms'
 import type { StockCP, GainPrediction, ProbabilityPrediction } from '../../shared/types'
+import type { Column } from '../../shared/components/organisms/SortableTable'
 
 const PAGE_TITLE = '战力榜'
 
@@ -38,7 +39,7 @@ export function TopList() {
     }
   }, [data, filter])
 
-  const columns = [
+  const columns: Column<StockCP>[] = [
     {
       key: 'rank',
       title: '排名',

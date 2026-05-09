@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 
-interface Column<T> {
+export interface Column<T> {
   key: keyof T | string
   title: string
   sortable?: boolean
@@ -20,7 +20,8 @@ interface SortableTableProps<T> {
   className?: string
 }
 
-export function SortableTable<T extends { [key: string]: unknown }>({
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function SortableTable<T extends Record<string, any>>({
   data,
   columns,
   onRowClick,
@@ -45,8 +46,10 @@ export function SortableTable<T extends { [key: string]: unknown }>({
   const sortedData = useMemo(() => {
     if (!sortKey) return data
     return [...data].sort((a, b) => {
-      const aVal = a[sortKey]
-      const bVal = b[sortKey]
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const aVal = (a as any)[sortKey]
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const bVal = (b as any)[sortKey]
       if (aVal == null) return 1
       if (bVal == null) return -1
       const cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0
@@ -54,6 +57,7 @@ export function SortableTable<T extends { [key: string]: unknown }>({
     })
   }, [data, sortKey, sortOrder])
 
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: sortedData.length,
     getScrollElement: () => parentRef.current,

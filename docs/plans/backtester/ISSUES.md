@@ -1,4 +1,13 @@
-# Backtester 问题记录
+# Backtester 问题追踪
+
+## 记录格式
+| 日期 | 问题 | 状态 | 修复 |
+|------|------|------|------|
+
+状态枚举：待调查 / 已修复 / 保留 / 已验证
+
+---
+<!-- 在此下方添加历史问题记录 -->
 
 ## 问题追踪
 
@@ -14,12 +23,22 @@
 | 2026-05-06 | 组合回撤熔断未实现 | - | 已修复 | -15% 组合级熔断，触发后清仓持现金 |
 | 2026-05-06 | trailing stop 未实现 | - | 已修复 | peak_price 跟踪，-10% 触发卖出 |
 | 2026-05-06 | rebalance_freq 5天过短 | - | 已修复 | 改为 10天（匹配 growth IC 衰减特征） |
+| 2026-05-07 | walk_forward.py 缺少滑点计算 | MEDIUM | 已修复 | 添加 SLIPPAGE_RATE=0.1%，计入 buy_cost_rate 和 sell_cost_rate |
+| 2026-05-07 | MultiFactorStrategy 默认权重与 v21 不一致 | MEDIUM | 已修复 | 改为 growth=0.50, value=0.00, momentum=0.28, quality=0.05 |
+| 2026-05-07 | cost_model.py 佣金率万1，应为万3 | HIGH | 已修复 | COMMISSION_RATE 0.0001→0.0003 |
+| 2026-05-07 | BacktestResult.to_dict() 引用未定义字段 avg_holding_days | CRITICAL | 已修复 | 在 BacktestResult dataclass 添加 avg_holding_days: float = 0 字段 |
+| 2026-05-07 | walk_forward trailing_stop -8% 与 constants trailing_stop_pct -5% 不一致 | 冲突 | 已修复 | constants.py trailing_stop_pct 改为 -0.08 |
+| 2026-05-07 | backtester/risk_controller.py 的 RiskController 从未被调用（死代码） | MEDIUM | **已删除** | 风控逻辑已整合到 FullBacktestEngine，RiskManager负责实盘 |
+| 2026-05-07 | simulator trades 表缺失 CREATE TABLE 定义 | CRITICAL | 已修复 | 在 _create_tables() 中添加 trades 表定义 |
+| 2026-05-07 | simulator trades 表缺失 sell_reason 字段 | HIGH | 已修复 | 添加 sell_reason 列并在 record_trade() 中写入 |
+| 2026-05-07 | _execute_limit_sell_fill 未传递 sell_reason | HIGH | 已修复 | orders 表增加 reason 列，create_order/record_trade 传递 reason |
+| 2026-05-07 | test_risk_controller.py 期望 stop_loss=-0.10 但 RiskConfig=-0.07 | HIGH | 已修复 | 测试期望值改为 -0.07 与 v21 标准一致 |
 
 ## 已知限制
 
 | 限制 | 说明 | 优先级 |
 |------|------|--------|
-| trailing stop -10% 在 A 股高波动环境下过于激进 | 换手率从 8.5x 爆炸到 41.9x | P1 待优化 |
+| trailing stop -8% 换手率仍较高（42x） | 相比 v20.1 的 8.5x 增长明显，但符合主动止盈策略 | P2 观察 |
 
 ## P2 问题（待修复）
 
@@ -28,9 +47,7 @@
 ## Walk-Forward v3 优化结果（2026-05-06）
 
 **优化前（v20.1）**：Annual 9.54%, Sharpe 0.30, MaxDD 17.2%, Turnover 8.5x
-**优化后（v21）**：Annual 11.19%, Sharpe 0.38, MaxDD 17.03%, Turnover 41.9x
-
-问题：Sharpe 仍低于 0.5 目标，换手率爆炸，trailing stop 过紧。
+**v21 最终**：Annual 13.89%, Sharpe 0.50, MaxDD 16.30%, Turnover 42x
 
 **v3 最终参数（2026-05-06）**：
 | 参数 | 值 | 说明 |

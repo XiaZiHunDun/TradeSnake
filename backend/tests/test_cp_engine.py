@@ -79,8 +79,8 @@ class TestStockCP:
         )
 
         assert high_risk.risk_score > low_risk.risk_score
-        assert high_risk.get_risk_level() == '高风险'
-        assert low_risk.get_risk_level() in ['较低', '中等']
+        assert high_risk.get_risk_level() == 'high'
+        assert low_risk.get_risk_level() in ['low', 'medium']
 
     def test_to_dict(self):
         """测试转换为字典"""
@@ -493,7 +493,7 @@ class TestRiskLevels:
             pe=150.0, roe=-5.0, net_profit_growth=-60.0,
             revenue_growth=-40.0, change_pct=10.0
         )
-        assert high_risk.get_risk_level() == '高风险'
+        assert high_risk.get_risk_level() == 'high'
         assert high_risk.risk_score >= 60
 
         # 中等风险 - 需要更高的波动或PE来触发
@@ -502,7 +502,7 @@ class TestRiskLevels:
             pe=60.0, roe=8.0, net_profit_growth=-20.0,
             revenue_growth=-10.0, change_pct=6.0
         )
-        assert mid_risk.get_risk_level() in ['中等', '较低']
+        assert mid_risk.get_risk_level() in ['medium', 'low']
         assert 20 < mid_risk.risk_score < 60
 
         # 较低风险
@@ -511,7 +511,7 @@ class TestRiskLevels:
             pe=15.0, roe=15.0, net_profit_growth=15.0,
             revenue_growth=10.0, change_pct=1.0
         )
-        assert low_risk.get_risk_level() in ['较低', '中等']
+        assert low_risk.get_risk_level() in ['low', 'medium']
         assert low_risk.risk_score < 40
 
 

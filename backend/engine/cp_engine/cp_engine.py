@@ -583,7 +583,7 @@ class StockCP:
                 cf_score = -5
 
         gm_score = 0
-        if self.gross_margin == 0 and self.roe > 10:
+        if self.gross_margin is not None and self.gross_margin == 0 and self.roe > 10:
             gm_score = 8
         elif self.gross_margin > 30:
             gm_score = 10
@@ -700,46 +700,48 @@ class StockCP:
 
     def get_cp_explanation(self) -> dict:
         """获取战力分解说明"""
-        weights = {
-            'growth': {'weight': 0.30, 'name': '成长分'},
-            'value': {'weight': 0.25, 'name': '价值分'},
-            'quality': {'weight': 0.20, 'name': '质量分'},
-            'momentum': {'weight': 0.08, 'name': '动量分'},
-        }
-
+        # 使用 v21 WEIGHTS 常量
         factors = []
 
         net_g = max(0, min(300, self.net_profit_growth))
         rev_g = max(-50, min(100, self.revenue_growth))
         growth_raw = net_g * 0.6 + rev_g * 0.4
         factors.append({
-            "name": "成长分", "weight": "30%",
+            "name": "成长分", "weight": f"{int(WEIGHTS['growth']*100)}%",
             "raw_score": round(growth_raw, 1),
-            "contribution": round(self.growth_score * 0.30, 1),
+            "contribution": round(self.growth_score * WEIGHTS['growth'], 1),
             "detail": f"净利润增长:{self.net_profit_growth:.1f}% × 0.6 + 营收增长:{self.revenue_growth:.1f}% × 0.4"
         })
 
         base_roe = min(max(0, self.roe), 25)
         factors.append({
-            "name": "价值分", "weight": "25%",
-            "raw_score": round(self.value_score / 0.25, 1) if self.value_score > 0 else 0,
-            "contribution": round(self.value_score * 0.25, 1),
+            "name": "价值分", "weight": f"{int(WEIGHTS['value']*100)}%",
+            "raw_score": round(self.value_score, 1) if self.value_score > 0 else 0,
+            "contribution": round(self.value_score * WEIGHTS['value'], 1),
             "detail": f"ROE基础分:{base_roe:.1f} + PE/PEG评分"
         })
 
         factors.append({
-            "name": "质量分", "weight": "20%",
-            "raw_score": round(self.quality_score / 0.20, 1) if self.quality_score > 0 else 0,
-            "contribution": round(self.quality_score * 0.20, 1),
+            "name": "质量分", "weight": f"{int(WEIGHTS['quality']*100)}%",
+            "raw_score": round(self.quality_score, 1) if self.quality_score > 0 else 0,
+            "contribution": round(self.quality_score * WEIGHTS['quality'], 1),
             "detail": "现金流 + 毛利率 + 资产负债率"
         })
 
         momentum_raw = max(-10, min(10, self.change_pct))
         factors.append({
-            "name": "动量分", "weight": "8%",
+            "name": "动量分", "weight": f"{int(WEIGHTS['momentum']*100)}%",
             "raw_score": round(momentum_raw, 1),
-            "contribution": round(self.momentum_score * 0.08, 1),
+            "contribution": round(self.momentum_score * WEIGHTS['momentum'], 1),
             "detail": f"当日涨跌幅:{self.change_pct:.2f}%"
+        })
+
+        # 实时因子（换手率异动检测）
+        factors.append({
+            "name": "实时分", "weight": f"{int(WEIGHTS['real_time']*100)}%",
+            "raw_score": round(self.change_pct * 10, 1),  # 简化的实时分数
+            "contribution": round(self.change_pct * WEIGHTS['real_time'] * 10, 1),
+            "detail": f"涨跌幅异动:{self.change_pct:.2f}%"
         })
 
         risk_items = []
@@ -804,9 +806,10 @@ class CPEngine:
 
     def add_stock(self, stock: StockCP):
         """添加股票（自动去重）"""
-        if any(s.code == stock.code for s in self.stocks):
-            return
-        self.stocks.append(stock)
+        with self._lock:
+            if any(s.code == stock.code for s in self.stocks):
+                return
+            self.stocks.append(stock)
 
     @staticmethod
     def _robust_normalize(values: List[float], clip_percentile: float = 0.95) -> List[float]:
@@ -870,37 +873,151 @@ class CPEngine:
         return normalized.tolist()
 
     def apply_multi_day_momentum(self, momentum_func, days: int = 5) -> 'CPEngine':
+        """多维动量因子 v20.0
+
+        四个子信号加权组合：
+        - 短期反转 (1-5天): A股散户情绪驱动的均值回归
+        - 中期动量 (20-60天): 机构资金驱动的趋势延续
+        - 成交量确认: 有量配合的信号更可靠
+        - 当日涨跌幅: 保留兼容
+
+        批量获取 K 线，避免 N+1 查询。
         """
-        应用多日动量因子 v18.2
+        from backend.engine.cp_engine.constants import MOMENTUM_WEIGHTS, MOMENTUM_PARAMS
 
-        将历史战力变化的N日动量融入当日动量分
-        避免"连续下跌股今日反弹2%动量高于平稳上涨股"的错误信号
+        codes = [s.code for s in self.stocks]
+        lookback = max(MOMENTUM_PARAMS['momentum_days'],
+                       MOMENTUM_PARAMS['volume_avg_days']) + 10
+        bulk_klines = self._get_bulk_klines_for_momentum(codes, lookback)
 
-        Args:
-            momentum_func: 动量计算函数，如 history.calc_momentum_5d
-            days: 计算天数
-
-        Returns:
-            self（支持链式调用）
-        """
         for stock in self.stocks:
-            # 获取多日动量（战力变化值）
+            klines = bulk_klines.get(stock.code)
+
+            reversal = self._calc_short_reversal(klines, MOMENTUM_PARAMS['reversal_days'])
+            mid_mom = self._calc_medium_momentum(
+                klines, MOMENTUM_PARAMS['momentum_days'],
+                MOMENTUM_PARAMS['momentum_skip_days'])
+            vol_confirm = self._calc_volume_confirmation(
+                klines, MOMENTUM_PARAMS['volume_lookback'],
+                MOMENTUM_PARAMS['volume_avg_days'])
+
+            daily = max(-10, min(10, stock.change_pct))
+            daily_norm = (daily + 10) / 20 * 100  # -> 0-100
+
             nd_momentum = momentum_func(stock.code, days) if momentum_func else 0
+            cp_mom_norm = max(0, min(100, (nd_momentum + 50) * 2))
 
-            # 多日动量标准化到0-100范围（假设日均战力变化±10为正常范围）
-            nd_momentum_normalized = max(0, min(100, (nd_momentum + 50) * 2))
+            mid_combined = (mid_mom + cp_mom_norm) / 2
 
-            # 当日涨跌幅标准化
-            daily_momentum = max(-10, min(10, stock.change_pct))
-            daily_normalized = (daily_momentum + 10) / 20 * 100  # -10~10 -> 0~100
+            combined = (
+                reversal * MOMENTUM_WEIGHTS['short_reversal'] +
+                mid_combined * MOMENTUM_WEIGHTS['medium_momentum'] +
+                vol_confirm * MOMENTUM_WEIGHTS['volume_confirm'] +
+                daily_norm * MOMENTUM_WEIGHTS['daily_change']
+            )
 
-            # 组合动量 = 60%多日动量 + 40%当日动量
-            combined_momentum = nd_momentum_normalized * 0.6 + daily_normalized * 0.4
-
-            # 缩放到-10~10范围存储（与原有接口兼容）
-            stock.momentum_score = (combined_momentum / 100) * 20 - 10
+            stock.momentum_score = (combined / 100) * 20 - 10
 
         return self
+
+    # ------------------------------------------------------------------
+    # 动量子信号计算 (v20.0)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_bulk_klines_for_momentum(codes, lookback_days):
+        """批量获取 K 线用于动量计算"""
+        try:
+            from backend.data_manager.duckdb_store import get_klines_bulk
+            return get_klines_bulk(codes, days=lookback_days)
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _calc_short_reversal(klines_df, days: int = 5) -> float:
+        """短期反转信号 — 近 N 日累计跌幅越大，反弹概率越高。
+
+        返回 0-100，跌得越多分越高。
+        """
+        if klines_df is None or len(klines_df) < days + 1:
+            return 50.0
+
+        recent = klines_df.tail(days + 1)
+        if 'close' not in recent.columns:
+            return 50.0
+
+        closes = recent['close'].values
+        cum_return = (closes[-1] / closes[0] - 1) * 100 if closes[0] > 0 else 0
+
+        # 取反并映射: cum_return 在 [-10, 10] 区间 -> [100, 0]
+        score = 50 - cum_return * 5
+        return max(0, min(100, score))
+
+    @staticmethod
+    def _calc_medium_momentum(klines_df, days: int = 20, skip: int = 5) -> float:
+        """中期动量信号 — 跳过最近 skip 天，计算之前 days 天的涨幅。
+
+        跳过近期是为了与短期反转信号解耦。
+        返回 0-100，涨得越多分越高。
+        """
+        needed = days + skip + 1
+        if klines_df is None or len(klines_df) < needed:
+            return 50.0
+
+        if 'close' not in klines_df.columns:
+            return 50.0
+
+        closes = klines_df['close'].values
+        end_idx = len(closes) - 1 - skip
+        start_idx = max(0, end_idx - days)
+        if start_idx >= end_idx or closes[start_idx] <= 0:
+            return 50.0
+
+        cum_return = (closes[end_idx] / closes[start_idx] - 1) * 100
+
+        # 映射: cum_return 在 [-20, 20] 区间 -> [0, 100]
+        score = 50 + cum_return * 2.5
+        return max(0, min(100, score))
+
+    @staticmethod
+    def _calc_volume_confirmation(klines_df, lookback: int = 10,
+                                  avg_days: int = 20) -> float:
+        """成交量确认信号 — 价量配合度。
+
+        上涨+放量=强 | 上涨+缩量=弱 | 下跌+缩量=底部 | 下跌+放量=恐慌
+        返回 0-100。
+        """
+        needed = max(lookback, avg_days) + 1
+        if klines_df is None or len(klines_df) < needed:
+            return 50.0
+
+        if 'close' not in klines_df.columns or 'volume' not in klines_df.columns:
+            return 50.0
+
+        closes = klines_df['close'].values
+        volumes = klines_df['volume'].values
+
+        recent_close = closes[-lookback:]
+        price_change = (recent_close[-1] / recent_close[0] - 1) if recent_close[0] > 0 else 0
+
+        avg_vol_long = volumes[-avg_days:].mean() if len(volumes) >= avg_days else volumes.mean()
+        avg_vol_recent = volumes[-lookback:].mean()
+        vol_ratio = avg_vol_recent / avg_vol_long if avg_vol_long > 0 else 1.0
+
+        if price_change > 0:
+            # 上涨
+            if vol_ratio > 1.2:
+                score = 70 + min(30, (vol_ratio - 1.2) * 50)  # 放量上涨: 70-100
+            else:
+                score = 50 + price_change * 200  # 缩量上涨: 50-70
+        else:
+            # 下跌
+            if vol_ratio < 0.8:
+                score = 40 + (0.8 - vol_ratio) * 50  # 缩量下跌（底部信号）: 40-80
+            else:
+                score = 30 - min(30, (vol_ratio - 1.0) * 30)  # 放量下跌（恐慌）: 0-30
+
+        return max(0, min(100, score))
 
     def apply_technical_indicators(self, price_history_func=None) -> 'CPEngine':
         """
@@ -1043,10 +1160,11 @@ class CPEngine:
         # 在归一化之前计算，避免当日涨跌幅权重过高
         if use_multi_day_momentum:
             try:
-                from .history import calc_momentum_5d
-                self.apply_multi_day_momentum(calc_momentum_5d, days=5)
-            except ImportError:
-                pass  # 历史模块不可用时跳过
+                from .history import calc_momentum_nd
+                self.apply_multi_day_momentum(calc_momentum_nd, days=5)
+            except ImportError as e:
+                import warnings
+                warnings.warn(f"Multi-day momentum disabled: {e}")
 
         # 收集各维度原始分数
         growth_values = [s.growth_score for s in self.stocks]
@@ -1137,6 +1255,9 @@ class CPEngine:
                 norm_real_time * WEIGHTS.get('real_time', 0)
             )
 
+            # 保存 base_cp 用于后续行业PE调整后的重算
+            stock._base_cp = base_cp
+
             risk_factor = 1 - (stock.risk_score / 100) * WEIGHTS['risk_penalty']
             stock.total_cp = max(0, base_cp * risk_factor)
 
@@ -1219,6 +1340,11 @@ class CPEngine:
             if pe_ratio < 0.6 and stock.value_score > 0:
                 bonus = min(10, (0.6 - pe_ratio) * 25)
                 stock.value_score = min(100, stock.value_score + bonus)
+
+            # 重算 total_cp（使用保存的 base_cp 和新的 risk_score）
+            if hasattr(stock, '_base_cp'):
+                risk_factor = 1 - (stock.risk_score / 100) * WEIGHTS['risk_penalty']
+                stock.total_cp = max(0, stock._base_cp * risk_factor)
 
     @staticmethod
     def _apply_volatility_adjustment(stock: 'StockCP', momentum: float) -> float:

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { cpApi, recommendApi, tradeApi, backtestApi, watchlistApi, predictionApi, verifyApi, userApi, systemApi } from '../services/api'
-import type { BacktestParams, WatchlistGroup } from '../types'
+import type { BacktestParams, WatchlistGroup, SwapSuggestion } from '../types'
 
 // 战力相关 Hooks
 export function useCPTop(limit = 200) {
@@ -27,9 +27,9 @@ export function useRecommendations(category: string) {
 }
 
 export function useSwapSuggestions() {
-  return useQuery({
+  return useQuery<SwapSuggestion[]>({
     queryKey: ['recommend', 'swap'],
-    queryFn: () => recommendApi.getSwapSuggestions(),
+    queryFn: () => recommendApi.getSwapSuggestions() as Promise<SwapSuggestion[]>,
   })
 }
 

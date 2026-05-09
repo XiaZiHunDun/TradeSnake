@@ -112,7 +112,7 @@ def validate_financial(code: str, state_mgr: StateManager, logger) -> bool:
             fetcher = FinancialDataFetcher()
             df_em = fetcher.get_income_data(code)
             em_revenue = df_em.iloc[0]['revenue'] if df_em is not None and len(df_em) > 0 else None
-        except:
+        except Exception:
             em_revenue = None
 
         # 获取 Tushare 数据

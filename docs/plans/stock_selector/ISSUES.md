@@ -1,4 +1,13 @@
-# StockSelector 问题记录
+# StockSelector 问题追踪
+
+## 记录格式
+| 日期 | 问题 | 状态 | 修复 |
+|------|------|------|------|
+
+状态枚举：待调查 / 已修复 / 保留 / 已验证
+
+---
+<!-- 在此下方添加历史问题记录 -->
 
 ## 问题追踪
 
@@ -13,6 +22,8 @@
 | 2026-04-23 | save_state 未保存白名单/黑名单/观察期记录 | P2 | 已修复 | pool_state_store.py |
 | 2026-04-23 | load_state 未恢复白名单/黑名单/观察期记录 | P2 | 已修复 | pool_manager.py |
 | 2026-04-23 | on_financial_warning 接口类型不一致 | P2 | 已修复 | 统一为 List[str] |
+| 2026-05-08 | STOCK_SELECTOR_OVERVIEW.md 观察池盘中更新频率写"每日/每周"与 DETAIL.md 配置(observe:0)不一致 | MEDIUM | 已修复 | OVERVIEW.md 表格修正为"不更新"，与 DETAIL.md 和 data_manager 一致 |
+| 2026-05-08 | STOCK_SELECTOR_OVERVIEW.md 核心池/活跃池盘中频率写范围(5-15分钟/30-60分钟)与 DETAIL.md 精确值(5/30分钟)不一致 | MEDIUM | 已修复 | OVERVIEW.md 表格修正为精确值 5分钟/30分钟 |
 
 ## 已知限制
 

@@ -125,5 +125,5 @@ def test_value_growth_balanced_vs_multi_factor():
     assert balanced.weights != multi.weights
     # Balanced strategy weights
     assert balanced.weights == {'growth': 0.25, 'value': 0.25, 'quality': 0.3, 'momentum': 0.2}
-    # MultiFactor default weights
-    assert multi.weights == {'growth': 0.3, 'value': 0.25, 'momentum': 0.25, 'quality': 0.2}
+    # MultiFactor default weights (v21)
+    assert multi.weights == {'growth': 0.50, 'value': 0.00, 'momentum': 0.28, 'quality': 0.05}

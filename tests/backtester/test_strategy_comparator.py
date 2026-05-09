@@ -4,7 +4,7 @@ from backend.backtester.strategy_comparator import StrategyComparator, BacktestC
 def test_backtest_config_defaults():
     config = BacktestConfig()
     assert config.top_n == 6
-    assert config.stop_loss == -0.10
+    assert config.stop_loss == -0.07
     assert config.max_holding_days == 5
     assert config.initial_capital == 1000000
 

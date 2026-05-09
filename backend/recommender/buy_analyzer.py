@@ -19,7 +19,7 @@ class BuySignal:
         position_amount: 建议买入金额（元）
         shares: 建议买入股数（100整数倍）
         entry_price: 建议买入价
-        stop_loss: 止损价（-5%）
+        stop_loss: 固定止损价（-7%，对应 RiskManager 固定止损；尾随止损-8%由 RiskManager 自动执行）
         take_profit: 止盈价（+20%）
         risk_level: risk/warning/acceptable
         buy_strength: 买入强度 1-3星
@@ -37,7 +37,7 @@ class BuySignal:
     position_amount: float  # 建议买入金额（元）
     shares: int  # 建议买入股数（100整数倍）
     entry_price: float  # 建议买入价
-    stop_loss: float  # 止损价（-5%）
+    stop_loss: float  # 固定止损价（-7%，尾随止损-8%由 RiskManager 自动执行）
     take_profit: float  # 止盈价（+20%）
     risk_level: str  # risk/warning/acceptable
     buy_strength: int  # 买入强度 1-3星
@@ -57,8 +57,8 @@ class BuyAnalyzer:
     使用engine.risk_analyzer.KellyCalculator进行仓位计算
     """
 
-    # 止损止盈
-    STOP_LOSS_PCT = 0.05  # -5%止损
+    # 止损止盈 (v21标准)
+    STOP_LOSS_PCT = 0.07  # -7%止损 (与v21风控一致)
     TAKE_PROFIT_PCT = 0.20  # +20%止盈
 
     @classmethod
@@ -68,7 +68,8 @@ class BuyAnalyzer:
         principal: float,
         max_position_pct: float = 20.0,
         win_rate: float = 0.55,
-        win_loss_ratio: float = 1.5
+        win_loss_ratio: float = 1.5,
+        risk_preference: str = 'balanced'
     ) -> BuySignal:
         """分析买入机会
 
@@ -78,15 +79,22 @@ class BuyAnalyzer:
             max_position_pct: 最大仓位比例
             win_rate: 胜率（默认0.55）
             win_loss_ratio: 盈亏比（默认1.5）
+            risk_preference: 风险偏好（conservative/balanced/aggressive），影响Kelly仓位
         """
         # 1. 风险检查（ST、涨跌停、停牌）
         if not cls._is_buyable(stock):
             return cls._blocked_signal(stock, "风险检查未通过")
 
-        # 2. Kelly仓位计算（使用engine的KellyCalculator）
-        kelly = KellyCalculator.calculate_kelly_fraction(win_rate, win_loss_ratio)
-        safe_kelly = kelly * KellyCalculator.KELLY_FRACTION
-        position_pct = min(safe_kelly, max_position_pct / 100)
+        # 2. Kelly仓位计算（使用engine的KellyCalculator，支持风险偏好）
+        # conservative: 1/4 Kelly, balanced: 1/2 Kelly, aggressive: 3/4 Kelly
+        kelly_result = KellyCalculator.get_position_recommendation(
+            win_rate=win_rate,
+            win_loss_ratio=win_loss_ratio,
+            total_capital=principal,
+            risk_preference=risk_preference
+        )
+        recommended_pct = kelly_result.get('recommended_position_pct', 10.0)
+        position_pct = min(recommended_pct / 100, max_position_pct / 100)
 
         position_amount = principal * position_pct
         shares = cls._round_to_lot(position_amount / stock.price, stock.price)
@@ -142,7 +150,7 @@ class BuyAnalyzer:
         signals = []
 
         for stock in stocks:
-            signal = cls.analyze_buy_opportunity(stock, principal)
+            signal = cls.analyze_buy_opportunity(stock, principal, risk_preference=risk_preference)
 
             # 根据风险偏好过滤
             if risk_preference == 'conservative' and signal.risk_level == 'risk':
@@ -156,6 +164,15 @@ class BuyAnalyzer:
         # 按买入强度排序
         signals.sort(key=lambda x: x['buy_strength'], reverse=True)
         return signals[:limit]
+
+    @classmethod
+    def generate_signals(cls, stocks: List[StockCP], principal: float,
+                        risk_preference: str = 'balanced', limit: int = 10) -> List[Dict]:
+        """生成交易信号（get_buy_signals 的别名）
+
+        统一方法名，便于与 recommender 其他接口命名保持一致。
+        """
+        return cls.get_buy_signals(stocks, principal, risk_preference, limit)
 
     @classmethod
     def _is_buyable(cls, stock: StockCP) -> bool:
@@ -239,8 +256,8 @@ class BuyAnalyzer:
             warnings.append(f"风险分{stock.risk_score:.0f}偏高，波动较大")
 
         volatility = getattr(stock, 'volatility_20d', 0)
-        if volatility > 8:
-            warnings.append(f"20日波动率{volatility:.1f}%偏高")
+        if volatility > 40:
+            warnings.append(f"20日波动率{volatility:.1f}%偏高（年化）")
 
         # 流动性
         avg_amount = getattr(stock, 'avg_daily_amount_20d', 0)
@@ -340,7 +357,7 @@ class BuyAnalyzer:
 - 股数：{signal.shares}股
 - 价格：{signal.entry_price:.2f}元
 
-止损：{signal.stop_loss:.2f}元（-5%）
+止损：{signal.stop_loss:.2f}元（-7%）
 止盈：{signal.take_profit:.2f}元（+20%）
 
 理由：{'；'.join(signal.reasons)}

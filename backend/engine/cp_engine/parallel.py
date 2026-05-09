@@ -15,7 +15,6 @@ import os
 import multiprocessing as mp
 from typing import List, Dict, Callable, Any, Optional, Tuple
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from functools import partial
 import numpy as np
 
 # CPU核心数配置
@@ -27,8 +26,8 @@ def _calculate_single_stock_factor(args: Tuple) -> Dict[str, float]:
     """
     计算单只股票的因子分数（用于并行计算）
 
-    注意：此函数与 StockCP.calculate_scores() 逻辑基本一致，但有以下语义差异：
-    1. cashflow=0 或 None 时视为"未知"不应用负向惩罚（calculate_scores 对 cashflow<=0 会惩罚）
+    注意：此函数与 StockCP.calculate_scores() 逻辑保持一致：
+    1. cashflow=0 时视为负面信号，与 cp_engine.py 一致
     2. 用于 multiprocessing，需保持为独立函数而非方法
 
     Args:
@@ -43,8 +42,9 @@ def _calculate_single_stock_factor(args: Tuple) -> Dict[str, float]:
 
     try:
         # 输入验证：处理缺失值
-        # cashflow为0或None时，不应用负向惩罚（视为"未知"而非"零")
-        if cashflow is None or cashflow == 0:
+        # cashflow为None时，不应用负向惩罚（视为"未知"）
+        # cashflow=0 时应视为负面信号，进入后面的负向判断分支
+        if cashflow is None:
             cashflow_for_score = None
         else:
             cashflow_for_score = cashflow
@@ -105,7 +105,7 @@ def _calculate_single_stock_factor(args: Tuple) -> Dict[str, float]:
 
         value_score = max(0, base_roe + pe_score + peg_bonus + pb_score * 0.3)
 
-        # 质量分（使用验证后的值）
+        # 质量分
         cf_score = 0
         if cashflow_for_score is not None and cashflow_for_score > 0 and roe > 0:
             cf_ratio = cashflow_for_score / (roe * 10 + 1)
@@ -115,7 +115,11 @@ def _calculate_single_stock_factor(args: Tuple) -> Dict[str, float]:
                 cf_score = 10
             else:
                 cf_score = 5
-        # cashflow <= 0 或缺失时，不应用负向惩罚（视为"未知"）
+        elif cashflow_for_score is not None and cashflow_for_score <= 0 and roe > 0:
+            if debt_ratio > 80:
+                cf_score = 8
+            else:
+                cf_score = -5
 
         gm_score = 0
         if gross_margin_for_score is not None:

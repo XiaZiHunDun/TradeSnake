@@ -5,11 +5,9 @@ Backup 单元测试
 import pytest
 import tempfile
 import os
-import sys
 from pathlib import Path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data_manager.backup import (
+from backend.data_manager.backup import (
     BackupManager, BackupResult, CleanupResult, BackupScheduler
 )
 
@@ -42,7 +40,7 @@ class TestBackupManager:
         try:
             shutil.rmtree(self.temp_dir)
             os.unlink(self.temp_db.name)
-        except:
+        except OSError:
             pass
 
     def test_initialization(self):
@@ -66,9 +64,11 @@ class TestBackupManager:
         assert result.error is not None
 
     def test_backup_cache_json_nonexistent(self):
-        """测试备份不存在的缓存目录"""
-        result = self.manager.backup_cache_json()
-        assert result.success == False
+        """测试备份空目录（无 JSON 缓存文件）"""
+        import tempfile
+        with tempfile.TemporaryDirectory() as empty_dir:
+            result = self.manager.backup_cache_json(data_dir=Path(empty_dir))
+            assert result.success == False
 
     def test_cleanup_old_backups(self):
         """测试清理过期备份"""

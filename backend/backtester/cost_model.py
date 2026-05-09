@@ -16,7 +16,7 @@ class CostResult:
 
 
 # 费率配置
-COMMISSION_RATE = 0.0001       # 万1
+COMMISSION_RATE = 0.0003       # 万3（A股标准佣金）
 MIN_COMMISSION = 5.0           # 最低佣金5元
 STAMP_TAX_RATE = 0.0005        # 千0.5（卖出时）
 TRANSFER_FEE_RATE = 0.00001    # 千0.01（沪市双向，深市免）

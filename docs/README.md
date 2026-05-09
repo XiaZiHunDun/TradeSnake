@@ -96,3 +96,17 @@ docs/
 | 日期 | 操作 |
 |------|------|
 | 2026-04-06 | 文档整理，建立清晰目录结构 |
+| 2026-04-26 | 补充 `docs/superpowers` 索引：`specs/` 存放 Cursor 设计文档，`plans/` 存放 Claude Code 执行任务与模板 |
+
+---
+
+## Superpowers 协作体系 (docs/superpowers/)
+
+本目录用于 Cursor 设计/评审代理与 Claude Code 执行代理的协作文件：
+
+| 子目录 | 内容 |
+|--------|------|
+| `specs/` | Cursor 生成的设计文档，如 `YYYY-MM-DD-<topic>-design.md` |
+| `plans/` | Claude Code 执行任务，如 `YYYY-MM-DD-<topic>-implementation.md`、任务模板、项目事实基线 |
+
+详见 `docs/superpowers/plans/PROJECT_FACT_BASE.md` 和 `docs/superpowers/specs/2026-04-26-agent-collaboration-design.md`。

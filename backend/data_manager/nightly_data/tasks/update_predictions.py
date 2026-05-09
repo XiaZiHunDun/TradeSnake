@@ -51,15 +51,38 @@ def update_predictions():
 
         from backend.engine.gain_predictor.predictor import GainPredictor
         from backend.engine.probability_predictor.predictor import ProbabilityPredictor
+        from backend.data_manager.duckdb_store import get_duckdb_store
 
         gain_pred = GainPredictor()
         prob_pred = ProbabilityPredictor()
+        duckdb_store = get_duckdb_store()
 
         updated = 0
         for code in codes:
             try:
-                gain_pred.predict(code)
-                prob_pred.predict(code)
+                # 获取K线数据
+                klines_result = duckdb_store.query("""
+                    SELECT trade_date, open, high, low, close, volume, amount
+                    FROM daily_kline
+                    WHERE code = ?
+                    ORDER BY trade_date
+                """, [code])
+
+                if not klines_result.success or len(klines_result.data) < 60:
+                    continue
+
+                klines_dict = {code: klines_result.data.to_dict('records')}
+                # 确保按日期升序排列
+                klines_dict = {code: sorted(klines, key=lambda x: x.get('trade_date', '')) for code, klines in klines_dict.items()}
+                gain_result = gain_pred.predict(klines_dict)
+                prob_result = prob_pred.predict(klines_dict)
+
+                # 保存到 prediction_store
+                if gain_result and gain_result.predictions:
+                    gain_pred.save_to_store(gain_result)
+                if prob_result and prob_result.predictions:
+                    prob_pred.save_to_store(prob_result)
+
                 updated += 1
 
                 if updated % 100 == 0:

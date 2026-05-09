@@ -43,7 +43,7 @@ def _str_to_tuple(s: str) -> Tuple:
         return None
     try:
         return ast.literal_eval(s)
-    except:
+    except (ValueError, SyntaxError):
         return None
 
 
@@ -67,7 +67,8 @@ class PredictionStore:
             return
 
         if db_path is None:
-            db_path = "/home/ailearn/projects/TradeSnake/data/tradesnake_prediction.db"
+            from backend.config import PREDICTION_DB_PATH
+            db_path = str(PREDICTION_DB_PATH)
 
         self.db_path = db_path
         self._write_lock = threading.Lock()
@@ -216,9 +217,9 @@ class PredictionStore:
                 features_json = json.dumps(pred.get('features', {})) if pred.get('features') else None
                 # v19.9.5: 标准化代码格式
                 code = _normalize_code(pred.get('code', ''))
-                # confidence_interval 存为 JSON 字符串
-                ci_3d = json.dumps(pred.get('confidence_interval_3d', (0.0, 1.0)))
-                ci_5d = json.dumps(pred.get('confidence_interval_5d', (0.0, 1.0)))
+                # confidence_interval 使用 _tuple_to_str 格式，与 gain_predictions 保持一致
+                ci_3d = _tuple_to_str(pred.get('confidence_interval_3d', (0.0, 1.0)))
+                ci_5d = _tuple_to_str(pred.get('confidence_interval_5d', (0.0, 1.0)))
                 cursor.execute("""
                     INSERT INTO probability_predictions (
                         code, name, up_probability_3d, up_probability_5d,
@@ -333,6 +334,10 @@ class PredictionStore:
             record = dict(row)
             if record.get('features'):
                 record['features'] = json.loads(record['features'])
+            if record.get('confidence_interval_3d'):
+                record['confidence_interval_3d'] = _str_to_tuple(record['confidence_interval_3d'])
+            if record.get('confidence_interval_5d'):
+                record['confidence_interval_5d'] = _str_to_tuple(record['confidence_interval_5d'])
             result.append(record)
 
         conn.close()
@@ -360,6 +365,10 @@ class PredictionStore:
             record = dict(row)
             if record.get('features'):
                 record['features'] = json.loads(record['features'])
+            if record.get('confidence_interval_3d'):
+                record['confidence_interval_3d'] = _str_to_tuple(record['confidence_interval_3d'])
+            if record.get('confidence_interval_5d'):
+                record['confidence_interval_5d'] = _str_to_tuple(record['confidence_interval_5d'])
             result.append(record)
 
         conn.close()

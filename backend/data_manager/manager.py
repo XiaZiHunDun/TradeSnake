@@ -55,7 +55,7 @@ except ImportError:
 
 # ==================== 路径配置 ====================
 
-DATA_DIR = Path("/home/ailearn/projects/TradeSnake/data")
+DATA_DIR = Path(__file__).resolve().parent.parent.parent / 'data'
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # ==================== 常量 ====================
@@ -84,220 +84,6 @@ def get_category(cache_type: str) -> str:
     """获取数据类型对应的数据类别"""
     return CATEGORY_MAP.get(cache_type, 'realtime')
 
-
-# ==================== 统一缓存条目 ====================
-
-class UnifiedCacheEntry:
-    """统一缓存条目"""
-
-    def __init__(self, data: Any, category: str, updated_at: str = None):
-        self.data = data
-        self.category = category
-        self.updated_at = updated_at or datetime.now().isoformat()
-        self.hit_count = 0
-        self.last_access = time.time()
-        self.source = None  # 数据来源标记
-
-    def access(self):
-        self.hit_count += 1
-        self.last_access = time.time()
-
-    def is_expired(self) -> bool:
-        ttl = DATA_CATEGORIES.get(self.category, {}).get('ttl', 300)
-        if ttl < 0:
-            return False
-        try:
-            updated = datetime.fromisoformat(self.updated_at)
-            age = (datetime.now() - updated).total_seconds()
-            return age > ttl
-        except:
-            return True
-
-    def to_dict(self) -> Dict:
-        return {
-            'data': self.data,
-            'category': self.category,
-            'updated_at': self.updated_at,
-            'hit_count': self.hit_count,
-            'source': self.source
-        }
-
-
-# ==================== 统一缓存管理器 ====================
-
-class UnifiedCache:
-    """统一缓存管理器（内存LRU + 磁盘持久化）"""
-
-    def __init__(self, max_size: int = 500, hot_ttl: int = 3600):
-        self.max_size = max_size
-        self.hot_ttl = hot_ttl
-
-        self._memory: OrderedDict[str, UnifiedCacheEntry] = OrderedDict()
-        self._lock = threading.RLock()
-
-        self._stats = {
-            'hit': 0, 'miss': 0,
-            'memory_hit': 0, 'disk_hit': 0,
-        }
-
-    def _make_key(self, cache_type: str, code: str = None) -> str:
-        """生成统一的缓存key"""
-        if code:
-            return f"{cache_type}:{code}"
-        return cache_type
-
-    def get(self, cache_type: str, code: str = None) -> Optional[Any]:
-        """获取缓存"""
-        key = self._make_key(cache_type, code)
-        category = get_category(cache_type)
-
-        # 1. 先查内存缓存
-        with self._lock:
-            if key in self._memory:
-                entry = self._memory[key]
-                if not entry.is_expired():
-                    entry.access()
-                    self._memory.move_to_end(key)
-                    self._stats['hit'] += 1
-                    self._stats['memory_hit'] += 1
-                    return entry.data
-                else:
-                    del self._memory[key]
-
-        # 2. 查磁盘缓存
-        disk_data = self._read_from_disk(cache_type, code)
-        if disk_data is not None:
-            # 重新加入内存缓存
-            entry = UnifiedCacheEntry(disk_data, category)
-            entry.source = 'disk'
-            self._set_memory(key, entry)
-            self._stats['hit'] += 1
-            self._stats['disk_hit'] += 1
-            return disk_data
-
-        self._stats['miss'] += 1
-        return None
-
-    def _set_memory(self, key: str, entry: UnifiedCacheEntry):
-        """加入内存缓存"""
-        with self._lock:
-            if key in self._memory:
-                self._memory.move_to_end(key)
-            else:
-                if len(self._memory) >= self.max_size:
-                    self._memory.popitem(last=False)
-            self._memory[key] = entry
-
-    def set(self, cache_type: str, data: Any, code: str = None, source: str = None):
-        """写入缓存"""
-        key = self._make_key(cache_type, code)
-        category = get_category(cache_type)
-
-        entry = UnifiedCacheEntry(data, category)
-        entry.source = source or 'unknown'
-
-        # 写入内存
-        self._set_memory(key, entry)
-
-        # 写入磁盘
-        self._write_to_disk(cache_type, code, data, category)
-
-    def _get_disk_path(self, cache_type: str, code: str = None) -> Path:
-        """获取磁盘缓存路径"""
-        if code:
-            return DATA_DIR / f"{cache_type}_{code}.json"
-        return DATA_DIR / f"{cache_type}.json"
-
-    def _read_from_disk(self, cache_type: str, code: str = None) -> Optional[Any]:
-        """从磁盘读取缓存"""
-        path = self._get_disk_path(cache_type, code)
-        if not path.exists():
-            return None
-
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                cache = json.load(f)
-
-            data = cache.get('data')
-            if data is None:
-                return None
-
-            # 检查TTL
-            updated_at = cache.get('updated_at', '')
-            if updated_at:
-                try:
-                    updated = datetime.fromisoformat(updated_at)
-                    category = get_category(cache_type)
-                    ttl = DATA_CATEGORIES.get(category, {}).get('ttl', 300)
-                    if ttl > 0 and (datetime.now() - updated).total_seconds() > ttl:
-                        return None
-                except:
-                    pass
-
-            return data
-        except Exception as e:
-            print(f"磁盘缓存读取失败 {path}: {e}")
-            return None
-
-    def _write_to_disk(self, cache_type: str, code: str, data: Any, category: str):
-        """
-        写入磁盘缓存（原子写入）
-
-        实现：先写临时文件，成功后rename到目标文件
-        好处：写入过程中崩溃不会损坏原文件
-        """
-        import tempfile
-        import os
-
-        path = self._get_disk_path(cache_type, code)
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-
-            cache = {
-                'data': data,
-                'category': category,
-                'updated_at': datetime.now().isoformat(),
-                'version': '2.0'
-            }
-
-            # 1. 先写临时文件
-            fd, temp_path = tempfile.mkstemp(
-                suffix='.json',
-                prefix='cache_',
-                dir=str(path.parent)
-            )
-            try:
-                with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                    json.dump(cache, f, ensure_ascii=False, indent=2)
-                f.flush()
-                os.fsync(f.fileno())  # 确保写入磁盘
-
-                # 2. 原子重命名（覆盖原文件）
-                os.replace(temp_path, path)
-            except:
-                # 写入失败，删除临时文件
-                if os.path.exists(temp_path):
-                    os.unlink(temp_path)
-                raise
-
-        except Exception as e:
-            print(f"磁盘缓存写入失败 {path}: {e}")
-
-    def get_stats(self) -> Dict:
-        """获取缓存统计"""
-        total = self._stats['hit'] + self._stats['miss']
-        hit_rate = self._stats['hit'] / total * 100 if total > 0 else 0
-        return {
-            **self._stats,
-            'total': total,
-            'hit_rate': round(hit_rate, 2),
-            'memory_size': len(self._memory)
-        }
-
-    def clear(self):
-        """清空缓存"""
-        with self._lock:
-            self._memory.clear()
 
 
 # ==================== 数据管理器 ====================
@@ -329,8 +115,9 @@ class DataManager:
             return
         self._initialized = True
 
-        # 统一缓存
-        self._cache = UnifiedCache()
+        # 统一缓存 - 使用 CacheManager
+        from .cache import get_cache_manager
+        self._cache = get_cache_manager().cache
 
         # 数据验证器
         self._validator = DataValidator()
@@ -350,7 +137,7 @@ class DataManager:
         if TUSHARE_AVAILABLE and get_tushare_provider:
             try:
                 self._tushare = get_tushare_provider()
-            except:
+            except Exception:
                 pass
 
         # 统计信息
@@ -421,7 +208,6 @@ class DataManager:
             # 4. 更新市场数据缓存
             market_data = self._market_fetcher.get_market_data([code], use_cache=False)
             if market_data:
-                cache_key = f"market_{hash((code,))}"
                 self._cache.set('market', market_data[0] if market_data else {}, code, source='market_fetcher')
 
             logger.debug(f"更新股票 {code} 成功")
@@ -442,7 +228,8 @@ class DataManager:
         Returns:
             List[Dict]: 行情数据列表
         """
-        cache_key = f"market_{hash(tuple(sorted(codes)))}"
+        # 与 fetcher.py 保持一致的缓存 key 格式
+        cache_key = ','.join(sorted(codes))
 
         if use_cache:
             cached = self._cache.get('market', cache_key)
@@ -453,7 +240,7 @@ class DataManager:
         data = self._market_fetcher.get_market_data(codes, use_cache=False)
 
         if use_cache and data:
-            self._cache.set('market', data, cache_key, source='market_fetcher')
+            self._cache.set('market', data, cache_key)
 
         return data
 
@@ -643,6 +430,18 @@ class DataManager:
 
         return []
 
+    # ==================== 存储访问入口 ====================
+
+    def get_duckdb_store(self):
+        """获取 DuckDB 存储实例（统一入口）"""
+        from .duckdb_store import get_duckdb_store
+        return get_duckdb_store()
+
+    def get_cp_history_store(self):
+        """获取战力历史存储实例（统一入口）"""
+        from .cp_history_store import get_cp_history_store
+        return get_cp_history_store()
+
     def _convert_to_ts_code(self, code: str) -> str:
         """转换代码为Tushare格式"""
         code = code.strip().upper()
@@ -820,18 +619,8 @@ class DataManager:
 
     def invalidate(self, cache_type: str, code: str = None):
         """使缓存失效"""
-        key = f"{cache_type}:{code}" if code else cache_type
-        with self._cache._lock:
-            self._cache._memory.pop(key, None)
-
-        # 删除磁盘缓存
-        if code:
-            path = DATA_DIR / f"{cache_type}_{code}.json"
-        else:
-            path = DATA_DIR / f"{cache_type}.json"
-
-        if path.exists():
-            path.unlink()
+        # 使用 HotColdCache 的 delete 方法，它会同时清理内存和磁盘缓存
+        self._cache.delete(cache_type, code)
 
     def get_cache_stats(self) -> Dict:
         """获取缓存统计"""

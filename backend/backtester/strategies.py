@@ -272,10 +272,10 @@ class MultiFactorStrategy(Strategy):
         self.n = n
         self._max_days = max_days
         self.weights = weights or {
-            'growth': 0.3,
-            'value': 0.25,
-            'momentum': 0.25,
-            'quality': 0.2
+            'growth': 0.50,
+            'value': 0.00,
+            'momentum': 0.28,
+            'quality': 0.05
         }
 
     @property
@@ -562,3 +562,96 @@ class ValueGrowthBalancedStrategy(MultiFactorStrategy):
     @property
     def name(self) -> str:
         return f"价值成长平衡TOP{self.n}"
+
+
+class RecommendationStrategy(Strategy):
+    """推荐策略 - 使用 BuyAnalyzer.get_buy_signals() 选股 v1.0
+
+    复用 recommender 的完整逻辑：
+    - 融合预测（GainPrediction + ProbabilityPrediction）
+    - Kelly 仓位计算
+    - ST/涨跌停/停牌 过滤
+    - 买入强度排序
+    """
+
+    def __init__(self, n: int = 10, max_days: int = 5,
+                 principal: float = 1000000.0,
+                 risk_preference: str = 'balanced'):
+        self.n = n
+        self._max_days = max_days
+        self.principal = principal
+        self.risk_preference = risk_preference
+
+    @property
+    def name(self) -> str:
+        return f"推荐TOP{self.n}"
+
+    @property
+    def max_position_days(self) -> int:
+        return self._max_days
+
+    @property
+    def max_positions(self) -> int:
+        return self.n
+
+    def select_stocks(self, date: str, stock_factors: Dict[str, StockFactor],
+                      rank: int = None) -> List[str]:
+        """使用 BuyAnalyzer.get_buy_signals() 选股
+
+        Args:
+            date: 信号日 (T日) - 用于获取对应日期的预测数据
+            stock_factors: {code: StockFactor} 历史战力因子数据
+            rank: 最大持仓数量
+
+        Returns:
+            目标持仓股票代码列表
+        """
+        from backend.recommender.buy_analyzer import BuyAnalyzer
+        from backend.engine import StockCP
+
+        n = rank or self.n
+
+        # 将 StockFactor 转换为 StockCP
+        stocks = []
+        for code, factor in stock_factors.items():
+            if factor.is_suspended:
+                continue
+            # StockCP 需要的字段
+            stock = self._factor_to_stockcp(factor)
+            stocks.append(stock)
+
+        if not stocks:
+            return []
+
+        # 调用 BuyAnalyzer 获取买入信号
+        signals = BuyAnalyzer.get_buy_signals(
+            stocks=stocks,
+            principal=self.principal,
+            risk_preference=self.risk_preference,
+            limit=n * 2  # 多取一些以便排序
+        )
+
+        # 按 buy_strength 降序，取前 n 个
+        signals.sort(key=lambda x: x.get('buy_strength', 0), reverse=True)
+        return [s['code'] for s in signals[:n]]
+
+    def _factor_to_stockcp(self, factor: StockFactor) -> 'StockCP':
+        """将 StockFactor 转换为 StockCP"""
+        from backend.engine import StockCP
+        return StockCP(
+            code=factor.code,
+            name=factor.name,
+            price=factor.close,
+            pe=0, roe=0, pb=0,
+            net_profit_growth=0, revenue_growth=0,
+            change_pct=factor.change_pct,
+            growth_score=factor.growth_score,
+            value_score=factor.value_score,
+            momentum_score=factor.momentum_score,
+            quality_score=factor.quality_score,
+            total_cp=factor.total_cp,
+            risk_score=50,  # 默认中等风险
+            volatility_20d=0,
+            is_suspended=factor.is_suspended,
+            avg_daily_amount_20d=0,
+        )

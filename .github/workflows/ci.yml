@@ -17,14 +17,31 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install fastapi uvicorn akshare pandas requests slowapi pytest
+          pip install -r backend/requirements-dev.txt
 
       - name: Run backend tests
         run: |
-          python -m pytest backend/tests/ -v
+          python -m pytest backend/tests/ tests/backtester/ backend/data_manager/tests/ tests/test_simulator.py -v -m "not integration" --ignore=backend/tests/test_routes.py --json-report --json-report-file=pytest_backend.json
+
+      - name: Run API contract tests
+        run: |
+          python -m pytest backend/tests/test_routes.py -v -m "not integration" --tb=short --json-report --json-report-file=pytest_routes.json
+
+      - name: Sync failures to ISSUES
+        if: failure() && github.event_name != 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/sync_errors_to_issues.py --report pytest_backend.json || true
+          python scripts/sync_errors_to_issues.py --report pytest_routes.json || true
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --staged --quiet || git commit -m "ci: auto-update ISSUES.md from test failures [skip ci]"
+          git push
 
   frontend-build:
-    name: Frontend Build
+    name: Frontend Build & Test
     runs-on: ubuntu-latest
 
     steps:
@@ -39,25 +56,35 @@ jobs:
         working-directory: ./frontend
         run: npm ci
 
-      - name: Run linter
+      - name: TypeScript check
         working-directory: ./frontend
-        run: npm run lint || true
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: ./frontend
+        run: npm run lint
+
+      - name: Test
+        working-directory: ./frontend
+        run: npm run test
 
       - name: Build
         working-directory: ./frontend
         run: npm run build
 
-  api-health-check:
-    name: API Health Check
+  api-import-check:
+    name: API Import Check
     runs-on: ubuntu-latest
+    container: python:3.11
 
     steps:
-      - name: Start backend
-        run: |
-          cd backend
-          pip install fastapi uvicorn akshare pandas requests slowapi -q
-          timeout 30 python -c "from api.main import app; import uvicorn; uvicorn.run(app, host='127.0.0.1', port=8001)" &
-          sleep 5
+      - uses: actions/checkout@v4
 
-      - name: Check API
-        run: curl -f http://127.0.0.1:8001/ || echo "API not responding"
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt -q
+
+      - name: Verify app structure
+        run: |
+          python -c "from backend.api.main import app; print(f'Routes: {len(app.routes)}')"
+          python -c "from backend.api.dependencies import cp_engine, db; print('Dependencies OK')"
+          python -c "from backend.api.routers import cp, history, simulator, backtest, risk, prediction, system; print('All routers OK')"

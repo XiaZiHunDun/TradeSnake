@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
 
-DATA_DIR = Path("/home/ailearn/projects/TradeSnake/data")
+from backend.config import DATA_DIR, NIGHTLY_STATE_DB_PATH
 STATE_DB = DATA_DIR / "nightly_state.db"
 
 class StateManager:

@@ -3,13 +3,8 @@
 """
 
 import pytest
-import sys
-import os
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
-
-# 添加项目路径
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class TestAccount:
@@ -33,13 +28,13 @@ class TestAccount:
     def test_can_buy_insufficient_cash(self):
         """测试资金不足时无法买入"""
         from backend.simulator.account import Account
+        from unittest.mock import PropertyMock
 
-        account = Account()
-
-        # 假设账户现金为0，应该无法买入
-        result, reason = account.can_buy(price=10.0, quantity=100)
-        assert result == False
-        assert "资金不足" in reason or "需要" in reason
+        account = Account.__new__(Account)  # 避免 __init__ 连接 DB
+        with patch.object(type(account), 'cash', new_callable=PropertyMock, return_value=0):
+            result, reason = account.can_buy(price=10.0, quantity=100)
+            assert result == False
+            assert "资金不足" in reason or "需要" in reason
 
     def test_can_buy_invalid_quantity(self):
         """测试无效数量无法买入"""

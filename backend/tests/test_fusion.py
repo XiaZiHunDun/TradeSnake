@@ -3,7 +3,7 @@
 """
 
 import pytest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 
 from backend.recommender.fusion import PredictionFusion, FusionResult
 from backend.engine import StockCP
@@ -46,6 +46,8 @@ class TestPredictionFusion:
             up_probability_3d=0.6,
             up_probability_5d=up_probability_5d,
             confidence=confidence,
+            confidence_interval_3d=[0.4, 0.8],
+            confidence_interval_5d=[0.3, 0.9],
             risk_level='medium',
             features={'gain_3d': 3.0, 'volatility_20d': 25.0, 'rsi_14': 55},
             model_version='rule_v19.8'
@@ -203,7 +205,9 @@ class TestPredictionFusion:
         assert result_dict['predicted_gain_5d'] == 5.0
         assert result_dict['up_probability_5d'] == 0.65
         assert 'fused_score' in result_dict
-        assert 'score_breakdown' in result_dict
+        assert 'cp_score' in result_dict
+        assert 'gain_score' in result_dict
+        assert 'prob_score' in result_dict
 
     def test_get_risk_level_from_stock(self):
         """测试从战力数据推断风险等级"""

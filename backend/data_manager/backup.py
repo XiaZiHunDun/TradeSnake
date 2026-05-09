@@ -27,9 +27,8 @@ import json
 
 # ==================== 路径配置 ====================
 
-DATA_DIR = Path("/home/ailearn/projects/TradeSnake/data")
-BACKUP_DIR = DATA_DIR / "backup"
-SQLITE_DB_PATH = DATA_DIR / "tradesnake.db"
+from backend.config import DATA_DIR, BACKUP_DIR, SQLITE_PATH
+SQLITE_DB_PATH = str(SQLITE_PATH)
 
 
 # ==================== 备份配置 ====================

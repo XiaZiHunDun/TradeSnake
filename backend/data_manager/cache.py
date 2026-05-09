@@ -20,7 +20,7 @@ from pathlib import Path
 from collections import OrderedDict
 
 # 路径配置
-DATA_DIR = Path("/home/ailearn/projects/TradeSnake/data")
+from backend.config import DATA_DIR
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # 缓存版本
@@ -77,9 +77,13 @@ def json_serializable(obj):
 
 
 def get_cache_path(cache_type: str, code: str = None) -> Path:
-    """获取缓存文件路径"""
+    """获取缓存文件路径
+
+    统一格式: DATA_DIR/{cache_type}/{code}.json
+    无 code 时: DATA_DIR/{cache_type}.json
+    """
     if code:
-        return DATA_DIR / f"{cache_type}_{code}.json"
+        return DATA_DIR / cache_type / f"{code}.json"
     return DATA_DIR / f"{cache_type}.json"
 
 
@@ -153,7 +157,7 @@ class CacheEntry:
             updated = datetime.fromisoformat(self.updated_at)
             age = (datetime.now() - updated).total_seconds()
             return age > ttl
-        except:
+        except (ValueError, TypeError, OSError):
             return True
 
 
@@ -262,6 +266,47 @@ class HotColdCache:
             "hot_size": len(self._hot_cache)
         }
 
+    def clear(self, cache_type: str = None):
+        """清空缓存
+
+        Args:
+            cache_type: 如果指定，只清空该类型；否则清空所有缓存
+        """
+        with self._hot_lock:
+            if cache_type:
+                # 只清空指定类型的热缓存
+                keys_to_remove = [k for k in self._hot_cache if k.startswith(f"{cache_type}:")]
+                for k in keys_to_remove:
+                    self._hot_cache.pop(k, None)
+            else:
+                self._hot_cache.clear()
+
+    def get_all_codes(self, cache_type: str) -> List[str]:
+        """获取某类型所有缓存的 code
+
+        Args:
+            cache_type: 缓存类型
+
+        Returns:
+            code 列表
+        """
+        # 先从热缓存获取
+        codes = set()
+        with self._hot_lock:
+            for key in self._hot_cache:
+                if key.startswith(f"{cache_type}:"):
+                    parts = key.split(":")
+                    if len(parts) == 2:
+                        codes.add(parts[1])
+
+        # 再扫描磁盘缓存目录
+        type_dir = DATA_DIR / cache_type
+        if type_dir.exists():
+            for f in type_dir.glob("*.json"):
+                codes.add(f.stem)
+
+        return sorted(list(codes))
+
     def clear_hot(self):
         """清空热缓存"""
         with self._hot_lock:
@@ -347,7 +392,7 @@ class CacheManager:
                 return True
 
             return age <= ttl
-        except:
+        except (ValueError, TypeError, OSError):
             return False
 
     def get_cache_age(self, cache_type: str, code: str) -> Optional[float]:
@@ -363,7 +408,7 @@ class CacheManager:
             updated_at = cache.get('updated_at', '')
             updated = datetime.fromisoformat(updated_at)
             return (datetime.now() - updated).total_seconds()
-        except:
+        except (ValueError, TypeError):
             return None
 
     def invalidate(self, cache_type: str, code: str = None):
@@ -371,8 +416,11 @@ class CacheManager:
         if code:
             self.cache.delete(cache_type, code)
         else:
-            for f in DATA_DIR.glob(f"{cache_type}_*.json"):
-                f.unlink()
+            # 清理指定类型的所有缓存（新格式：DATA_DIR/{cache_type}/）
+            type_dir = DATA_DIR / cache_type
+            if type_dir.exists():
+                for f in type_dir.glob("*.json"):
+                    f.unlink()
 
     def get_stale_stocks(self, cache_type: str, stock_pool: List[Dict], batch_size: int = 200) -> List[str]:
         """获取需要刷新的股票列表"""
@@ -444,7 +492,7 @@ class CacheManager:
                 if not self.validator.validate_required(data):
                     cache_file.unlink()
                     removed += 1
-            except:
+            except OSError:
                 cache_file.unlink()
                 removed += 1
 
@@ -587,7 +635,7 @@ def get_data_quality_summary() -> Dict:
                 data = json.load(fp).get('data', {})
             score = DataQualityScorer.calculate_quality_score(data)
             quality_scores.append(score['score'])
-        except:
+        except (ValueError, TypeError, KeyError):
             pass
 
     avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0

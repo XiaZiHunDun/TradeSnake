@@ -56,7 +56,7 @@ class Trader:
         return price
 
     def buy(self, code: str, quantity: int, price: float = None,
-            order_type: str = 'market') -> Dict:
+            order_type: str = 'market', stop_loss: float = 0, take_profit: float = 0) -> Dict:
         """买入股票
 
         Args:
@@ -64,6 +64,8 @@ class Trader:
             quantity: 数量（手）
             price: 委托价格（None=市价）
             order_type: 'market' | 'limit'
+            stop_loss: 止损价
+            take_profit: 止盈价
 
         Returns:
             成交/委托结果
@@ -105,13 +107,13 @@ class Trader:
 
         # 市价单立即成交
         if order_type == 'market':
-            return self._execute_market_buy(code, name, quantity, exec_price)
+            return self._execute_market_buy(code, name, quantity, exec_price, stop_loss, take_profit)
         else:
             # 限价单：创建pending委托
-            return self._create_limit_buy_order(code, name, quantity, exec_price, freeze_amount)
+            return self._create_limit_buy_order(code, name, quantity, exec_price, freeze_amount, stop_loss, take_profit)
 
     def _execute_market_buy(self, code: str, name: str, quantity: int,
-                           price: float) -> Dict:
+                           price: float, stop_loss: float = 0, take_profit: float = 0) -> Dict:
         """执行市价买入（立即成交）"""
         # 计算费用
         amount = quantity * price
@@ -123,7 +125,7 @@ class Trader:
         self.account.deduct_cost(total_cost)
 
         # 增加持仓
-        self.portfolio.add_holding(code, name, quantity, price)
+        self.portfolio.add_holding(code, name, quantity, price, stop_loss=stop_loss, take_profit=take_profit)
 
         # 记录交易
         trade_id = self.db.record_trade({
@@ -160,7 +162,8 @@ class Trader:
         }
 
     def _create_limit_buy_order(self, code: str, name: str, quantity: int,
-                               price: float, freeze_amount: float) -> Dict:
+                               price: float, freeze_amount: float,
+                               stop_loss: float = 0, take_profit: float = 0) -> Dict:
         """创建限价买入委托（挂单）"""
         # 创建委托单
         order_id = self.db.create_order({
@@ -170,7 +173,9 @@ class Trader:
             'order_type': 'limit',
             'price': price,
             'quantity': quantity,
-            'frozen_amount': freeze_amount
+            'frozen_amount': freeze_amount,
+            'stop_loss': stop_loss,
+            'take_profit': take_profit
         })
 
         # 记录冻结流水
@@ -233,21 +238,21 @@ class Trader:
             exec_price = price
 
         # 风控检查（使用RiskControl.check_all()，包含T+1检查、持仓检查等所有风控规则）
-        can_trade, reason = RiskControl.check_all(
+        can_trade, risk_reason = RiskControl.check_all(
             'sell', code, quantity, exec_price, self.account, self.portfolio
         )
         if not can_trade:
-            return {'success': False, 'error': reason}
+            return {'success': False, 'error': risk_reason}
 
         # 市价单立即成交
         if order_type == 'market':
-            return self._execute_market_sell(code, name, quantity, exec_price)
+            return self._execute_market_sell(code, name, quantity, exec_price, reason)
         else:
             # 限价单：创建pending委托
-            return self._create_limit_sell_order(code, name, quantity, exec_price)
+            return self._create_limit_sell_order(code, name, quantity, exec_price, reason)
 
     def _execute_market_sell(self, code: str, name: str, quantity: int,
-                           price: float) -> Dict:
+                           price: float, reason: str = '') -> Dict:
         """执行市价卖出（立即成交）"""
         # 计算费用
         amount = quantity * price
@@ -264,7 +269,7 @@ class Trader:
         # 增加资金
         self.account.add_proceeds(total_proceeds)
 
-        # 记录交易
+        # 记录交易（包含 sell_reason）
         trade_id = self.db.record_trade({
             'code': code,
             'name': name,
@@ -274,7 +279,8 @@ class Trader:
             'commission': commission,
             'stamp_tax': stamp_tax,
             'transfer_fee': transfer_fee,
-            'total_amount': total_proceeds
+            'total_amount': total_proceeds,
+            'sell_reason': reason  # v21 新增：卖出原因
         })
 
         # 记录费用流水
@@ -301,7 +307,7 @@ class Trader:
         }
 
     def _create_limit_sell_order(self, code: str, name: str, quantity: int,
-                                 price: float) -> Dict:
+                                 price: float, reason: str = '') -> Dict:
         """创建限价卖出委托（挂单）"""
         order_id = self.db.create_order({
             'code': code,
@@ -310,7 +316,8 @@ class Trader:
             'order_type': 'limit',
             'price': price,
             'quantity': quantity,
-            'frozen_amount': 0  # 卖出冻结的是股份，不是资金
+            'frozen_amount': 0,  # 卖出冻结的是股份，不是资金
+            'reason': reason
         })
 
         return {
@@ -396,7 +403,7 @@ class Trader:
                     if order['action'] == 'buy':
                         self._execute_limit_buy_fill(order, current_price)
                     else:
-                        self._execute_limit_sell_fill(order, current_price)
+                        self._execute_limit_sell_fill(order, current_price, order.get('reason', ''))
 
             except Exception as e:
                 # 继续处理其他订单
@@ -429,7 +436,9 @@ class Trader:
             })
 
         # 增加持仓
-        self.portfolio.add_holding(code, name, quantity, current_price)
+        stop_loss = order.get('stop_loss', 0)
+        take_profit = order.get('take_profit', 0)
+        self.portfolio.add_holding(code, name, quantity, current_price, stop_loss=stop_loss, take_profit=take_profit)
 
         # 记录交易
         trade_id = self.db.record_trade({
@@ -455,7 +464,7 @@ class Trader:
         # 更新冷却
         self.db.update_trade_cooldown(code)
 
-    def _execute_limit_sell_fill(self, order: Dict, current_price: float):
+    def _execute_limit_sell_fill(self, order: Dict, current_price: float, reason: str = ''):
         """限价卖出成交"""
         quantity = order['quantity']
         code = order['code']
@@ -469,7 +478,9 @@ class Trader:
         total_proceeds = amount - commission - stamp_tax - transfer_fee
 
         # 减少持仓
-        self.portfolio.reduce_holding(code, quantity)
+        success, details = self.portfolio.reduce_holding(code, quantity)
+        if not success:
+            return {'success': False, 'error': '持仓不足'}
 
         # 增加资金
         self.account.add_proceeds(total_proceeds)
@@ -484,7 +495,8 @@ class Trader:
             'commission': commission,
             'stamp_tax': stamp_tax,
             'transfer_fee': transfer_fee,
-            'total_amount': total_proceeds
+            'total_amount': total_proceeds,
+            'sell_reason': reason
         })
 
         # 更新订单状态
@@ -592,8 +604,8 @@ class Trader:
                             result = self.sell(code, qty, reason=reason)
                             if result.get('success'):
                                 executed.append(result)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"风控{action}卖出失败 {code}: {e}")
             elif action == 'reduce':
                 # 减半仓
                 for h in holdings:
@@ -605,8 +617,8 @@ class Trader:
                             result = self.sell(code, reduce_qty, reason=reason)
                             if result.get('success'):
                                 executed.append(result)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(f"风控{action}卖出失败 {code}: {e}")
 
         # 2. 更新持仓最高价
         holdings = self.portfolio.get_holdings()
@@ -644,8 +656,8 @@ class Trader:
                         if result.get('success'):
                             executed.append(result)
                             logger.info(f"风控卖出 {code}: {reason}")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"风控止损卖出失败 {code}: {e}")
 
         return executed
 

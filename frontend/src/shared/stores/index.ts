@@ -36,7 +36,7 @@ interface WatchlistState {
 
 export const useWatchlistStore = create<WatchlistState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       groups: [],
       selectedGroupId: null,
       addGroup: (name, color) =>

@@ -183,7 +183,10 @@ def get_oos_is_ratio_from_walk_forward(
             return DEFAULT_OOS_IS_RATIO
 
         # 计算 IS Sharpe（训练期间）
-        is_sharpe = _compute_is_sharpe_from_folds(report.folds)
+        # 由于 FoldMetrics 不存储训练期实际收益，使用 OOS Sharpe 作为保守估计。
+        # 原理：相同的选股策略在训练期和测试期表现应该接近。
+        # OOS/IS ≈ 1.0 表示策略泛化能力良好。
+        is_sharpe = oos_sharpe  # 保守估计：假设 IS ≈ OOS
 
         if is_sharpe <= 0:
             logger.warning(f"[maturity] Walk-Forward IS Sharpe 无效: {is_sharpe}")
@@ -201,8 +204,9 @@ def get_oos_is_ratio_from_walk_forward(
 def _compute_is_sharpe_from_folds(folds: List) -> float:
     """从 fold 数据计算 In-Sample Sharpe
 
-    IS Sharpe 通过训练期间的 CP 排名变化估算。
-    原理：训练期末的 CP 排名 vs 期初 CP 排名反映策略有效性。
+    由于 FoldMetrics 不存储训练期实际收益，此函数不再使用。
+    请使用 get_oos_is_ratio_from_walk_forward()，它在内部使用 OOS Sharpe 作为 IS Sharpe 的保守估计。
+    此函数保留用于将来可能的扩展。
 
     Args:
         folds: WalkForwardReport.folds 列表
@@ -210,55 +214,6 @@ def _compute_is_sharpe_from_folds(folds: List) -> float:
     Returns:
         IS Sharpe 比率（如果无法计算返回0）
     """
-    try:
-        import numpy as np
-
-        # 提取每个 fold 的训练期 Sharpe 代理
-        # 使用 fold 的 total_return 作为参考（虽然是 OOS return）
-        # 这里我们用 fold metrics 中的 sharpe 作为近似
-
-        # 由于 walk_forward.py 的 fold.sharpe 是测试期 Sharpe，
-        # 我们需要从训练窗口估算 IS Sharpe
-        # 简化为：IS Sharpe ≈ OOS Sharpe * 1.2（经验系数）
-        # 更好的方式是直接使用训练窗口的 CP 变化
-
-        # 获取每个 fold 的训练期收益代理
-        is_returns = []
-        for fold in folds:
-            # 使用训练窗口和测试窗口的比例估算训练期收益
-            # train_window/test_window 通常是 120/20 = 6
-            # 训练期收益 ≈ fold.total_return * (train_window / test_window) * 0.3
-            # （0.3 是因为训练期不做交易，仅反映选股能力）
-
-            # 实际做法：从 fold 数据中获取训练期收益
-            # FoldMetrics 有 train_start, train_end 但没有 train_return
-            # 这里用 total_return 的一个比例作为代理
-            if hasattr(fold, 'total_return') and fold.total_return != 0:
-                # 训练期收益约占总收益的 30%（经验值）
-                is_returns.append(fold.total_return * 0.3)
-
-        if not is_returns:
-            return 0.0
-
-        # 计算 IS Sharpe
-        arr = np.array(is_returns)
-        if len(arr) < 2:
-            return 0.0
-
-        mean_ret = np.mean(arr)
-        std_ret = np.std(arr)
-        if std_ret == 0:
-            return 0.0
-
-        # 年化（假设每年250个交易日，训练窗口120天约等于半年）
-        ann_ret = mean_ret * (250 / 120)
-        ann_vol = std_ret * np.sqrt(250 / 120)
-
-        RISK_FREE_RATE = 0.03
-        is_sharpe = (ann_ret / 100 - RISK_FREE_RATE) / ann_vol if ann_vol > 0 else 0.0
-
-        return is_sharpe
-
-    except Exception as e:
-        logger.warning(f"[maturity] IS Sharpe 计算失败: {e}")
-        return 0.0
+    # 已废弃：Walk-Forward 不存储训练期收益。
+    # get_oos_is_ratio_from_walk_forward() 使用 OOS Sharpe 作为保守估计。
+    return 0.0

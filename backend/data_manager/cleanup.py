@@ -28,10 +28,7 @@ from enum import Enum
 
 # ==================== 路径配置 ====================
 
-DATA_DIR = Path("/home/ailearn/projects/TradeSnake/data")
-BACKUP_DIR = DATA_DIR / "backup"
-SQLITE_PATH = DATA_DIR / "tradesnake.db"
-DUCKDB_PATH = DATA_DIR / "historical.duckdb"
+from backend.config import DATA_DIR, BACKUP_DIR, SQLITE_PATH, DUCKDB_PATH
 
 
 # ==================== 清理配置 ====================
@@ -114,7 +111,7 @@ class CleanupState:
                     cls.LOCK_FILE.unlink()
                     return False
                 return True
-            except:
+            except (OSError, ValueError):
                 cls.LOCK_FILE.unlink()
                 return False
         return False
@@ -145,7 +142,7 @@ class CleanupState:
                     return True
                 return operation in state.get("completed_operations", [])
             return False
-        except:
+        except (OSError, ValueError):
             return False
 
     @classmethod
@@ -159,7 +156,7 @@ class CleanupState:
                     state = {"date": today, "completed_operations": []}
             else:
                 state = {"date": today, "completed_operations": []}
-        except:
+        except (OSError, json.JSONDecodeError):
             state = {"date": today, "completed_operations": []}
 
         state["completed_operations"].append(operation)

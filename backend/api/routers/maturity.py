@@ -55,6 +55,38 @@ def get_current_up_probability() -> float:
         return 0.5
 
 
+def get_current_risk_level() -> str:
+    """获取当前市场风险等级
+
+    Returns:
+        'acceptable' / 'warning' / 'high'
+        如果无数据，默认 'warning'（中等风险）
+    """
+    try:
+        stocks = cp_engine.get_top(n=20)
+        if not stocks:
+            return 'warning'
+
+        # 计算平均风险分数（使用战力榜 Top20 的平均风险）
+        avg_risk = sum(s.risk_score for s in stocks) / len(stocks)
+
+        # 同时检查是否有高波动股票（change_pct 异常）
+        high_volatility = any(
+            getattr(s, 'volatility_20d', 0) > 40 for s in stocks
+        )
+
+        if high_volatility or avg_risk > 70:
+            return 'high'
+        elif avg_risk > 50:
+            return 'warning'
+        else:
+            return 'acceptable'
+
+    except Exception as e:
+        logger.error(f"get_current_risk_level failed: {e}")
+        return 'warning'
+
+
 def get_current_kelly_position() -> float:
     """获取当前最优Kelly仓位
 
@@ -316,12 +348,39 @@ def get_daily_signal():
     # 获取真实5日上涨概率（从 prediction_store）
     up_probability_5d = get_current_up_probability()
 
+    # 获取真实风险等级
+    risk_level = get_current_risk_level()
+
+    # 获取 maturity status（使用与 /status 相同的逻辑）
+    from backend.maturity.metrics import get_oos_is_ratio_from_walk_forward
+
+    db = get_db()
+    portfolio_history = db.get_portfolio_value_history()
+    monthly_returns = get_monthly_returns_from_portfolio(portfolio_history)
+
+    # 计算基准超额收益
+    if monthly_returns and len(monthly_returns) >= 2:
+        start_date = monthly_returns[0].month + "-01"
+        end_date = monthly_returns[-1].month + "-28"
+        benchmark_return = get_benchmark_return(start_date, end_date)
+        strategy_start = monthly_returns[0].start_value
+        strategy_end = monthly_returns[-1].end_value
+        strategy_return = (strategy_end - strategy_start) / strategy_start if strategy_start > 0 else 0
+        benchmark_excess = strategy_return - benchmark_return
+    else:
+        benchmark_excess = 0.0
+
+    oos_is_ratio = get_oos_is_ratio_from_walk_forward()
+    evaluator = MaturityEvaluator()
+    result = evaluator.evaluate(monthly_returns, benchmark_excess, oos_is_ratio)
+    is_mature_status = result.is_mature
+
     signal = generator.generate(
         kelly_position=kelly_position,
-        risk_level='acceptable',
+        risk_level=risk_level,
         predicted_gain_5d=predicted_gain_5d,
         up_probability_5d=up_probability_5d,
-        is_mature=True
+        is_mature=is_mature_status
     )
 
     return DailySignalResponse(**signal.to_dict())

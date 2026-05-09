@@ -4,7 +4,7 @@ import { Button, Input } from '../../shared/components/atoms'
 
 export function Portfolio() {
   const { data: account, isLoading: accountLoading } = useAccount()
-  const { data: portfolio, isLoading: portfolioLoading } = usePortfolio()
+  const { data: portfolio } = usePortfolio()
   const { mutate: buy, isPending: buying } = useBuyTrade()
   const { mutate: sell, isPending: selling } = useSellTrade()
   const [tradeCode, setTradeCode] = useState('')
@@ -41,14 +41,14 @@ export function Portfolio() {
             label="总盈亏"
             value={account?.total_profit?.toFixed(2) || '0'}
             unit="元"
-            color={account?.total_profit >= 0 ? 'text-red-500' : 'text-green-500'}
+            color={(account?.total_profit ?? 0) >= 0 ? 'text-red-500' : 'text-green-500'}
           />
         </div>
         <div className="mt-4">
           <InfoCard
             label="盈亏比例"
             value={account?.profit_rate ? `${account.profit_rate.toFixed(2)}%` : '0%'}
-            color={account?.profit_rate >= 0 ? 'text-red-500' : 'text-green-500'}
+            color={(account?.profit_rate ?? 0) >= 0 ? 'text-red-500' : 'text-green-500'}
           />
         </div>
       </div>

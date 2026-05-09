@@ -8,7 +8,12 @@ import math
 
 
 class KellyCalculator:
-    """Kelly 仓位计算器 v1.0"""
+    """Kelly 仓位计算器 v1.0
+
+    注意：最大仓位限制为 20%，与 engine/cp_engine/risk_analyzer.py 的 KellyCalculator 保持一致。
+    """
+
+    MAX_POSITION_PCT = 20.0  # 最大仓位20%，与 engine 版本统一
 
     def __init__(self):
         self._cache: Dict[str, float] = {}
@@ -65,7 +70,7 @@ class KellyCalculator:
             b = avg_win / avg_loss if avg_loss > 0 else 0
             if b > 0:
                 kelly = (win_rate * (b + 1) - 1) / b
-                kelly = max(0, min(kelly, 0.5))  # 限制最大50%仓位
+                kelly = max(0, min(kelly, cls.MAX_POSITION_PCT / 100))  # 限制最大20%仓位，与 engine/risk_analyzer.py 保持一致
             else:
                 kelly = 0
         else:
