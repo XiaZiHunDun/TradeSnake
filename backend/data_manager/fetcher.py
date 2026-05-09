@@ -9,6 +9,7 @@ os.environ.pop('http_proxy', None)
 os.environ.pop('https_proxy', None)
 
 import akshare as ak
+from pathlib import Path
 import requests
 import pandas as pd
 import re
@@ -24,6 +25,8 @@ from collections import OrderedDict
 import signal
 
 from .circuit_breaker import call_with_protection, CircuitOpenError, RateLimitExceededError
+import logging
+logger = logging.getLogger(__name__)
 
 # 在 baostock 导入后立即设置全局 socket 超时（防止 baostock API 挂起）
 socket.setdefaulttimeout(5)
@@ -31,7 +34,7 @@ socket.setdefaulttimeout(5)
 # ==================== 常量配置 ====================
 MAX_RETRIES = 3
 RETRY_DELAY = 1
-CACHE_DIR = "/home/ailearn/projects/TradeSnake/data"
+CACHE_DIR = str(Path(__file__).resolve().parent.parent.parent / 'data')
 CACHE_EXPIRE_MINUTES = 5
 
 # ==================== 内存缓存（LRU）====================
@@ -84,17 +87,18 @@ def ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
 
 
-def get_cache_path(cache_type: str) -> str:
-    ensure_dir(CACHE_DIR)
-    return os.path.join(CACHE_DIR, f"{cache_type}_cache.json")
+def get_cache_path(cache_type: str, code: str = None) -> str:
+    """获取缓存文件路径（委托给统一缓存）"""
+    from .cache import get_cache_path as cache_get_path
+    return str(cache_get_path(cache_type, code))
 
 
-def read_cache(cache_type: str) -> Optional[Dict]:
-    mem_value = _memory_cache.get(cache_type)
+def read_cache(cache_type: str, code: str = None) -> Optional[Dict]:
+    mem_value = _memory_cache.get(f"{cache_type}:{code}" if code else cache_type)
     if mem_value is not None:
         return mem_value
 
-    cache_file = get_cache_path(cache_type)
+    cache_file = get_cache_path(cache_type, code)
     if not os.path.exists(cache_file):
         return None
 
@@ -106,16 +110,17 @@ def read_cache(cache_type: str) -> Optional[Dict]:
             return None
         data = cache.get('data')
         if data is not None:
-            _memory_cache.set(cache_type, data)
+            _memory_cache.set(f"{cache_type}:{code}" if code else cache_type, data)
         return data
     except Exception as e:
-        print(f"读取缓存失败 {cache_type}: {e}")
+        print(f"读取缓存失败 {cache_type}:{code if code else ''}: {e}")
         return None
 
 
-def write_cache(cache_type: str, data: Dict, expire_minutes: int = CACHE_EXPIRE_MINUTES):
-    _memory_cache.set(cache_type, data)
-    cache_file = get_cache_path(cache_type)
+def write_cache(cache_type: str, data: Dict, code: str = None, expire_minutes: int = CACHE_EXPIRE_MINUTES):
+    cache_key = f"{cache_type}:{code}" if code else cache_type
+    _memory_cache.set(cache_key, data)
+    cache_file = get_cache_path(cache_type, code)
     try:
         cache = {
             'data': data,
@@ -225,21 +230,23 @@ class MarketDataFetcher:
         if not codes:
             return []
 
-        cache_key = md5_hash(','.join(sorted(codes)))
+        # 使用简单拼接作为缓存key（不用hash，保持可读性）
+        cache_key = ','.join(sorted(codes))
 
         if use_cache:
-            cached = read_cache(f'market_{cache_key}')
+            # 与 HotColdCache 保持一致：market:{code} → DATA_DIR/market/{code}.json
+            cached = read_cache('market', cache_key)
             if cached:
                 return cached
 
         data = self._fetch_from_tencent(codes)
         if data:
-            write_cache(f'market_{cache_key}', data, expire_minutes=CACHE_EXPIRE_MINUTES)
+            write_cache('market', data, cache_key, expire_minutes=CACHE_EXPIRE_MINUTES)
             return data
 
         data = self._fetch_from_sina(codes)
         if data:
-            write_cache(f'market_{cache_key}', data, expire_minutes=CACHE_EXPIRE_MINUTES)
+            write_cache('market', data, cache_key, expire_minutes=CACHE_EXPIRE_MINUTES)
             return data
 
         return []
@@ -351,8 +358,8 @@ class MarketDataFetcher:
                     'market_cap': round(market_cap, 2),
                     'source': 'tencent'
                 })
-            except Exception:
-                continue
+            except Exception as e:
+                logger.warning(f"腾讯数据解析失败 code={code}: {e}")
 
         return stocks
 
@@ -395,8 +402,8 @@ class MarketDataFetcher:
                     'market_cap': 0,
                     'source': 'sina'
                 })
-            except Exception:
-                continue
+            except Exception as e:
+                logger.warning(f"Sina数据解析失败 code={code}: {e}")
 
         return stocks
 
@@ -783,7 +790,7 @@ class StockDataFetcher:
                 cached = read_cache('stock_industry')
                 if cached:
                     self._industry_mapping = {item['code']: item['industry'] for item in cached}
-            except:
+            except (OSError, json.JSONDecodeError, KeyError):
                 pass
 
         return self._industry_mapping
@@ -1042,8 +1049,12 @@ def get_single_stock_data(code: str) -> Optional[Dict]:
     }
 
 
-def _calculate_avg_daily_amount_20d(code: str) -> float:
-    """从DuckDB计算20日平均成交额"""
+def _calculate_avg_daily_amount_20d(code: str) -> Optional[float]:
+    """从DuckDB计算20日平均成交额
+
+    Returns:
+        20日平均成交额，失败时返回 None
+    """
     try:
         from .duckdb_store import get_klines
         result = get_klines(code, days=25)  # 多取几天以防休市
@@ -1052,9 +1063,9 @@ def _calculate_avg_daily_amount_20d(code: str) -> float:
             if len(df) >= 20:
                 amounts = df['amount'].head(20)
                 return float(amounts.mean())
-    except Exception:
-        pass
-    return 0
+    except Exception as e:
+        logger.warning(f"_calculate_avg_daily_amount_20d 失败 code={code}: {e}")
+    return None
 
 
 # ==================== Tushare K线同步 ====================
