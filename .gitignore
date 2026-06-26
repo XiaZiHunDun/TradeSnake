@@ -30,6 +30,9 @@ data/tushare_*.json
 data/history_price_*.json
 data/financial_*.json
 
+# Runtime lock files (created by tooling at runtime)
+.claude/scheduled_tasks.lock
+
 # Backups
 backups/
 
